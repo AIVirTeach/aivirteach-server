@@ -32,4 +32,12 @@ export default tseslint.config(
       "prettier/prettier": ["error", { endOfLine: "auto" }],
     },
   },
+  {
+    // Jest 的 expect.objectContaining() 类型定义返回 any，
+    // 塞进 mock 断言的对象字面量时会触发 no-unsafe-assignment——这是类型定义的限制，不是真的类型不安全。
+    files: ['**/*.spec.ts'],
+    rules: {
+      '@typescript-eslint/no-unsafe-assignment': 'off',
+    },
+  },
 );
