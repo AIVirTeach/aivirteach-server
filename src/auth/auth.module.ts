@@ -1,5 +1,11 @@
 import { Module } from '@nestjs/common';
+import { AuthController } from './auth.controller';
+import { AuthService } from './auth.service';
+import { JwtAuthGuard } from './jwt-auth.guard';
 
-// 端点与 Guard 在 Task 7 接入，这里先保持模块存在但不导出任何东西。
-@Module({})
+@Module({
+  controllers: [AuthController],
+  providers: [AuthService, JwtAuthGuard],
+  exports: [AuthService, JwtAuthGuard],
+})
 export class AuthModule {}
