@@ -18,9 +18,10 @@ const ENV_STUB = {
 const buildPrisma = () => ({
   user: { upsert: jest.fn(), findUnique: jest.fn() },
   invitation: { create: jest.fn().mockResolvedValue({ id: 'inv_1' }) },
-  course: { create: jest.fn(), update: jest.fn(), findUnique: jest.fn() },
+  course: { create: jest.fn(), findUnique: jest.fn() },
+  courseVersion: { findFirst: jest.fn(), update: jest.fn() },
   enrollment: { create: jest.fn() },
-  quotaGrant: { create: jest.fn() },
+  quotaLedger: { create: jest.fn() },
 });
 
 const buildService = async (prisma: ReturnType<typeof buildPrisma>) => {
@@ -72,6 +73,76 @@ describe('AdminService.inviteUser', () => {
   });
 });
 
+describe('AdminService.createCourse / publishCourse', () => {
+  it('创建课程时一并建第一个 CourseVersion（version=1，未发布）', async () => {
+    const prisma = buildPrisma();
+    prisma.course.create.mockResolvedValue({
+      id: 'course_1',
+      slug: 'n8n',
+      versions: [{ id: 'cv_1', version: 1, publishedAt: null }],
+    });
+    const service = await buildService(prisma);
+
+    await service.createCourse('n8n', 'n8n 自动化工作流');
+
+    expect(prisma.course.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          slug: 'n8n',
+          versions: { create: { version: 1 } },
+        }),
+      }),
+    );
+  });
+
+  it('发布课程时给最新版本写 publishedAt', async () => {
+    const prisma = buildPrisma();
+    prisma.course.findUnique.mockResolvedValue({ id: 'course_1', slug: 'n8n' });
+    prisma.courseVersion.findFirst.mockResolvedValue({
+      id: 'cv_1',
+      courseId: 'course_1',
+      version: 1,
+      publishedAt: null,
+    });
+    prisma.courseVersion.update.mockResolvedValue({
+      id: 'cv_1',
+      publishedAt: new Date(),
+    });
+    const service = await buildService(prisma);
+
+    await service.publishCourse('n8n');
+
+    expect(prisma.courseVersion.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { id: 'cv_1' },
+        data: expect.objectContaining({ publishedAt: expect.any(Date) }),
+      }),
+    );
+  });
+
+  it('重复发布同一版本是幂等的，不会二次写 publishedAt', async () => {
+    const prisma = buildPrisma();
+    const already = { id: 'cv_1', courseId: 'course_1', version: 1, publishedAt: new Date() };
+    prisma.course.findUnique.mockResolvedValue({ id: 'course_1', slug: 'n8n' });
+    prisma.courseVersion.findFirst.mockResolvedValue(already);
+    const service = await buildService(prisma);
+
+    const result = await service.publishCourse('n8n');
+
+    expect(prisma.courseVersion.update).not.toHaveBeenCalled();
+    expect(result).toBe(already);
+  });
+
+  it('课程没有任何版本时发布抛 NotFoundException', async () => {
+    const prisma = buildPrisma();
+    prisma.course.findUnique.mockResolvedValue({ id: 'course_1', slug: 'n8n' });
+    prisma.courseVersion.findFirst.mockResolvedValue(null);
+    const service = await buildService(prisma);
+
+    await expect(service.publishCourse('n8n')).rejects.toBeInstanceOf(NotFoundException);
+  });
+});
+
 describe('AdminService 其余运营操作', () => {
   it('给不存在的用户发额度抛 NotFoundException', async () => {
     const prisma = buildPrisma();
@@ -94,19 +165,21 @@ describe('AdminService 其余运营操作', () => {
     ).rejects.toBeInstanceOf(NotFoundException);
   });
 
-  it('发布课程时写入 publishedAt', async () => {
+  it('发放额度写入 QuotaLedger 的正数流水', async () => {
     const prisma = buildPrisma();
-    prisma.course.findUnique.mockResolvedValue({ id: 'course_1', slug: 'n8n' });
-    prisma.course.update.mockResolvedValue({ id: 'course_1', slug: 'n8n' });
+    prisma.user.findUnique.mockResolvedValue({ id: 'user_1', email: 'a@b.com' });
+    prisma.quotaLedger.create.mockResolvedValue({
+      id: 'ledger_1',
+      userId: 'user_1',
+      minutesDelta: 120,
+    });
     const service = await buildService(prisma);
 
-    await service.publishCourse('n8n');
+    const entry = await service.grantQuota('a@b.com', 120);
 
-    expect(prisma.course.update).toHaveBeenCalledWith(
-      expect.objectContaining({
-        where: { id: 'course_1' },
-        data: expect.objectContaining({ publishedAt: expect.any(Date) }),
-      }),
+    expect(entry.minutesDelta).toBe(120);
+    expect(prisma.quotaLedger.create).toHaveBeenCalledWith(
+      expect.objectContaining({ data: { userId: 'user_1', minutesDelta: 120 } }),
     );
   });
 });

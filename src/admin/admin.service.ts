@@ -1,5 +1,5 @@
 import { Inject, Injectable, NotFoundException } from '@nestjs/common';
-import type { Course, Enrollment, QuotaGrant } from '@prisma/client';
+import type { Course, CourseVersion, Enrollment, QuotaLedger } from '@prisma/client';
 import { generateOpaqueToken, hashOpaqueToken } from '../auth/tokens';
 import { ENV, type Env } from '../config/env';
 import { PrismaService } from '../prisma/prisma.service';
@@ -46,17 +46,33 @@ export class AdminService {
     return { userId: user.id, email: user.email, invitationToken, expiresAt };
   }
 
-  async createCourse(slug: string, title: string): Promise<Course> {
-    return this.prisma.course.create({ data: { slug, title } });
+  async createCourse(
+    slug: string,
+    title: string,
+  ): Promise<Course & { versions: CourseVersion[] }> {
+    return this.prisma.course.create({
+      data: { slug, title, versions: { create: { version: 1 } } },
+      include: { versions: true },
+    });
   }
 
-  async publishCourse(slug: string): Promise<Course> {
+  async publishCourse(slug: string): Promise<CourseVersion> {
     const course = await this.requireCourse(slug);
-
-    return this.prisma.course.update({
-      where: { id: course.id },
-      data: { publishedAt: new Date() },
+    const latest = await this.prisma.courseVersion.findFirst({
+      where: { courseId: course.id },
+      orderBy: { version: 'desc' },
     });
+    if (!latest) {
+      throw new NotFoundException(`课程 ${slug} 还没有任何版本`);
+    }
+
+    // 已经发布过就直接返回，不二次写 publishedAt——发布本身要是幂等操作。
+    return latest.publishedAt
+      ? latest
+      : this.prisma.courseVersion.update({
+          where: { id: latest.id },
+          data: { publishedAt: new Date() },
+        });
   }
 
   async enrollUser(email: string, courseSlug: string): Promise<Enrollment> {
@@ -68,11 +84,11 @@ export class AdminService {
     });
   }
 
-  async grantQuota(email: string, minutes: number): Promise<QuotaGrant> {
+  async grantQuota(email: string, minutes: number): Promise<QuotaLedger> {
     const user = await this.requireUser(email);
 
-    return this.prisma.quotaGrant.create({
-      data: { userId: user.id, minutesGranted: minutes },
+    return this.prisma.quotaLedger.create({
+      data: { userId: user.id, minutesDelta: minutes },
     });
   }
 

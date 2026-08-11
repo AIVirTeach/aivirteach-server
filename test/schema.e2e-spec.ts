@@ -38,4 +38,53 @@ describe('数据库 schema', () => {
       prisma.invitation.findUnique({ where: { id: user.invitations[0].id } }),
     ).resolves.toBeNull();
   });
+
+  it('CourseVersion 归属 Course，course 被删时版本一并删除', async () => {
+    const course = await prisma.course.create({
+      data: {
+        slug: `cascade-course-${Date.now()}`,
+        title: '级联测试课程',
+        versions: { create: { version: 1, content: {} } },
+      },
+      include: { versions: true },
+    });
+
+    await prisma.course.delete({ where: { id: course.id } });
+
+    const remaining = await prisma.courseVersion.findUnique({
+      where: { id: course.versions[0].id },
+    });
+    expect(remaining).toBeNull();
+  });
+
+  it('QuotaLedger 记录是流水账条目，同一用户可以有多条', async () => {
+    const user = await prisma.user.create({
+      data: { email: `ledger-${Date.now()}@example.com` },
+    });
+
+    await prisma.quotaLedger.create({ data: { userId: user.id, minutesDelta: 60 } });
+    await prisma.quotaLedger.create({ data: { userId: user.id, minutesDelta: 30 } });
+
+    const entries = await prisma.quotaLedger.findMany({ where: { userId: user.id } });
+    const balance = entries.reduce((sum, entry) => sum + entry.minutesDelta, 0);
+
+    expect(entries).toHaveLength(2);
+    expect(balance).toBe(90);
+
+    await prisma.user.delete({ where: { id: user.id } });
+  });
+
+  it('AuditEvent 可以记录一条没有 actorId 的事件（找不到对应用户时）', async () => {
+    const event = await prisma.auditEvent.create({
+      data: {
+        actorType: 'USER',
+        actorId: null,
+        action: 'auth.login',
+        success: false,
+      },
+    });
+
+    expect(event.actorId).toBeNull();
+    expect(event.reason).toBeNull();
+  });
 });

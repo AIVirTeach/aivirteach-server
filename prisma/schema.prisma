@@ -13,6 +13,32 @@ enum UserStatus {
   SUSPENDED
 }
 
+enum WorkspaceStatus {
+  CREATING
+  RUNNING
+  STOPPED
+  ERROR
+  RESETTING
+}
+
+enum AttemptStatus {
+  PASS
+  FAIL
+  ERROR
+}
+
+enum ConversationRole {
+  USER
+  ASSISTANT
+  SYSTEM
+}
+
+enum AuditActorType {
+  USER
+  OPERATOR
+  SYSTEM
+}
+
 model User {
   id           String     @id @default(cuid())
   email        String     @unique
@@ -26,7 +52,7 @@ model User {
   invitations   Invitation[]
   refreshTokens RefreshToken[]
   enrollments   Enrollment[]
-  quotaGrants   QuotaGrant[]
+  quotaLedgers  QuotaLedger[]
 }
 
 model Invitation {
@@ -57,36 +83,127 @@ model RefreshToken {
 }
 
 model Course {
-  id          String    @id @default(cuid())
-  slug        String    @unique
-  title       String
-  publishedAt DateTime?
-  createdAt   DateTime  @default(now())
-  updatedAt   DateTime  @updatedAt
+  id        String   @id @default(cuid())
+  slug      String   @unique
+  title     String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
+  versions    CourseVersion[]
   enrollments Enrollment[]
 }
 
-model Enrollment {
-  id        String   @id @default(cuid())
-  userId    String
-  courseId  String
-  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-  course    Course   @relation(fields: [courseId], references: [id], onDelete: Cascade)
-  createdAt DateTime @default(now())
+model CourseVersion {
+  id       String @id @default(cuid())
+  courseId String
+  course   Course @relation(fields: [courseId], references: [id], onDelete: Cascade)
+  version  Int
+  // KubeVirt/Docker 镜像摘要；Labs 集成（SRV-009）前允许为空，创建/发布时如果有就填。
+  imageDigest String?
+  content     Json     @default("{}")
+  publishedAt DateTime?
+  createdAt   DateTime  @default(now())
 
-  @@unique([userId, courseId])
+  enrollments Enrollment[]
+
+  @@unique([courseId, version])
   @@index([courseId])
 }
 
-model QuotaGrant {
-  id             String    @id @default(cuid())
-  userId         String
-  user           User      @relation(fields: [userId], references: [id], onDelete: Cascade)
-  minutesGranted Int
-  minutesUsed    Int       @default(0)
-  expiresAt      DateTime?
-  createdAt      DateTime  @default(now())
+model Enrollment {
+  id     String @id @default(cuid())
+  userId String
+  courseId String
+  // 学习者真正开始（workspace 启动，SRV-010 范围）时固定到某个版本；之前为 null。
+  courseVersionId String?
+  user            User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  course          Course         @relation(fields: [courseId], references: [id], onDelete: Cascade)
+  courseVersion   CourseVersion? @relation(fields: [courseVersionId], references: [id])
+  createdAt       DateTime       @default(now())
+
+  workspace     Workspace?
+  progress      Progress?
+  attempts      Attempt[]
+  conversations Conversation[]
+
+  @@unique([userId, courseId])
+  @@index([courseId])
+  @@index([courseVersionId])
+}
+
+model Workspace {
+  id           String          @id @default(cuid())
+  enrollmentId String          @unique
+  enrollment   Enrollment      @relation(fields: [enrollmentId], references: [id], onDelete: Cascade)
+  status       WorkspaceStatus @default(CREATING)
+  errorMessage String?
+  createdAt    DateTime        @default(now())
+  updatedAt    DateTime        @updatedAt
+}
+
+model Progress {
+  id           String     @id @default(cuid())
+  enrollmentId String     @unique
+  enrollment   Enrollment @relation(fields: [enrollmentId], references: [id], onDelete: Cascade)
+  currentStep  Int        @default(0)
+  updatedAt    DateTime   @updatedAt
+}
+
+model Attempt {
+  id           String        @id @default(cuid())
+  enrollmentId String
+  enrollment   Enrollment    @relation(fields: [enrollmentId], references: [id], onDelete: Cascade)
+  stepIndex    Int
+  status       AttemptStatus
+  exitCode     Int?
+  // 评测的原始 stdout，不截断；不单独存一个脱离证据的 passed:true。
+  stdout    String?
+  fileHash  String?
+  createdAt DateTime @default(now())
+
+  @@index([enrollmentId, stepIndex])
+}
+
+model Conversation {
+  id           String           @id @default(cuid())
+  enrollmentId String
+  enrollment   Enrollment       @relation(fields: [enrollmentId], references: [id], onDelete: Cascade)
+  role         ConversationRole
+  content      String
+  // 引用的上下文（当前步骤、截图、评测结果等），结构随 AI Teacher Adapter（SRV-014）定，这里先存原样 JSON。
+  contextRef Json?
+  createdAt  DateTime @default(now())
+
+  @@index([enrollmentId])
+}
+
+model QuotaLedger {
+  id     String @id @default(cuid())
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  // 正数 = 发放。未来 SRV-010/012 接入真实 VM 用量后会追加负数的消耗条目；这次只产生正数。
+  minutesDelta Int
+  expiresAt    DateTime?
+  createdAt    DateTime  @default(now())
 
   @@index([userId])
+}
+
+model AuditEvent {
+  id        String         @id @default(cuid())
+  actorType AuditActorType
+  // USER：user.id，或找不到用户时尝试登录/接受邀请用的邮箱都取不到时为 null；
+  // OPERATOR：CLI --operator 传入的邮箱；SYSTEM：始终为 null。
+  actorId    String?
+  action     String
+  success    Boolean
+  targetType String?
+  targetId   String?
+  // OPERATOR 触发的事件必填（CLI 层用 zod 校验保证）；USER/SYSTEM 触发的可选。
+  reason    String?
+  metadata  Json?
+  createdAt DateTime @default(now())
+
+  @@index([actorId])
+  @@index([action])
 }
