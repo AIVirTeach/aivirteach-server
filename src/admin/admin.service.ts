@@ -1,5 +1,10 @@
 import { Inject, Injectable, NotFoundException } from '@nestjs/common';
-import type { Course, CourseVersion, Enrollment, QuotaLedger } from '@prisma/client';
+import type {
+  Course,
+  CourseVersion,
+  Enrollment,
+  QuotaLedger,
+} from '@prisma/client';
 import { AuditActorType } from '@prisma/client';
 import { AuditService } from '../audit/audit.service';
 import { generateOpaqueToken, hashOpaqueToken } from '../auth/tokens';

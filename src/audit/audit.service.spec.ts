@@ -46,7 +46,10 @@ describe('AuditService.record', () => {
     });
 
     expect(create).toHaveBeenCalledWith({
-      data: expect.objectContaining({ actorType: AuditActorType.SYSTEM, actorId: null }),
+      data: expect.objectContaining({
+        actorType: AuditActorType.SYSTEM,
+        actorId: null,
+      }),
     });
   });
 

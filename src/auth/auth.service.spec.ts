@@ -46,7 +46,10 @@ const buildPrisma = (): PrismaStub => ({
   },
 });
 
-const buildService = async (prisma: PrismaStub, audit = { record: jest.fn() }) => {
+const buildService = async (
+  prisma: PrismaStub,
+  audit = { record: jest.fn() },
+) => {
   const moduleRef = await Test.createTestingModule({
     providers: [
       AuthService,

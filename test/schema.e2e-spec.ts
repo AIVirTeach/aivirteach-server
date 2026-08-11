@@ -62,10 +62,16 @@ describe('数据库 schema', () => {
       data: { email: `ledger-${Date.now()}@example.com` },
     });
 
-    await prisma.quotaLedger.create({ data: { userId: user.id, minutesDelta: 60 } });
-    await prisma.quotaLedger.create({ data: { userId: user.id, minutesDelta: 30 } });
+    await prisma.quotaLedger.create({
+      data: { userId: user.id, minutesDelta: 60 },
+    });
+    await prisma.quotaLedger.create({
+      data: { userId: user.id, minutesDelta: 30 },
+    });
 
-    const entries = await prisma.quotaLedger.findMany({ where: { userId: user.id } });
+    const entries = await prisma.quotaLedger.findMany({
+      where: { userId: user.id },
+    });
     const balance = entries.reduce((sum, entry) => sum + entry.minutesDelta, 0);
 
     expect(entries).toHaveLength(2);

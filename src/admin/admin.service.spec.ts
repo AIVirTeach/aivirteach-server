@@ -56,7 +56,11 @@ describe('AdminService.inviteUser', () => {
     });
     const { service, audit } = await buildService(prisma);
 
-    const result = await service.inviteUser('new@example.com', OPERATOR, REASON);
+    const result = await service.inviteUser(
+      'new@example.com',
+      OPERATOR,
+      REASON,
+    );
 
     expect(result.invitationToken).toMatch(/^[A-Za-z0-9_-]{40,}$/);
     expect(prisma.invitation.create).toHaveBeenCalledWith(
@@ -156,7 +160,12 @@ describe('AdminService.createCourse / publishCourse', () => {
 
   it('重复发布同一版本是幂等的，不会二次写 publishedAt', async () => {
     const prisma = buildPrisma();
-    const already = { id: 'cv_1', courseId: 'course_1', version: 1, publishedAt: new Date() };
+    const already = {
+      id: 'cv_1',
+      courseId: 'course_1',
+      version: 1,
+      publishedAt: new Date(),
+    };
     prisma.course.findUnique.mockResolvedValue({ id: 'course_1', slug: 'n8n' });
     prisma.courseVersion.findFirst.mockResolvedValue(already);
     const { service } = await buildService(prisma);
@@ -173,9 +182,9 @@ describe('AdminService.createCourse / publishCourse', () => {
     prisma.courseVersion.findFirst.mockResolvedValue(null);
     const { service } = await buildService(prisma);
 
-    await expect(service.publishCourse('n8n', OPERATOR, REASON)).rejects.toBeInstanceOf(
-      NotFoundException,
-    );
+    await expect(
+      service.publishCourse('n8n', OPERATOR, REASON),
+    ).rejects.toBeInstanceOf(NotFoundException);
   });
 });
 
@@ -203,7 +212,10 @@ describe('AdminService 其余运营操作', () => {
 
   it('发放额度写入 QuotaLedger 的正数流水，并带审计', async () => {
     const prisma = buildPrisma();
-    prisma.user.findUnique.mockResolvedValue({ id: 'user_1', email: 'a@b.com' });
+    prisma.user.findUnique.mockResolvedValue({
+      id: 'user_1',
+      email: 'a@b.com',
+    });
     prisma.quotaLedger.create.mockResolvedValue({
       id: 'ledger_1',
       userId: 'user_1',
@@ -215,7 +227,9 @@ describe('AdminService 其余运营操作', () => {
 
     expect(entry.minutesDelta).toBe(120);
     expect(prisma.quotaLedger.create).toHaveBeenCalledWith(
-      expect.objectContaining({ data: { userId: 'user_1', minutesDelta: 120 } }),
+      expect.objectContaining({
+        data: { userId: 'user_1', minutesDelta: 120 },
+      }),
     );
     expect(audit.record).toHaveBeenCalledWith(
       expect.objectContaining({
