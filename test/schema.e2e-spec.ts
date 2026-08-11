@@ -22,7 +22,10 @@ describe('数据库 schema', () => {
       data: {
         email: `cascade-${Date.now()}@example.com`,
         invitations: {
-          create: { tokenHash: `hash-${Date.now()}`, expiresAt: new Date(Date.now() + 86_400_000) },
+          create: {
+            tokenHash: `hash-${Date.now()}`,
+            expiresAt: new Date(Date.now() + 86_400_000),
+          },
         },
       },
       include: { invitations: true },

@@ -27,8 +27,10 @@
     "@nestjs/core": "^11.0.1",
     "@nestjs/platform-express": "^11.0.1",
     "@nestjs/swagger": "^11.4.6",
+    "@node-rs/argon2": "^2.0.2",
     "@prisma/client": "^6.19.3",
     "dotenv": "^17.4.2",
+    "jose": "^6.2.8",
     "reflect-metadata": "^0.2.2",
     "rxjs": "^7.8.1",
     "zod": "^4.4.3"
@@ -70,6 +72,9 @@
     "transform": {
       "^.+\\.(t|j)s$": "ts-jest"
     },
+    "transformIgnorePatterns": [
+      "/node_modules/(?!jose)"
+    ],
     "collectCoverageFrom": [
       "**/*.(t|j)s"
     ],
