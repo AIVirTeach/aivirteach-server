@@ -75,6 +75,8 @@ describe('AuthService.login', () => {
       sub: 'user_1',
       email: 'learner@example.com',
     });
+    // expiresIn 描述的是 access token 的寿命（15m=900s），不是 refresh token 的 30 天
+    expect(pair.expiresIn).toBe(15 * 60);
     expect(pair.refreshToken).not.toContain('.');
     // 落库的必须是哈希，不能是明文
     expect(prisma.refreshToken.create).toHaveBeenCalledWith(

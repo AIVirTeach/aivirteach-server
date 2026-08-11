@@ -6,6 +6,7 @@ import {
   generateOpaqueToken,
   hashOpaqueToken,
   signAccessToken,
+  ttlToSeconds,
 } from './tokens';
 
 export interface TokenPair {
@@ -152,7 +153,8 @@ export class AuthService {
       pair: {
         accessToken,
         refreshToken,
-        expiresIn: this.env.REFRESH_TOKEN_TTL_DAYS * DAY_MS,
+        // 客户端要靠这个字段判断何时该刷新，必须是 access token（真正会过期的那个）的寿命
+        expiresIn: ttlToSeconds(this.env.ACCESS_TOKEN_TTL),
       },
       refreshTokenId: created.id,
     };

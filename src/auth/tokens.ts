@@ -59,6 +59,24 @@ export async function verifyAccessToken(
   }
 }
 
+const TTL_UNIT_SECONDS: Record<string, number> = {
+  s: 1,
+  m: 60,
+  h: 60 * 60,
+  d: 24 * 60 * 60,
+};
+
+// signAccessToken 的 ttl 只支持 jose 的简单格式（数字+单位），
+// 这里同步解析同一种格式，用来算 HTTP 响应里 expiresIn 的准确秒数。
+export function ttlToSeconds(ttl: string): number {
+  const match = /^(\d+)([smhd])$/.exec(ttl);
+  if (!match) {
+    throw new Error(`不支持的 TTL 格式：${ttl}`);
+  }
+  const [, amount, unit] = match;
+  return Number.parseInt(amount, 10) * TTL_UNIT_SECONDS[unit];
+}
+
 export function generateOpaqueToken(): string {
   return randomBytes(32).toString('base64url');
 }

@@ -3,6 +3,7 @@ import {
   generateOpaqueToken,
   hashOpaqueToken,
   signAccessToken,
+  ttlToSeconds,
   verifyAccessToken,
 } from './tokens';
 
@@ -56,5 +57,20 @@ describe('opaque token', () => {
     expect(hashed).toBe(hashOpaqueToken(token));
     expect(hashed).toMatch(/^[0-9a-f]{64}$/);
     expect(hashed).not.toBe(token);
+  });
+});
+
+describe('ttlToSeconds', () => {
+  it.each([
+    ['15m', 15 * 60],
+    ['1h', 60 * 60],
+    ['7d', 7 * 24 * 60 * 60],
+    ['30s', 30],
+  ])('把 %s 换算成 %i 秒', (ttl, seconds) => {
+    expect(ttlToSeconds(ttl)).toBe(seconds);
+  });
+
+  it('格式不对就抛错，而不是静默返回错误的秒数', () => {
+    expect(() => ttlToSeconds('15 minutes')).toThrow();
   });
 });
