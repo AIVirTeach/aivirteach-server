@@ -20,7 +20,8 @@
     "test:e2e": "jest --config ./test/jest-e2e.json",
     "db:up": "docker compose up -d",
     "db:migrate": "prisma migrate dev",
-    "db:reset": "prisma migrate reset --force"
+    "db:reset": "prisma migrate reset --force",
+    "cli": "ts-node -r tsconfig-paths/register src/cli.ts"
   },
   "dependencies": {
     "@nestjs/common": "^11.0.1",
@@ -31,6 +32,7 @@
     "@prisma/client": "^6.19.3",
     "dotenv": "^17.4.2",
     "jose": "^6.2.8",
+    "nest-commander": "^3.20.1",
     "reflect-metadata": "^0.2.2",
     "rxjs": "^7.8.1",
     "zod": "^4.4.3"
