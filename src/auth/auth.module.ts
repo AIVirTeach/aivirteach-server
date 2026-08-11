@@ -1,10 +1,5 @@
 import { Module } from '@nestjs/common';
-import { ClerkAuthGuard } from './clerk-auth.guard';
-import { AuthController } from './auth.controller';
 
-@Module({
-  controllers: [AuthController],
-  providers: [ClerkAuthGuard],
-  exports: [ClerkAuthGuard],
-})
+// 端点与 Guard 在 Task 7 接入，这里先保持模块存在但不导出任何东西。
+@Module({})
 export class AuthModule {}
