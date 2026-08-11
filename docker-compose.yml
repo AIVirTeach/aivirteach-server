@@ -1,0 +1,35 @@
+# 本机 5432/6379 已被 Homebrew 服务占用，54321-54324 被另一项目的 Supabase 占用，
+# 因此本项目固定用 55432 / 56379，避免互相覆盖。
+services:
+  postgres:
+    image: postgres:17-alpine
+    container_name: aivirteach-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: aivirteach
+      POSTGRES_PASSWORD: aivirteach
+      POSTGRES_DB: aivirteach
+    ports:
+      - '55432:5432'
+    volumes:
+      - aivirteach-pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U aivirteach -d aivirteach']
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    container_name: aivirteach-redis
+    restart: unless-stopped
+    ports:
+      - '56379:6379'
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+volumes:
+  aivirteach-pgdata:
