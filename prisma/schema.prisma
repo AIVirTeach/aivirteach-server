@@ -7,10 +7,86 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
+enum UserStatus {
+  INVITED
+  ACTIVE
+  SUSPENDED
+}
+
 model User {
+  id           String     @id @default(cuid())
+  email        String     @unique
+  displayName  String?
+  // 邀请未被接受时为 null；接受邀请设置密码后才有值。
+  passwordHash String?
+  status       UserStatus @default(INVITED)
+  createdAt    DateTime   @default(now())
+  updatedAt    DateTime   @updatedAt
+
+  invitations   Invitation[]
+  refreshTokens RefreshToken[]
+  enrollments   Enrollment[]
+  quotaGrants   QuotaGrant[]
+}
+
+model Invitation {
+  id         String    @id @default(cuid())
+  userId     String
+  user       User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  // sha256(明文邀请码)。明文只在运营 CLI 输出一次，不落库。
+  tokenHash  String    @unique
+  expiresAt  DateTime
+  acceptedAt DateTime?
+  createdAt  DateTime  @default(now())
+
+  @@index([userId])
+}
+
+model RefreshToken {
+  id         String    @id @default(cuid())
+  userId     String
+  user       User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tokenHash  String    @unique
+  expiresAt  DateTime
+  revokedAt  DateTime?
+  // 指向本 token 轮换后产生的新 token id；已撤销且有该值的 token 被重放时，撤销整个家族。
+  replacedBy String?
+  createdAt  DateTime  @default(now())
+
+  @@index([userId])
+}
+
+model Course {
+  id          String    @id @default(cuid())
+  slug        String    @unique
+  title       String
+  publishedAt DateTime?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  enrollments Enrollment[]
+}
+
+model Enrollment {
   id        String   @id @default(cuid())
-  clerkId   String   @unique
-  email     String   @unique
+  userId    String
+  courseId  String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  course    Course   @relation(fields: [courseId], references: [id], onDelete: Cascade)
   createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+
+  @@unique([userId, courseId])
+  @@index([courseId])
+}
+
+model QuotaGrant {
+  id             String    @id @default(cuid())
+  userId         String
+  user           User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  minutesGranted Int
+  minutesUsed    Int       @default(0)
+  expiresAt      DateTime?
+  createdAt      DateTime  @default(now())
+
+  @@index([userId])
 }
