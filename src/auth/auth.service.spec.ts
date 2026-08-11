@@ -2,6 +2,7 @@ import { UnauthorizedException } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
 import { ENV } from '../config/env';
 import { PrismaService } from '../prisma/prisma.service';
+import { AuditService } from '../audit/audit.service';
 import { AuthService } from './auth.service';
 import { hashPassword } from './password';
 import { hashOpaqueToken, verifyAccessToken } from './tokens';
@@ -45,15 +46,16 @@ const buildPrisma = (): PrismaStub => ({
   },
 });
 
-const buildService = async (prisma: PrismaStub) => {
+const buildService = async (prisma: PrismaStub, audit = { record: jest.fn() }) => {
   const moduleRef = await Test.createTestingModule({
     providers: [
       AuthService,
       { provide: PrismaService, useValue: prisma },
       { provide: ENV, useValue: ENV_STUB },
+      { provide: AuditService, useValue: audit },
     ],
   }).compile();
-  return moduleRef.get(AuthService);
+  return { service: moduleRef.get(AuthService), audit };
 };
 
 describe('AuthService.login', () => {
@@ -65,7 +67,7 @@ describe('AuthService.login', () => {
       passwordHash: await hashPassword('correct-password'),
       status: 'ACTIVE',
     });
-    const service = await buildService(prisma);
+    const { service, audit } = await buildService(prisma);
 
     const pair = await service.login('learner@example.com', 'correct-password');
 
@@ -86,6 +88,13 @@ describe('AuthService.login', () => {
         }),
       }),
     );
+    expect(audit.record).toHaveBeenCalledWith(
+      expect.objectContaining({
+        actor: { type: 'USER', id: 'user_1' },
+        action: 'auth.login',
+        success: true,
+      }),
+    );
   });
 
   it('密码错误时抛 UnauthorizedException', async () => {
@@ -96,7 +105,7 @@ describe('AuthService.login', () => {
       passwordHash: await hashPassword('correct-password'),
       status: 'ACTIVE',
     });
-    const service = await buildService(prisma);
+    const { service } = await buildService(prisma);
 
     await expect(
       service.login('learner@example.com', 'wrong'),
@@ -106,7 +115,7 @@ describe('AuthService.login', () => {
   it('用户不存在与密码错误的报错信息完全一致（防账号枚举）', async () => {
     const prisma = buildPrisma();
     prisma.user.findUnique.mockResolvedValue(null);
-    const service = await buildService(prisma);
+    const { service } = await buildService(prisma);
 
     await expect(
       service.login('nobody@example.com', 'whatever'),
@@ -121,7 +130,7 @@ describe('AuthService.login', () => {
       passwordHash: await hashPassword('correct-password'),
       status: 'SUSPENDED',
     });
-    const service = await buildService(prisma);
+    const { service } = await buildService(prisma);
 
     await expect(
       service.login('learner@example.com', 'correct-password'),
@@ -140,7 +149,7 @@ describe('AuthService.acceptInvitation', () => {
       user: { id: 'user_1', email: 'learner@example.com', status: 'INVITED' },
     });
     prisma.user.update.mockResolvedValue({});
-    const service = await buildService(prisma);
+    const { service } = await buildService(prisma);
 
     const pair = await service.acceptInvitation(
       'plain-invite-token',
@@ -171,7 +180,7 @@ describe('AuthService.acceptInvitation', () => {
       acceptedAt: new Date(),
       user: { id: 'user_1', email: 'learner@example.com', status: 'ACTIVE' },
     });
-    const service = await buildService(prisma);
+    const { service } = await buildService(prisma);
 
     await expect(
       service.acceptInvitation('used-token', 'pw-12345678'),
@@ -187,7 +196,7 @@ describe('AuthService.acceptInvitation', () => {
       acceptedAt: null,
       user: { id: 'user_1', email: 'learner@example.com', status: 'INVITED' },
     });
-    const service = await buildService(prisma);
+    const { service } = await buildService(prisma);
 
     await expect(
       service.acceptInvitation('expired', 'pw-12345678'),
@@ -206,7 +215,7 @@ describe('AuthService.refresh', () => {
       replacedBy: null,
       user: { id: 'user_1', email: 'learner@example.com', status: 'ACTIVE' },
     });
-    const service = await buildService(prisma);
+    const { service, audit } = await buildService(prisma);
 
     const pair = await service.refresh('old-plain-token');
 
@@ -216,6 +225,9 @@ describe('AuthService.refresh', () => {
         where: { id: 'rt_old' },
         data: expect.objectContaining({ replacedBy: expect.any(String) }),
       }),
+    );
+    expect(audit.record).toHaveBeenCalledWith(
+      expect.objectContaining({ action: 'auth.refresh', success: true }),
     );
   });
 
@@ -229,7 +241,7 @@ describe('AuthService.refresh', () => {
       replacedBy: 'rt_new',
       user: { id: 'user_1', email: 'learner@example.com', status: 'ACTIVE' },
     });
-    const service = await buildService(prisma);
+    const { service } = await buildService(prisma);
 
     await expect(service.refresh('replayed-token')).rejects.toBeInstanceOf(
       UnauthorizedException,
@@ -244,7 +256,7 @@ describe('AuthService.refresh', () => {
   it('不存在的 refresh token 被拒绝', async () => {
     const prisma = buildPrisma();
     prisma.refreshToken.findUnique.mockResolvedValue(null);
-    const service = await buildService(prisma);
+    const { service } = await buildService(prisma);
 
     await expect(service.refresh('nonexistent')).rejects.toBeInstanceOf(
       UnauthorizedException,
@@ -263,7 +275,7 @@ describe('AuthService.logout', () => {
       replacedBy: null,
       user: { id: 'user_1', email: 'learner@example.com', status: 'ACTIVE' },
     });
-    const service = await buildService(prisma);
+    const { service, audit } = await buildService(prisma);
 
     await service.logout('plain-token');
 
@@ -273,13 +285,17 @@ describe('AuthService.logout', () => {
         data: expect.objectContaining({ revokedAt: expect.any(Date) }),
       }),
     );
+    expect(audit.record).toHaveBeenCalledWith(
+      expect.objectContaining({ action: 'auth.logout', success: true }),
+    );
   });
 
   it('登出一个不存在的 token 不报错（幂等）', async () => {
     const prisma = buildPrisma();
     prisma.refreshToken.findUnique.mockResolvedValue(null);
-    const service = await buildService(prisma);
+    const { service, audit } = await buildService(prisma);
 
     await expect(service.logout('nonexistent')).resolves.toBeUndefined();
+    expect(audit.record).not.toHaveBeenCalled();
   });
 });

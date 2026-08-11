@@ -1,4 +1,6 @@
 import { Inject, Injectable, UnauthorizedException } from '@nestjs/common';
+import { AuditActorType } from '@prisma/client';
+import { AuditService } from '../audit/audit.service';
 import { ENV, type Env } from '../config/env';
 import { PrismaService } from '../prisma/prisma.service';
 import { hashPassword, verifyPassword } from './password';
@@ -25,6 +27,7 @@ export class AuthService {
   constructor(
     private readonly prisma: PrismaService,
     @Inject(ENV) private readonly env: Env,
+    private readonly audit: AuditService,
   ) {}
 
   async acceptInvitation(token: string, password: string): Promise<TokenPair> {
@@ -38,6 +41,11 @@ export class AuthService {
       invitation.acceptedAt ||
       invitation.expiresAt <= new Date()
     ) {
+      await this.audit.record({
+        actor: { type: AuditActorType.USER, id: invitation?.userId ?? null },
+        action: 'auth.acceptInvitation',
+        success: false,
+      });
       throw new UnauthorizedException(DENIED);
     }
 
@@ -51,6 +59,12 @@ export class AuthService {
       data: { acceptedAt: new Date() },
     });
 
+    await this.audit.record({
+      actor: { type: AuditActorType.USER, id: invitation.user.id },
+      action: 'auth.acceptInvitation',
+      success: true,
+    });
+
     return this.issueTokens(invitation.user.id, invitation.user.email);
   }
 
@@ -58,12 +72,28 @@ export class AuthService {
     const user = await this.prisma.user.findUnique({ where: { email } });
 
     if (!user?.passwordHash || user.status !== 'ACTIVE') {
+      await this.audit.record({
+        actor: { type: AuditActorType.USER, id: user?.id ?? null },
+        action: 'auth.login',
+        success: false,
+      });
       throw new UnauthorizedException(DENIED);
     }
 
     if (!(await verifyPassword(user.passwordHash, password))) {
+      await this.audit.record({
+        actor: { type: AuditActorType.USER, id: user.id },
+        action: 'auth.login',
+        success: false,
+      });
       throw new UnauthorizedException(DENIED);
     }
+
+    await this.audit.record({
+      actor: { type: AuditActorType.USER, id: user.id },
+      action: 'auth.login',
+      success: true,
+    });
 
     return this.issueTokens(user.id, user.email);
   }
@@ -75,6 +105,11 @@ export class AuthService {
     });
 
     if (!stored) {
+      await this.audit.record({
+        actor: { type: AuditActorType.USER, id: null },
+        action: 'auth.refresh',
+        success: false,
+      });
       throw new UnauthorizedException(DENIED);
     }
 
@@ -84,10 +119,21 @@ export class AuthService {
         where: { userId: stored.userId, revokedAt: null },
         data: { revokedAt: new Date() },
       });
+      await this.audit.record({
+        actor: { type: AuditActorType.USER, id: stored.userId },
+        action: 'auth.refresh',
+        success: false,
+        reason: '检测到已撤销 token 被重放，已撤销整个 token 家族',
+      });
       throw new UnauthorizedException(DENIED);
     }
 
     if (stored.expiresAt <= new Date() || stored.user.status !== 'ACTIVE') {
+      await this.audit.record({
+        actor: { type: AuditActorType.USER, id: stored.userId },
+        action: 'auth.refresh',
+        success: false,
+      });
       throw new UnauthorizedException(DENIED);
     }
 
@@ -101,6 +147,12 @@ export class AuthService {
       data: { revokedAt: new Date(), replacedBy: refreshTokenId },
     });
 
+    await this.audit.record({
+      actor: { type: AuditActorType.USER, id: stored.userId },
+      action: 'auth.refresh',
+      success: true,
+    });
+
     return pair;
   }
 
@@ -110,7 +162,7 @@ export class AuthService {
       include: { user: true },
     });
 
-    // 登出必须幂等：token 不存在或已撤销都当作成功。
+    // 登出必须幂等：token 不存在或已撤销都当作成功，且不写审计——重复点登出不是安全事件。
     if (!stored || stored.revokedAt) {
       return;
     }
@@ -118,6 +170,12 @@ export class AuthService {
     await this.prisma.refreshToken.update({
       where: { id: stored.id },
       data: { revokedAt: new Date() },
+    });
+
+    await this.audit.record({
+      actor: { type: AuditActorType.USER, id: stored.userId },
+      action: 'auth.logout',
+      success: true,
     });
   }
 
@@ -153,7 +211,6 @@ export class AuthService {
       pair: {
         accessToken,
         refreshToken,
-        // 客户端要靠这个字段判断何时该刷新，必须是 access token（真正会过期的那个）的寿命
         expiresIn: ttlToSeconds(this.env.ACCESS_TOKEN_TTL),
       },
       refreshTokenId: created.id,
