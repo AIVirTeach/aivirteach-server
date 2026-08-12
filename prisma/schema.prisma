@@ -1,0 +1,145 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum Plan {
+  Free
+  Premium
+}
+
+enum CourseLevel {
+  Beginner
+  Intermediate
+  Advanced
+}
+
+enum ActivityKind {
+  lesson
+  practice
+  achievement
+}
+
+enum ChatRole {
+  student
+  tutor
+}
+
+model User {
+  id              String            @id
+  authProviderId  String?           @unique @map("auth_provider_id")
+  name            String            @db.VarChar(80)
+  email           String            @unique @db.VarChar(320)
+  role            String            @db.VarChar(120)
+  plan            Plan
+  level           Int               @default(1)
+  timezone        String            @default("UTC") @db.VarChar(80)
+  streakDays      Int               @default(0) @map("streak_days")
+  skillsMastered  Int               @default(0) @map("skills_mastered")
+  tasksCompleted  Int               @default(0) @map("tasks_completed")
+  joinedAt        DateTime          @default(now()) @map("joined_at")
+  updatedAt       DateTime          @updatedAt @map("updated_at")
+  enrollments     Enrollment[]
+  practiceSessions PracticeSession[]
+  notifications   Notification[]
+  activities      Activity[]
+  chatThreads     ChatThread[]
+  @@map("users")
+}
+
+model Course {
+  id              String            @id
+  title           String            @db.VarChar(160)
+  category        String            @db.VarChar(80)
+  description     String
+  level           CourseLevel
+  durationMinutes Int               @map("duration_minutes")
+  lessonCount     Int               @map("lesson_count")
+  published       Boolean           @default(false)
+  createdAt       DateTime          @default(now()) @map("created_at")
+  updatedAt       DateTime          @updatedAt @map("updated_at")
+  enrollments     Enrollment[]
+  practiceSessions PracticeSession[]
+  chatThreads     ChatThread[]
+  @@map("courses")
+}
+
+model Enrollment {
+  id              String   @id
+  userId          String   @map("user_id")
+  courseId        String   @map("course_id")
+  active          Boolean  @default(false)
+  progressPercent Int      @default(0) @map("progress_percent")
+  currentModule   String   @map("current_module") @db.VarChar(200)
+  enrolledAt      DateTime @default(now()) @map("enrolled_at")
+  updatedAt       DateTime @updatedAt @map("updated_at")
+  user            User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  course          Course   @relation(fields: [courseId], references: [id], onDelete: Restrict)
+  @@unique([userId, courseId])
+  @@index([userId, active])
+  @@map("enrollments")
+}
+
+model PracticeSession {
+  id        String   @id
+  userId    String   @map("user_id")
+  courseId  String?  @map("course_id")
+  minutes   Int
+  startedAt DateTime @default(now()) @map("started_at")
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  course    Course?  @relation(fields: [courseId], references: [id], onDelete: SetNull)
+  @@index([userId, startedAt(sort: Desc)])
+  @@map("practice_sessions")
+}
+
+model Notification {
+  id        String    @id
+  userId    String    @map("user_id")
+  message   String
+  createdAt DateTime  @default(now()) @map("created_at")
+  readAt    DateTime? @map("read_at")
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  @@index([userId, createdAt(sort: Desc)])
+  @@map("notifications")
+}
+
+model Activity {
+  id         String       @id
+  userId     String       @map("user_id")
+  title      String       @db.VarChar(160)
+  detail     String
+  kind       ActivityKind
+  occurredAt DateTime     @default(now()) @map("occurred_at")
+  user       User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  @@index([userId, occurredAt(sort: Desc)])
+  @@map("activities")
+}
+
+model ChatThread {
+  id        String        @id
+  userId    String        @map("user_id")
+  courseId  String?       @map("course_id")
+  title     String?       @db.VarChar(160)
+  createdAt DateTime      @default(now()) @map("created_at")
+  updatedAt DateTime      @updatedAt @map("updated_at")
+  user      User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  course    Course?       @relation(fields: [courseId], references: [id], onDelete: SetNull)
+  messages  ChatMessage[]
+  @@map("chat_threads")
+}
+
+model ChatMessage {
+  id        String   @id
+  threadId  String   @map("thread_id")
+  role      ChatRole
+  text      String
+  provider  String?  @db.VarChar(40)
+  createdAt DateTime @default(now()) @map("created_at")
+  thread    ChatThread @relation(fields: [threadId], references: [id], onDelete: Cascade)
+  @@index([threadId, createdAt])
+  @@map("chat_messages")
+}
