@@ -27,10 +27,21 @@ async function bootstrap() {
     .setVersion('0.1.0')
     .addBearerAuth()
     .build();
+  // swagger-ui-dist 的静态资源是运行时从磁盘读的，Vercel 的 build tracer 不会把它们
+  // 打进函数产物，本地/传统长连接部署没事，Serverless 上会全部 404、页面空白。
+  // 改成从 CDN 加载同一个版本的资源（版本号需要跟 package-lock.json 里的 swagger-ui-dist 保持一致），绕开这个问题。
+  const SWAGGER_UI_DIST_VERSION = '5.32.8';
   SwaggerModule.setup(
     'docs',
     app,
     SwaggerModule.createDocument(app, swaggerConfig),
+    {
+      customCssUrl: `https://cdn.jsdelivr.net/npm/swagger-ui-dist@${SWAGGER_UI_DIST_VERSION}/swagger-ui.min.css`,
+      customJs: [
+        `https://cdn.jsdelivr.net/npm/swagger-ui-dist@${SWAGGER_UI_DIST_VERSION}/swagger-ui-bundle.js`,
+        `https://cdn.jsdelivr.net/npm/swagger-ui-dist@${SWAGGER_UI_DIST_VERSION}/swagger-ui-standalone-preset.js`,
+      ],
+    },
   );
 
   await app.listen(env.PORT);
