@@ -1,5 +1,10 @@
 import { createHash, randomBytes } from 'node:crypto';
-import { SignJWT, jwtVerify } from 'jose';
+
+// jose 是纯 ESM 包，NestJS 编译出的 CommonJS 产物不能静态 require 它
+// （Vercel 的 Node.js Function 运行时上会直接报 ERR_REQUIRE_ESM），改成按需动态 import。
+let josePromise: Promise<typeof import('jose')> | undefined;
+const loadJose = (): Promise<typeof import('jose')> =>
+  (josePromise ??= import('jose'));
 
 export const TOKEN_ISSUER = 'aivirteach';
 export const TOKEN_AUDIENCE = 'aivirteach-client';
@@ -24,6 +29,7 @@ export async function signAccessToken(
   secret: string,
   ttl: string,
 ): Promise<string> {
+  const { SignJWT } = await loadJose();
   return new SignJWT({ email: claims.email })
     .setProtectedHeader({ alg: 'HS256' })
     .setSubject(claims.sub)
@@ -41,6 +47,7 @@ export async function verifyAccessToken(
   secret: string,
 ): Promise<AccessTokenClaims> {
   try {
+    const { jwtVerify } = await loadJose();
     const { payload } = await jwtVerify(token, toKey(secret), {
       issuer: TOKEN_ISSUER,
       audience: TOKEN_AUDIENCE,
