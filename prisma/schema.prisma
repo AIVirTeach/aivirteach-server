@@ -114,6 +114,10 @@ model RefreshToken {
 model Course {
   id              String      @id @default(cuid())
   slug            String      @unique
+  // Labs 侧课程内容包/VM 镜像的标识符（course.json 顶层的 "id"，如 "n8n-agent-builder"）；
+  // 跟 slug 是两个东西——slug 是 client 路由用的，这个是调 Labs /v1/agent/diagnose 时
+  // CourseContext.course_id 要传的值。接入 Labs（SRV-009）前允许为空。
+  contentId       String?     @unique
   title           String
   shortTitle      String?
   category        String      @default("")
