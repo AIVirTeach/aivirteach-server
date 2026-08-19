@@ -39,6 +39,25 @@ enum AuditActorType {
   SYSTEM
 }
 
+enum Plan {
+  FREE
+  PREMIUM
+}
+
+enum CourseLevel {
+  BEGINNER
+  INTERMEDIATE
+  ADVANCED
+}
+
+// dashboard 的 recentActivity 用；每次完成 lesson / 记一次 practice 时各写一行，
+// 不做 Attempt/PracticeSession 的 UNION 视图，读 dashboard 只需一条按时间排序的查询。
+enum ActivityKind {
+  LESSON
+  PRACTICE
+  ACHIEVEMENT
+}
+
 model User {
   id           String     @id @default(cuid())
   email        String     @unique
@@ -46,13 +65,21 @@ model User {
   // 邀请未被接受时为 null；接受邀请设置密码后才有值。
   passwordHash String?
   status       UserStatus @default(INVITED)
+  // 展示用头衔（如 "AI Automation Learner"），运营 CLI 种号时给；不做枚举，client 只透传显示。
+  role         String     @default("Learner")
+  plan         Plan       @default(FREE)
+  level        Int        @default(1)
+  timezone     String     @default("Asia/Kuala_Lumpur")
   createdAt    DateTime   @default(now())
   updatedAt    DateTime   @updatedAt
 
-  invitations   Invitation[]
-  refreshTokens RefreshToken[]
-  enrollments   Enrollment[]
-  quotaLedgers  QuotaLedger[]
+  invitations      Invitation[]
+  refreshTokens    RefreshToken[]
+  enrollments      Enrollment[]
+  quotaLedgers     QuotaLedger[]
+  notifications    Notification[]
+  practiceSessions PracticeSession[]
+  activities       Activity[]
 }
 
 model Invitation {
@@ -82,25 +109,38 @@ model RefreshToken {
   @@index([userId])
 }
 
+// 只放 /courses 列表页要的目录级字段（不随版本变化）；modules/lessons/outcomes/
+// requirements/tags/welcome 内容随版本迭代，放 CourseVersion.content 里。
 model Course {
-  id        String   @id @default(cuid())
-  slug      String   @unique
-  title     String
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  id              String      @id @default(cuid())
+  slug            String      @unique
+  title           String
+  shortTitle      String?
+  category        String      @default("")
+  description     String      @default("")
+  level           CourseLevel @default(BEGINNER)
+  language        String      @default("en")
+  durationMinutes Int         @default(0)
+  lessonCount     Int         @default(0)
+  // 只有发布过版本（publishedAt 非空）才对学习者可见；course:publish 命令置为 true。
+  published       Boolean     @default(false)
+  coverAssetId    String?
+  createdAt       DateTime    @default(now())
+  updatedAt       DateTime    @updatedAt
 
   versions    CourseVersion[]
   enrollments Enrollment[]
+  assets      CourseAsset[]
 }
 
 model CourseVersion {
-  id       String @id @default(cuid())
-  courseId String
-  course   Course @relation(fields: [courseId], references: [id], onDelete: Cascade)
-  version  Int
+  id          String    @id @default(cuid())
+  courseId    String
+  course      Course    @relation(fields: [courseId], references: [id], onDelete: Cascade)
+  version     Int
   // KubeVirt/Docker 镜像摘要；Labs 集成（SRV-009）前允许为空，创建/发布时如果有就填。
   imageDigest String?
-  content     Json     @default("{}")
+  content     Json      @default("{}")
   publishedAt DateTime?
   createdAt   DateTime  @default(now())
 
@@ -110,21 +150,40 @@ model CourseVersion {
   @@index([courseId])
 }
 
+// 封面图/欢迎页配图等课程静态资源的元数据；文件本体放对象存储（如 Vercel Blob），
+// 这里只存 objectKey，用来做 courseId+assetId 的存在性/归属校验和 GET /courses/:id/assets/:assetId 的查找。
+model CourseAsset {
+  id        String   @id @default(cuid())
+  courseId  String
+  course    Course   @relation(fields: [courseId], references: [id], onDelete: Cascade)
+  objectKey String
+  altText   String?
+  mimeType  String?
+  createdAt DateTime @default(now())
+
+  @@index([courseId])
+}
+
 model Enrollment {
-  id     String @id @default(cuid())
-  userId String
-  courseId String
+  id              String         @id @default(cuid())
+  userId          String
+  courseId        String
   // 学习者真正开始（workspace 启动，SRV-010 范围）时固定到某个版本；之前为 null。
   courseVersionId String?
   user            User           @relation(fields: [userId], references: [id], onDelete: Cascade)
   course          Course         @relation(fields: [courseId], references: [id], onDelete: Cascade)
   courseVersion   CourseVersion? @relation(fields: [courseVersionId], references: [id])
+  // 这个用户当前在 dashboard 上看到的那门课；一人可以对多门课各有一行 enrollment，
+  // 但同一时间只有一行 active=true（切课时应用层把旧的置为 false，不新建行）。
+  // restartCourse 不新建 enrollment 行，只重置这一行的 Progress。
+  active          Boolean        @default(true)
   createdAt       DateTime       @default(now())
 
   workspace     Workspace?
   progress      Progress?
   attempts      Attempt[]
   conversations Conversation[]
+  activities    Activity[]
 
   @@unique([userId, courseId])
   @@index([courseId])
@@ -157,9 +216,9 @@ model Attempt {
   status       AttemptStatus
   exitCode     Int?
   // 评测的原始 stdout，不截断；不单独存一个脱离证据的 passed:true。
-  stdout    String?
-  fileHash  String?
-  createdAt DateTime @default(now())
+  stdout       String?
+  fileHash     String?
+  createdAt    DateTime      @default(now())
 
   @@index([enrollmentId, stepIndex])
 }
@@ -171,16 +230,53 @@ model Conversation {
   role         ConversationRole
   content      String
   // 引用的上下文（当前步骤、截图、评测结果等），结构随 AI Teacher Adapter（SRV-014）定，这里先存原样 JSON。
-  contextRef Json?
-  createdAt  DateTime @default(now())
+  contextRef   Json?
+  createdAt    DateTime         @default(now())
 
   @@index([enrollmentId])
 }
 
+model Notification {
+  id        String    @id @default(cuid())
+  userId    String
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  message   String
+  readAt    DateTime?
+  createdAt DateTime  @default(now())
+
+  @@index([userId])
+}
+
+// recordPractice 写一行；practiceMinutes/weeklyHours/streakDays 都是查询时从这张表
+// （加上 Activity）聚合出来的，不额外维护冗余计数器，避免和明细对不上。
+model PracticeSession {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  minutes   Int
+  createdAt DateTime @default(now())
+
+  @@index([userId, createdAt])
+}
+
+model Activity {
+  id           String       @id @default(cuid())
+  userId       String
+  user         User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  enrollmentId String?
+  enrollment   Enrollment?  @relation(fields: [enrollmentId], references: [id], onDelete: SetNull)
+  kind         ActivityKind
+  title        String
+  detail       String
+  occurredAt   DateTime     @default(now())
+
+  @@index([userId, occurredAt])
+}
+
 model QuotaLedger {
-  id     String @id @default(cuid())
-  userId String
-  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  id           String    @id @default(cuid())
+  userId       String
+  user         User      @relation(fields: [userId], references: [id], onDelete: Cascade)
   // 正数 = 发放。未来 SRV-010/012 接入真实 VM 用量后会追加负数的消耗条目；这次只产生正数。
   minutesDelta Int
   expiresAt    DateTime?
@@ -190,8 +286,8 @@ model QuotaLedger {
 }
 
 model AuditEvent {
-  id        String         @id @default(cuid())
-  actorType AuditActorType
+  id         String         @id @default(cuid())
+  actorType  AuditActorType
   // USER：user.id，或找不到用户时尝试登录/接受邀请用的邮箱都取不到时为 null；
   // OPERATOR：CLI --operator 传入的邮箱；SYSTEM：始终为 null。
   actorId    String?
@@ -200,9 +296,9 @@ model AuditEvent {
   targetType String?
   targetId   String?
   // OPERATOR 触发的事件必填（CLI 层用 zod 校验保证）；USER/SYSTEM 触发的可选。
-  reason    String?
-  metadata  Json?
-  createdAt DateTime @default(now())
+  reason     String?
+  metadata   Json?
+  createdAt  DateTime       @default(now())
 
   @@index([actorId])
   @@index([action])
