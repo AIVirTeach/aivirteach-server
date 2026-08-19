@@ -66,7 +66,7 @@ type CourseWelcome = {
   schemaVersion: number;
   courseId: string;
   title: string;
-  overviewAssetId: string;
+  overviewAssetId?: string;
   overview: { heading: string; paragraphs: string[] };
   howItWorks: { heading: string; steps: Array<{ number: string; title: string; description: string }> };
   finalOutcome: { heading: string; description: string };
@@ -78,7 +78,6 @@ type LoadedCourse = { catalog: CatalogCourse; manifest: CourseManifest; manifest
 export class CourseContentService {
   private readonly root = this.findContentRoot();
   private readonly catalog = this.readJson<{ schemaVersion: number; courses: CatalogCourse[] }>(resolve(this.root, "catalog.json"));
-  private readonly courseCache = new Map<string, LoadedCourse>();
 
   listPublishedCourses() {
     return this.catalog.courses.filter((course) => course.published).map(({ manifest: _manifest, slug: _slug, ...course }) => course);
@@ -138,9 +137,9 @@ export class CourseContentService {
     const path = this.resolveInside(this.root, dirname(loaded.manifestPath), loaded.manifest.welcome.path);
     const welcome = this.readJson<CourseWelcome>(path);
     if (welcome.courseId !== courseId) throw new InternalServerErrorException("Course welcome data does not match its course");
-    const asset = loaded.manifest.assets.find((item) => item.id === welcome.overviewAssetId);
-    if (!asset) throw new InternalServerErrorException("Course welcome image is not registered as an asset");
-    return { ...welcome, overviewAsset: { id: asset.id, alt: asset.alt } };
+    const asset = welcome.overviewAssetId ? loaded.manifest.assets.find((item) => item.id === welcome.overviewAssetId) : undefined;
+    if (welcome.overviewAssetId && !asset) throw new InternalServerErrorException("Course welcome image is not registered as an asset");
+    return { ...welcome, overviewAsset: asset ? { id: asset.id, alt: asset.alt } : null };
   }
 
   gradeAssessment(courseId: string, lessonId: string, submittedAnswer: unknown) {
@@ -170,16 +169,12 @@ export class CourseContentService {
   }
 
   private loadPublishedCourse(courseId: string) {
-    const cached = this.courseCache.get(courseId);
-    if (cached) return cached;
     const catalog = this.catalog.courses.find((course) => course.id === courseId && course.published);
     if (!catalog) throw new NotFoundException("Course not found");
     const manifestPath = this.resolveInside(this.root, this.root, catalog.manifest);
     const manifest = this.readJson<CourseManifest>(manifestPath);
     if (manifest.id !== catalog.id || manifest.status !== "published") throw new NotFoundException("Course not found");
-    const loaded = { catalog, manifest, manifestPath };
-    this.courseCache.set(courseId, loaded);
-    return loaded;
+    return { catalog, manifest, manifestPath };
   }
 
   private findLesson(manifest: CourseManifest, lessonId: string) {

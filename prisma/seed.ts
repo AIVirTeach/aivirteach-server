@@ -9,7 +9,13 @@ async function main() {
     await prisma.user.upsert({ where: { id: user.id }, create: data, update: data });
   }
   for (const course of seedCourses) await prisma.course.upsert({ where: { id: course.id }, create: { ...course, level: course.level }, update: { ...course, level: course.level } });
-  for (const enrollment of seedEnrollments) await prisma.enrollment.upsert({ where: { userId_courseId: { userId: enrollment.userId, courseId: enrollment.courseId } }, create: enrollment, update: enrollment });
+  for (const enrollment of seedEnrollments) {
+    await prisma.enrollment.updateMany({
+      where: { userId: enrollment.userId, active: true, id: { not: enrollment.id } },
+      data: { active: false },
+    });
+    await prisma.enrollment.upsert({ where: { id: enrollment.id }, create: enrollment, update: enrollment });
+  }
   for (const session of seedPracticeSessions) await prisma.practiceSession.upsert({ where: { id: session.id }, create: session, update: session });
   for (const notification of seedNotifications) await prisma.notification.upsert({ where: { id: notification.id }, create: notification, update: notification });
   for (const activity of seedActivities) await prisma.activity.upsert({ where: { id: activity.id }, create: activity, update: activity });

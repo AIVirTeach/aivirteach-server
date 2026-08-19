@@ -10,7 +10,7 @@ describe("DashboardService", () => {
     const result = await service.get("learner_advanced");
 
     expect(result.learner.name).toBe("Alex Chen");
-    expect(result.activeCourse?.id).toBe("n8n-agent-builder");
+    expect(result.activeCourse?.id).toBe("ai-daily-briefing");
     expect(result.unreadNotificationCount).toBe(2);
   });
 });

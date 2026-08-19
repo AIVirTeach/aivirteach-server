@@ -7,19 +7,19 @@ describe("CoursesService", () => {
     const db = new InMemoryDatabaseService();
     const service = new CoursesService(db, new CourseContentService());
 
-    await service.enroll("learner_advanced", "n8n-agent-builder");
-    await service.enroll("learner_advanced", "n8n-agent-builder");
+    await service.enroll("learner_advanced", "ai-daily-briefing");
+    await service.enroll("learner_advanced", "ai-daily-briefing");
 
     const active = (await db.userEnrollments("learner_advanced")).filter((item) => item.active);
     expect(active).toHaveLength(1);
-    expect(active[0].courseId).toBe("n8n-agent-builder");
+    expect(active[0].courseId).toBe("ai-daily-briefing");
   });
 
   it("restarts an enrolled course at its first module", async () => {
     const db = new InMemoryDatabaseService();
     const service = new CoursesService(db, new CourseContentService());
 
-    const restarted = await service.restart("learner_advanced", "n8n-agent-builder");
+    const restarted = await service.restart("learner_advanced", "ai-daily-briefing");
 
     expect(restarted.progressPercent).toBe(0);
     expect(restarted.active).toBe(false);
@@ -28,11 +28,20 @@ describe("CoursesService", () => {
 
   it("loads course welcome content from the published package", () => {
     const service = new CoursesService(new InMemoryDatabaseService(), new CourseContentService());
-    const welcome = service.getWelcome("n8n-agent-builder");
+    const welcome = service.getWelcome("ai-daily-briefing");
 
     expect(welcome.overview.heading).toBe("Build an AI Daily Briefing");
     expect(welcome.howItWorks.steps).toHaveLength(4);
-    expect(welcome.finalOutcome.description).toContain("persistent");
-    expect(welcome.overviewAsset.id).toBe("course-overview");
+    expect(welcome.finalOutcome.description).toContain("reproducible");
+    expect(welcome.overviewAsset?.id).toBe("course-welcome");
+  });
+
+  it("loads a text-first welcome for a course without image assets", () => {
+    const service = new CoursesService(new InMemoryDatabaseService(), new CourseContentService());
+    const welcome = service.getWelcome("ai-web-watcher-agent");
+
+    expect(welcome.overview.heading).toBe("Build an AI Web Watcher Agent");
+    expect(welcome.howItWorks.steps).toHaveLength(5);
+    expect(welcome.overviewAsset).toBeNull();
   });
 });
