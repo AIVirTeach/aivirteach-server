@@ -181,6 +181,8 @@ model Course {
   durationMinutes Int         @default(0)
   lessonCount     Int         @default(0)
   tags            String[]    @default([])
+  outcomes        String[]    @default([])
+  requirements    String[]    @default([])
   published       Boolean     @default(false)
   coverAssetId    String?
   createdAt       DateTime    @default(now())
@@ -477,6 +479,12 @@ achievements 成就墙、技能雷达图（`skills[]`）、AI 洞察文案（`an
 （`CourseVersion.content:Json` 整个拿掉、`Progress.currentStep`/`Attempt.stepIndex` 从 Int 换成外键）。
 决定：**直接 `npx prisma migrate reset`**，不写保留数据的迁移脚本或回填逻辑——现有数据只是测试登录账号，
 还没有真实课程内容，重新邀请几个测试账号成本很低。reset 后用现有的 `invite` CLI 命令重新种测试账号。
+
+## 修订记录
+
+- 2026-08-20（写实施计划时发现）：`Course` 补了 `outcomes String[]` / `requirements String[]`——
+  这两个字段在真实 `course.json`（顶层 `outcomes`/`requirements`）和 client 的 `ApiCourseDetail`
+  类型里都存在，前几轮讨论 schema 时漏收了，跟 `tags` 放在同一张表、同一层级。
 
 ## 已知缺口 / 未决项
 
