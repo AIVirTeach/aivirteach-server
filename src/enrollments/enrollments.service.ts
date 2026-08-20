@@ -3,6 +3,7 @@ import { AuditActorType } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { AuditService } from '../audit/audit.service';
 import { CoursesService } from '../courses/courses.service';
+import { computeProgressPercent } from '../dashboard/dashboard.service';
 
 export type EnrollmentResponse = {
   id: string;
@@ -85,11 +86,22 @@ export class EnrollmentsService {
   async listForUser(userId: string): Promise<EnrollmentResponse[]> {
     const enrollments = await this.prisma.enrollment.findMany({
       where: { userId },
-      include: { course: true, currentModule: true },
+      include: {
+        course: true,
+        currentModule: true,
+        progress: true,
+        courseVersion: { include: { modules: { include: { lessons: true } } } },
+      },
       orderBy: { createdAt: 'asc' },
     });
     return enrollments.map((enrollment) =>
-      this.toResponse(enrollment, enrollment.course.slug, 0),
+      this.toResponse(
+        enrollment,
+        enrollment.course.slug,
+        enrollment.courseVersion
+          ? computeProgressPercent({ progress: enrollment.progress, modules: enrollment.courseVersion.modules })
+          : 0,
+      ),
     );
   }
 
