@@ -19,6 +19,7 @@ enum WorkspaceStatus {
   STOPPED
   ERROR
   RESETTING
+  DESTROYED
 }
 
 enum AttemptStatus {
@@ -50,22 +51,25 @@ enum CourseLevel {
   ADVANCED
 }
 
-// dashboard 的 recentActivity 用；每次完成 lesson / 记一次 practice 时各写一行，
-// 不做 Attempt/PracticeSession 的 UNION 视图，读 dashboard 只需一条按时间排序的查询。
 enum ActivityKind {
   LESSON
   PRACTICE
   ACHIEVEMENT
 }
 
+enum ExportStatus {
+  PENDING
+  PACKAGING
+  READY
+  FAILED
+}
+
 model User {
   id           String     @id @default(cuid())
   email        String     @unique
   displayName  String?
-  // 邀请未被接受时为 null；接受邀请设置密码后才有值。
   passwordHash String?
   status       UserStatus @default(INVITED)
-  // 展示用头衔（如 "AI Automation Learner"），运营 CLI 种号时给；不做枚举，client 只透传显示。
   role         String     @default("Learner")
   plan         Plan       @default(FREE)
   level        Int        @default(1)
@@ -86,7 +90,6 @@ model Invitation {
   id         String    @id @default(cuid())
   userId     String
   user       User      @relation(fields: [userId], references: [id], onDelete: Cascade)
-  // sha256(明文邀请码)。明文只在运营 CLI 输出一次，不落库。
   tokenHash  String    @unique
   expiresAt  DateTime
   acceptedAt DateTime?
@@ -102,21 +105,16 @@ model RefreshToken {
   tokenHash  String    @unique
   expiresAt  DateTime
   revokedAt  DateTime?
-  // 指向本 token 轮换后产生的新 token id；已撤销且有该值的 token 被重放时，撤销整个家族。
   replacedBy String?
   createdAt  DateTime  @default(now())
 
   @@index([userId])
 }
 
-// 只放 /courses 列表页要的目录级字段（不随版本变化）；modules/lessons/outcomes/
-// requirements/tags/welcome 内容随版本迭代，放 CourseVersion.content 里。
+// 只放目录级字段；modules/lessons/welcome/assessment 内容随版本迭代，见下面几张表。
 model Course {
   id              String      @id @default(cuid())
   slug            String      @unique
-  // Labs 侧课程内容包/VM 镜像的标识符（course.json 顶层的 "id"，如 "n8n-agent-builder"）；
-  // 跟 slug 是两个东西——slug 是 client 路由用的，这个是调 Labs /v1/agent/diagnose 时
-  // CourseContext.course_id 要传的值。接入 Labs（SRV-009）前允许为空。
   contentId       String?     @unique
   title           String
   shortTitle      String?
@@ -126,7 +124,9 @@ model Course {
   language        String      @default("en")
   durationMinutes Int         @default(0)
   lessonCount     Int         @default(0)
-  // 只有发布过版本（publishedAt 非空）才对学习者可见；course:publish 命令置为 true。
+  tags            String[]    @default([])
+  outcomes        String[]    @default([])
+  requirements    String[]    @default([])
   published       Boolean     @default(false)
   coverAssetId    String?
   createdAt       DateTime    @default(now())
@@ -137,29 +137,11 @@ model Course {
   assets      CourseAsset[]
 }
 
-model CourseVersion {
-  id          String    @id @default(cuid())
-  courseId    String
-  course      Course    @relation(fields: [courseId], references: [id], onDelete: Cascade)
-  version     Int
-  // KubeVirt/Docker 镜像摘要；Labs 集成（SRV-009）前允许为空，创建/发布时如果有就填。
-  imageDigest String?
-  content     Json      @default("{}")
-  publishedAt DateTime?
-  createdAt   DateTime  @default(now())
-
-  enrollments Enrollment[]
-
-  @@unique([courseId, version])
-  @@index([courseId])
-}
-
-// 封面图/欢迎页配图等课程静态资源的元数据；文件本体放对象存储（如 Vercel Blob），
-// 这里只存 objectKey，用来做 courseId+assetId 的存在性/归属校验和 GET /courses/:id/assets/:assetId 的查找。
 model CourseAsset {
   id        String   @id @default(cuid())
   courseId  String
   course    Course   @relation(fields: [courseId], references: [id], onDelete: Cascade)
+  type      String
   objectKey String
   altText   String?
   mimeType  String?
@@ -168,18 +150,113 @@ model CourseAsset {
   @@index([courseId])
 }
 
+// course:create / course:publish 摄取 Labs course.json 时一次性写入这几张表，
+// 替代原来 content:Json 大杂烩的做法。sourceMarkdown 是摄取时把 source.path 指向的
+// 原始文件整份读进来存好；每个 Lesson 用自己的 sourceRange 从这份全文里现切，不重复存。
+model CourseVersion {
+  id                    String    @id @default(cuid())
+  courseId              String
+  course                Course    @relation(fields: [courseId], references: [id], onDelete: Cascade)
+  version               Int
+  imageDigest           String?
+  sourceFormat          String?
+  sourcePath            String?
+  sourceEncoding        String?
+  sourceMarkdown        String?   @db.Text
+  introSourceRange      Json?
+  introFeaturedAssetIds String[]  @default([])
+  publishedAt           DateTime?
+  createdAt             DateTime  @default(now())
+
+  modules     CourseModule[]
+  welcome     CourseWelcome?
+  enrollments Enrollment[]
+
+  @@unique([courseId, version])
+  @@index([courseId])
+}
+
+model CourseModule {
+  id               String        @id @default(cuid())
+  courseVersionId  String
+  courseVersion    CourseVersion @relation(fields: [courseVersionId], references: [id], onDelete: Cascade)
+  position         Int
+  title            String
+  description      String
+  estimatedMinutes Int
+
+  lessons     CourseLesson[]
+  enrollments Enrollment[]
+
+  @@unique([courseVersionId, position])
+  @@index([courseVersionId])
+}
+
+model CourseLesson {
+  id                     String       @id @default(cuid())
+  moduleId               String
+  module                 CourseModule @relation(fields: [moduleId], references: [id], onDelete: Cascade)
+  position               Int
+  title                  String
+  estimatedMinutes       Int
+  objectives             String[]     @default([])
+  sourceRange            Json
+  activityType           String
+  activityPrompt         String
+  activityCompletionType String
+  // course.json 里已有的引用；assessments.json 到货前，这些 id 可能还没有对应的 LessonAssessment 行。
+  assessmentIds          String[]     @default([])
+
+  assessments LessonAssessment[]
+  progresses  Progress[]
+
+  @@unique([moduleId, position])
+  @@index([moduleId])
+}
+
+// 结构由 client 的 ApiCourseWelcome 类型确定；welcome.json 目前在 Labs 仓库里还不存在，
+// 表先建好，等数据到货后摄取填充。
+model CourseWelcome {
+  id                 String        @id @default(cuid())
+  courseVersionId    String        @unique
+  courseVersion      CourseVersion @relation(fields: [courseVersionId], references: [id], onDelete: Cascade)
+  overviewAssetId    String?
+  overviewHeading    String?
+  overviewParagraphs String[]      @default([])
+  // 每一步的具体字段形状（title/description 等）在 welcome.json 落地前不确定，先留 Json。
+  howItWorksSteps    Json?
+  finalOutcome       String?
+}
+
+// 两层可见性合一张表：client 只拿 clientCriteria 那部分；expectedResult/successCriteria/
+// commonFailures 拼进发给 Labs /v1/agent/diagnose 的 LessonContext，绝不吐给 client。
+model LessonAssessment {
+  id              String       @id @default(cuid())
+  lessonId        String
+  lesson          CourseLesson @relation(fields: [lessonId], references: [id], onDelete: Cascade)
+  type            String
+  question        String
+  options         String[]     @default([])
+  clientCriteria  String[]     @default([])
+  expectedResult  String?
+  successCriteria String[]     @default([])
+  commonFailures  String[]     @default([])
+
+  attempts Attempt[]
+
+  @@index([lessonId])
+}
+
 model Enrollment {
   id              String         @id @default(cuid())
   userId          String
   courseId        String
-  // 学习者真正开始（workspace 启动，SRV-010 范围）时固定到某个版本；之前为 null。
   courseVersionId String?
+  currentModuleId String?
   user            User           @relation(fields: [userId], references: [id], onDelete: Cascade)
   course          Course         @relation(fields: [courseId], references: [id], onDelete: Cascade)
   courseVersion   CourseVersion? @relation(fields: [courseVersionId], references: [id])
-  // 这个用户当前在 dashboard 上看到的那门课；一人可以对多门课各有一行 enrollment，
-  // 但同一时间只有一行 active=true（切课时应用层把旧的置为 false，不新建行）。
-  // restartCourse 不新建 enrollment 行，只重置这一行的 Progress。
+  currentModule   CourseModule?  @relation(fields: [currentModuleId], references: [id])
   active          Boolean        @default(true)
   createdAt       DateTime       @default(now())
 
@@ -188,56 +265,73 @@ model Enrollment {
   attempts      Attempt[]
   conversations Conversation[]
   activities    Activity[]
+  completion    EnrollmentCompletion?
 
   @@unique([userId, courseId])
   @@index([courseId])
   @@index([courseVersionId])
+  @@index([currentModuleId])
 }
 
+// 字段和调用顺序都对着 labs main 上真实的 service.py 核对过：
+// ip 要单独调 GET /ip 才有（create 响应里没有）；rdpPort/rdpUsername 是 POST /v1/vms
+// 创建响应直接给的；labsRawStatus 只摘 GET /status 返回的 dominfo 里的 State 字段，仅调试；
+// vncPort 对应真实存在的 GET /vnc，目前两个 client 都走 RDP，暂时没有消费方。
 model Workspace {
-  id           String          @id @default(cuid())
-  enrollmentId String          @unique
-  enrollment   Enrollment      @relation(fields: [enrollmentId], references: [id], onDelete: Cascade)
-  status       WorkspaceStatus @default(CREATING)
-  errorMessage String?
-  createdAt    DateTime        @default(now())
-  updatedAt    DateTime        @updatedAt
+  id            String          @id @default(cuid())
+  enrollmentId  String          @unique
+  enrollment    Enrollment      @relation(fields: [enrollmentId], references: [id], onDelete: Cascade)
+  status        WorkspaceStatus @default(CREATING)
+  errorMessage  String?
+  labId         String?         @unique
+  labsRawStatus String?
+  ip            String?
+  rdpPort       Int?
+  rdpUsername   String?
+  vncPort       Int?
+  createdAt     DateTime        @default(now())
+  updatedAt     DateTime        @updatedAt
 }
 
 model Progress {
-  id           String     @id @default(cuid())
-  enrollmentId String     @unique
-  enrollment   Enrollment @relation(fields: [enrollmentId], references: [id], onDelete: Cascade)
-  currentStep  Int        @default(0)
-  updatedAt    DateTime   @updatedAt
+  id              String        @id @default(cuid())
+  enrollmentId    String        @unique
+  enrollment      Enrollment    @relation(fields: [enrollmentId], references: [id], onDelete: Cascade)
+  currentLessonId String?
+  currentLesson   CourseLesson? @relation(fields: [currentLessonId], references: [id])
+  updatedAt       DateTime      @updatedAt
+
+  @@index([currentLessonId])
 }
 
 model Attempt {
-  id           String        @id @default(cuid())
+  id           String           @id @default(cuid())
   enrollmentId String
-  enrollment   Enrollment    @relation(fields: [enrollmentId], references: [id], onDelete: Cascade)
-  stepIndex    Int
+  enrollment   Enrollment       @relation(fields: [enrollmentId], references: [id], onDelete: Cascade)
+  assessmentId String
+  assessment   LessonAssessment @relation(fields: [assessmentId], references: [id])
   status       AttemptStatus
   exitCode     Int?
   // 评测的原始 stdout，不截断；不单独存一个脱离证据的 passed:true。
   stdout       String?
   fileHash     String?
-  createdAt    DateTime      @default(now())
+  createdAt    DateTime         @default(now())
 
-  @@index([enrollmentId, stepIndex])
+  @@index([enrollmentId, assessmentId])
 }
 
 model Conversation {
   id           String           @id @default(cuid())
   enrollmentId String
   enrollment   Enrollment       @relation(fields: [enrollmentId], references: [id], onDelete: Cascade)
+  threadId     String
   role         ConversationRole
   content      String
-  // 引用的上下文（当前步骤、截图、评测结果等），结构随 AI Teacher Adapter（SRV-014）定，这里先存原样 JSON。
+  // 拼给 Labs /v1/agent/diagnose 的素材（当前步骤、截图、评测结果等）。
   contextRef   Json?
   createdAt    DateTime         @default(now())
 
-  @@index([enrollmentId])
+  @@index([enrollmentId, threadId])
 }
 
 model Notification {
@@ -251,8 +345,6 @@ model Notification {
   @@index([userId])
 }
 
-// recordPractice 写一行；practiceMinutes/weeklyHours/streakDays 都是查询时从这张表
-// （加上 Activity）聚合出来的，不额外维护冗余计数器，避免和明细对不上。
 model PracticeSession {
   id        String   @id @default(cuid())
   userId    String
@@ -281,7 +373,6 @@ model QuotaLedger {
   id           String    @id @default(cuid())
   userId       String
   user         User      @relation(fields: [userId], references: [id], onDelete: Cascade)
-  // 正数 = 发放。未来 SRV-010/012 接入真实 VM 用量后会追加负数的消耗条目；这次只产生正数。
   minutesDelta Int
   expiresAt    DateTime?
   createdAt    DateTime  @default(now())
@@ -292,18 +383,29 @@ model QuotaLedger {
 model AuditEvent {
   id         String         @id @default(cuid())
   actorType  AuditActorType
-  // USER：user.id，或找不到用户时尝试登录/接受邀请用的邮箱都取不到时为 null；
-  // OPERATOR：CLI --operator 传入的邮箱；SYSTEM：始终为 null。
   actorId    String?
   action     String
   success    Boolean
   targetType String?
   targetId   String?
-  // OPERATOR 触发的事件必填（CLI 层用 zod 校验保证）；USER/SYSTEM 触发的可选。
   reason     String?
   metadata   Json?
   createdAt  DateTime       @default(now())
 
   @@index([actorId])
   @@index([action])
+}
+
+// 架构文件模块网格里的"总结与导出编排"（SRV-016 · LAB-015），之前完全没建。
+model EnrollmentCompletion {
+  id              String       @id @default(cuid())
+  enrollmentId    String       @unique
+  enrollment      Enrollment   @relation(fields: [enrollmentId], references: [id], onDelete: Cascade)
+  summary         String?
+  exportStatus    ExportStatus @default(PENDING)
+  exportObjectKey String?
+  exportFileHash  String?
+  errorMessage    String?
+  completedAt     DateTime     @default(now())
+  exportedAt      DateTime?
 }
