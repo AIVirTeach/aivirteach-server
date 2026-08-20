@@ -292,8 +292,8 @@ model LessonAssessment {
   lesson          CourseLesson @relation(fields: [lessonId], references: [id], onDelete: Cascade)
   type            String
   question        String
-  options         Json?
-  clientCriteria  String?
+  options         String[]     @default([])
+  clientCriteria  String[]     @default([])
   expectedResult  String?
   successCriteria String[]     @default([])
   commonFailures  String[]     @default([])
@@ -485,6 +485,10 @@ achievements 成就墙、技能雷达图（`skills[]`）、AI 洞察文案（`an
 - 2026-08-20（写实施计划时发现）：`Course` 补了 `outcomes String[]` / `requirements String[]`——
   这两个字段在真实 `course.json`（顶层 `outcomes`/`requirements`）和 client 的 `ApiCourseDetail`
   类型里都存在，前几轮讨论 schema 时漏收了，跟 `tags` 放在同一张表、同一层级。
+- 2026-08-20（同上）：`LessonAssessment.options` 从 `Json?` 改成 `String[]`，`clientCriteria` 从
+  `String?` 改成 `String[]`——对齐 `api.ts` 里 `ApiLesson.assessment` 的真实类型
+  `{options?: string[], criteria?: string[]}`，两个都是字符串数组，不是单值/JSON。Prisma 的
+  scalar list 字段本身不可为 null，空数组就表示"没有这个东西"，所以都用 `@default([])`。
 
 ## 已知缺口 / 未决项
 
