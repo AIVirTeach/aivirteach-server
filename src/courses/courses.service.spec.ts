@@ -132,3 +132,99 @@ describe('CoursesService.getWelcome', () => {
     await expect(service.getWelcome('ai-daily-briefing')).rejects.toThrow(NotFoundException);
   });
 });
+
+describe('CoursesService.getLesson', () => {
+  const versionWithTwoLessons = {
+    id: 'version_1',
+    version: 1,
+    sourceMarkdown: 'line1\nline2\nline3\nline4\nline5\nline6\n',
+    modules: [
+      {
+        id: 'module_1',
+        position: 1,
+        title: 'Module One',
+        lessons: [
+          {
+            id: 'lesson_1',
+            position: 1,
+            title: 'Lesson One',
+            estimatedMinutes: 15,
+            objectives: ['a'],
+            sourceRange: { startLine: 1, endLine: 2 },
+            activityType: 'guided-lab',
+            activityPrompt: 'p',
+            activityCompletionType: 'learner-confirmation',
+          },
+          {
+            id: 'lesson_2',
+            position: 2,
+            title: 'Lesson Two',
+            estimatedMinutes: 15,
+            objectives: ['b'],
+            sourceRange: { startLine: 3, endLine: 4 },
+            activityType: 'guided-lab',
+            activityPrompt: 'p',
+            activityCompletionType: 'learner-confirmation',
+          },
+        ],
+      },
+    ],
+  };
+
+  it('按 sourceRange 从 sourceMarkdown 里切出正文，算出 navigation', async () => {
+    const prisma = buildPrisma();
+    prisma.course.findUnique.mockResolvedValue({
+      id: 'course_cuid_1',
+      slug: 'sample',
+      published: true,
+      versions: [versionWithTwoLessons],
+    });
+    const service = await buildService(prisma);
+
+    const lesson = await service.getLesson('sample', 'lesson_1');
+
+    expect(lesson.markdown).toBe('line1\nline2');
+    expect(lesson.module).toEqual({ id: 'module_1', title: 'Module One', position: 1 });
+    expect(lesson.navigation).toEqual({
+      previousLessonId: null,
+      nextLessonId: 'lesson_2',
+      index: 0,
+      total: 2,
+    });
+    expect(lesson.assessment).toBeNull();
+  });
+
+  it('第二课的 navigation 指回第一课，且没有 next', async () => {
+    const prisma = buildPrisma();
+    prisma.course.findUnique.mockResolvedValue({
+      id: 'course_cuid_1',
+      slug: 'sample',
+      published: true,
+      versions: [versionWithTwoLessons],
+    });
+    const service = await buildService(prisma);
+
+    const lesson = await service.getLesson('sample', 'lesson_2');
+
+    expect(lesson.markdown).toBe('line3\nline4');
+    expect(lesson.navigation).toEqual({
+      previousLessonId: 'lesson_1',
+      nextLessonId: null,
+      index: 1,
+      total: 2,
+    });
+  });
+
+  it('lessonId 不属于该课程时抛 NotFoundException', async () => {
+    const prisma = buildPrisma();
+    prisma.course.findUnique.mockResolvedValue({
+      id: 'course_cuid_1',
+      slug: 'sample',
+      published: true,
+      versions: [versionWithTwoLessons],
+    });
+    const service = await buildService(prisma);
+
+    await expect(service.getLesson('sample', 'nope')).rejects.toThrow(NotFoundException);
+  });
+});

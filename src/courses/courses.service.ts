@@ -52,6 +52,27 @@ export type CourseWelcomeResponse = {
   finalOutcome: string | null;
 };
 
+export type LessonResponse = {
+  courseId: string;
+  module: { id: string; title: string; position: number };
+  lesson: {
+    id: string;
+    position: number;
+    title: string;
+    estimatedMinutes: number;
+    objectives: string[];
+    activity: { type: string; prompt: string; completionType: string };
+  };
+  markdown: string;
+  assessment: null;
+  navigation: {
+    previousLessonId: string | null;
+    nextLessonId: string | null;
+    index: number;
+    total: number;
+  };
+};
+
 const COURSE_WITH_LATEST_VERSION_INCLUDE = {
   versions: {
     orderBy: { version: 'desc' as const },
@@ -125,6 +146,50 @@ export class CoursesService {
       overviewParagraphs: welcome.overviewParagraphs,
       howItWorksSteps: welcome.howItWorksSteps,
       finalOutcome: welcome.finalOutcome,
+    };
+  }
+
+  async getLesson(slug: string, lessonId: string): Promise<LessonResponse> {
+    const course = await this.requirePublishedCourseWithLatestVersion(slug);
+    const version = course.versions[0];
+    const sourceLines = version.sourceMarkdown?.split('\n') ?? [];
+
+    const flattened = version.modules.flatMap((courseModule) =>
+      courseModule.lessons.map((lesson) => ({ courseModule, lesson })),
+    );
+    const index = flattened.findIndex((entry) => entry.lesson.id === lessonId);
+    if (index === -1) {
+      throw new NotFoundException(`课程 ${slug} 里找不到课时：${lessonId}`);
+    }
+
+    const { courseModule, lesson } = flattened[index];
+    const range = lesson.sourceRange as { startLine: number; endLine: number };
+    const markdown = sourceLines.slice(range.startLine - 1, range.endLine).join('\n');
+
+    return {
+      courseId: course.slug,
+      module: { id: courseModule.id, title: courseModule.title, position: courseModule.position },
+      lesson: {
+        id: lesson.id,
+        position: lesson.position,
+        title: lesson.title,
+        estimatedMinutes: lesson.estimatedMinutes,
+        objectives: lesson.objectives,
+        activity: {
+          type: lesson.activityType,
+          prompt: lesson.activityPrompt,
+          completionType: lesson.activityCompletionType,
+        },
+      },
+      markdown,
+      // LessonAssessment 行要等 assessments.json 落地才会存在，这轮之前先固定返回 null。
+      assessment: null,
+      navigation: {
+        previousLessonId: flattened[index - 1]?.lesson.id ?? null,
+        nextLessonId: flattened[index + 1]?.lesson.id ?? null,
+        index,
+        total: flattened.length,
+      },
     };
   }
 

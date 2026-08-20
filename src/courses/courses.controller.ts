@@ -6,6 +6,7 @@ import {
   type CourseDetailResponse,
   type CourseListItem,
   type CourseWelcomeResponse,
+  type LessonResponse,
 } from './courses.service';
 
 @ApiTags('Courses')
@@ -28,5 +29,13 @@ export class CoursesController {
   @Get(':slug/welcome')
   welcome(@Param('slug') slug: string): Promise<CourseWelcomeResponse> {
     return this.coursesService.getWelcome(slug);
+  }
+
+  @Get(':slug/lessons/:lessonId')
+  lesson(
+    @Param('slug') slug: string,
+    @Param('lessonId') lessonId: string,
+  ): Promise<LessonResponse> {
+    return this.coursesService.getLesson(slug, lessonId);
   }
 }

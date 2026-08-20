@@ -44,4 +44,16 @@ describe('CoursesController', () => {
     await expect(controller.welcome('sample')).resolves.toEqual({ overviewHeading: 'hi' });
     expect(service.getWelcome).toHaveBeenCalledWith('sample');
   });
+
+  it('GET /courses/:slug/lessons/:lessonId 委托给 service.getLesson', async () => {
+    const service = { getLesson: jest.fn().mockResolvedValue({ markdown: 'body' }) };
+    const moduleRef = await Test.createTestingModule({
+      controllers: [CoursesController],
+      providers: [{ provide: CoursesService, useValue: service }, JWT_AUTH_GUARD_STUB],
+    }).compile();
+    const controller = moduleRef.get(CoursesController);
+
+    await expect(controller.lesson('sample', 'lesson_1')).resolves.toEqual({ markdown: 'body' });
+    expect(service.getLesson).toHaveBeenCalledWith('sample', 'lesson_1');
+  });
 });
