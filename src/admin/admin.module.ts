@@ -7,8 +7,10 @@ import {
 } from './commands/course.command';
 import { EnrollCommand } from './commands/enroll.command';
 import { QuotaGrantCommand } from './commands/quota.command';
+import { CoursesModule } from '../courses/courses.module';
 
 @Module({
+  imports: [CoursesModule],
   providers: [
     AdminService,
     InviteCommand,

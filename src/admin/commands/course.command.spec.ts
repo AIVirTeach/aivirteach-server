@@ -32,7 +32,7 @@ describe('CourseCreateCommand', () => {
     const createCourse = jest.fn();
     const command = await buildCommand(CourseCreateCommand, { createCourse });
 
-    await command.run(['n8n', 'n8n 自动化工作流'], {
+    await command.run(['/content/n8n'], {
       operator: OPERATOR,
       reason: REASON,
     });
@@ -44,8 +44,7 @@ describe('CourseCreateCommand', () => {
         dryRun: true,
         operator: OPERATOR,
         reason: REASON,
-        slug: 'n8n',
-        title: 'n8n 自动化工作流',
+        contentDir: '/content/n8n',
         imageDigest: null,
         note: '加 --execute 才会真正写库',
       }),
@@ -60,7 +59,7 @@ describe('CourseCreateCommand', () => {
     });
     const command = await buildCommand(CourseCreateCommand, { createCourse });
 
-    await command.run(['n8n', 'n8n 自动化工作流'], {
+    await command.run(['/content/n8n'], {
       operator: OPERATOR,
       reason: REASON,
       execute: true,
@@ -68,8 +67,7 @@ describe('CourseCreateCommand', () => {
     });
 
     expect(createCourse).toHaveBeenCalledWith(
-      'n8n',
-      'n8n 自动化工作流',
+      '/content/n8n',
       OPERATOR,
       REASON,
       'sha256:abc',
@@ -92,7 +90,7 @@ describe('CourseCreateCommand', () => {
     const command = await buildCommand(CourseCreateCommand, { createCourse });
 
     await expect(
-      command.run(['n8n', 'n8n 自动化工作流'], {
+      command.run(['/content/n8n'], {
         operator: OPERATOR,
         reason: '',
       }),

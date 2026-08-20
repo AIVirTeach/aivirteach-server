@@ -11,8 +11,8 @@ interface CourseCreateOptions {
 
 @Command({
   name: 'course:create',
-  arguments: '<slug> <title>',
-  description: '新建课程（同时建第一个未发布的版本）',
+  arguments: '<contentDir>',
+  description: '从课程内容目录（含 course.json）摄取新建课程',
 })
 export class CourseCreateCommand extends CommandRunner {
   constructor(private readonly admin: AdminService) {
@@ -22,7 +22,7 @@ export class CourseCreateCommand extends CommandRunner {
   async run(inputs: string[], options: CourseCreateOptions): Promise<void> {
     const operator = OperatorSchema.parse(options.operator);
     const reason = ReasonSchema.parse(options.reason);
-    const [slug, title] = inputs;
+    const [contentDir] = inputs;
 
     if (!options.execute) {
       console.log(
@@ -31,8 +31,7 @@ export class CourseCreateCommand extends CommandRunner {
           dryRun: true,
           operator,
           reason,
-          slug,
-          title,
+          contentDir,
           imageDigest: options.imageDigest ?? null,
           note: '加 --execute 才会真正写库',
         }),
@@ -41,8 +40,7 @@ export class CourseCreateCommand extends CommandRunner {
     }
 
     const course = await this.admin.createCourse(
-      slug,
-      title,
+      contentDir,
       operator,
       reason,
       options.imageDigest,

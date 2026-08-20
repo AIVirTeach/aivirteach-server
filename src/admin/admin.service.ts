@@ -10,6 +10,7 @@ import { AuditService } from '../audit/audit.service';
 import { generateOpaqueToken, hashOpaqueToken } from '../auth/tokens';
 import { ENV, type Env } from '../config/env';
 import { PrismaService } from '../prisma/prisma.service';
+import { CourseIngestionService } from '../courses/course-ingestion.service';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -29,6 +30,7 @@ export class AdminService {
     private readonly prisma: PrismaService,
     @Inject(ENV) private readonly env: Env,
     private readonly audit: AuditService,
+    private readonly courseIngestion: CourseIngestionService,
   ) {}
 
   async inviteUser(
@@ -69,20 +71,15 @@ export class AdminService {
   }
 
   async createCourse(
-    slug: string,
-    title: string,
+    contentDir: string,
     operator: string,
     reason: string,
     imageDigest?: string,
   ): Promise<Course & { versions: CourseVersion[] }> {
-    const course = await this.prisma.course.create({
-      data: {
-        slug,
-        title,
-        versions: { create: { version: 1, imageDigest: imageDigest ?? null } },
-      },
-      include: { versions: true },
-    });
+    const course = await this.courseIngestion.ingestFromDirectory(
+      contentDir,
+      imageDigest,
+    );
 
     await this.audit.record({
       actor: { type: AuditActorType.OPERATOR, id: operator },
@@ -117,6 +114,13 @@ export class AdminService {
           where: { id: latest.id },
           data: { publishedAt: new Date() },
         });
+
+    if (!course.published) {
+      await this.prisma.course.update({
+        where: { id: course.id },
+        data: { published: true },
+      });
+    }
 
     await this.audit.record({
       actor: { type: AuditActorType.OPERATOR, id: operator },

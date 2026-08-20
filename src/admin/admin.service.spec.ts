@@ -5,6 +5,7 @@ import { ENV } from '../config/env';
 import { PrismaService } from '../prisma/prisma.service';
 import { AuditService } from '../audit/audit.service';
 import { hashOpaqueToken } from '../auth/tokens';
+import { CourseIngestionService } from '../courses/course-ingestion.service';
 import { AdminService } from './admin.service';
 
 const ENV_STUB = {
@@ -20,7 +21,7 @@ const ENV_STUB = {
 const buildPrisma = () => ({
   user: { upsert: jest.fn(), findUnique: jest.fn() },
   invitation: { create: jest.fn().mockResolvedValue({ id: 'inv_1' }) },
-  course: { create: jest.fn(), findUnique: jest.fn() },
+  course: { create: jest.fn(), findUnique: jest.fn(), update: jest.fn() },
   courseVersion: {
     findFirst: jest.fn(),
     update: jest.fn(),
@@ -29,9 +30,14 @@ const buildPrisma = () => ({
   quotaLedger: { create: jest.fn() },
 });
 
+const buildCourseIngestion = () => ({
+  ingestFromDirectory: jest.fn(),
+});
+
 const buildService = async (
   prisma: ReturnType<typeof buildPrisma>,
   audit = { record: jest.fn() },
+  courseIngestion = buildCourseIngestion(),
 ) => {
   const moduleRef = await Test.createTestingModule({
     providers: [
@@ -39,6 +45,7 @@ const buildService = async (
       { provide: PrismaService, useValue: prisma },
       { provide: ENV, useValue: ENV_STUB },
       { provide: AuditService, useValue: audit },
+      { provide: CourseIngestionService, useValue: courseIngestion },
     ],
   }).compile();
   return { service: moduleRef.get(AdminService), audit };
@@ -99,36 +106,58 @@ describe('AdminService.inviteUser', () => {
   });
 });
 
-describe('AdminService.createCourse / publishCourse', () => {
-  it('创建课程时一并建第一个 CourseVersion（version=1，未发布）', async () => {
+describe('AdminService.createCourse', () => {
+  it('调用摄取服务，并记审计', async () => {
     const prisma = buildPrisma();
-    prisma.course.create.mockResolvedValue({
+    const courseIngestion = buildCourseIngestion();
+    courseIngestion.ingestFromDirectory.mockResolvedValue({
       id: 'course_1',
       slug: 'n8n',
       title: 'n8n 自动化工作流',
-      versions: [{ id: 'cv_1', version: 1, publishedAt: null }],
+      versions: [{ version: 1 }],
     });
-    const { service, audit } = await buildService(prisma);
+    const { service, audit } = await buildService(prisma, undefined, courseIngestion);
 
-    await service.createCourse('n8n', 'n8n 自动化工作流', OPERATOR, REASON);
+    const course = await service.createCourse('/content/n8n', OPERATOR, REASON, 'sha256:abc');
 
-    expect(prisma.course.create).toHaveBeenCalledWith(
-      expect.objectContaining({
-        data: expect.objectContaining({
-          slug: 'n8n',
-          title: 'n8n 自动化工作流',
-          versions: { create: { version: 1, imageDigest: null } },
-        }),
-      }),
-    );
+    expect(courseIngestion.ingestFromDirectory).toHaveBeenCalledWith('/content/n8n', 'sha256:abc');
+    expect(course.slug).toBe('n8n');
     expect(audit.record).toHaveBeenCalledWith(
-      expect.objectContaining({ action: 'admin.createCourse', success: true }),
+      expect.objectContaining({ action: 'admin.createCourse', targetId: 'course_1' }),
     );
+  });
+});
+
+describe('AdminService.publishCourse', () => {
+  it('发布未发布过的版本时，同时把 Course.published 置为 true', async () => {
+    const prisma = buildPrisma();
+    prisma.course.findUnique.mockResolvedValue({ id: 'course_1', slug: 'n8n', published: false });
+    prisma.courseVersion.findFirst.mockResolvedValue({ id: 'version_1', version: 1, publishedAt: null });
+    prisma.courseVersion.update.mockResolvedValue({ id: 'version_1', version: 1, publishedAt: new Date() });
+    const { service } = await buildService(prisma);
+
+    await service.publishCourse('n8n', OPERATOR, REASON);
+
+    expect(prisma.course.update).toHaveBeenCalledWith({
+      where: { id: 'course_1' },
+      data: { published: true },
+    });
+  });
+
+  it('课程已经 published 时不重复调用 course.update', async () => {
+    const prisma = buildPrisma();
+    prisma.course.findUnique.mockResolvedValue({ id: 'course_1', slug: 'n8n', published: true });
+    prisma.courseVersion.findFirst.mockResolvedValue({ id: 'version_1', version: 1, publishedAt: new Date() });
+    const { service } = await buildService(prisma);
+
+    await service.publishCourse('n8n', OPERATOR, REASON);
+
+    expect(prisma.course.update).not.toHaveBeenCalled();
   });
 
   it('发布课程时给最新版本写 publishedAt', async () => {
     const prisma = buildPrisma();
-    prisma.course.findUnique.mockResolvedValue({ id: 'course_1', slug: 'n8n' });
+    prisma.course.findUnique.mockResolvedValue({ id: 'course_1', slug: 'n8n', published: false });
     prisma.courseVersion.findFirst.mockResolvedValue({
       id: 'cv_1',
       courseId: 'course_1',
@@ -166,7 +195,7 @@ describe('AdminService.createCourse / publishCourse', () => {
       version: 1,
       publishedAt: new Date(),
     };
-    prisma.course.findUnique.mockResolvedValue({ id: 'course_1', slug: 'n8n' });
+    prisma.course.findUnique.mockResolvedValue({ id: 'course_1', slug: 'n8n', published: true });
     prisma.courseVersion.findFirst.mockResolvedValue(already);
     const { service } = await buildService(prisma);
 
@@ -178,7 +207,7 @@ describe('AdminService.createCourse / publishCourse', () => {
 
   it('课程没有任何版本时发布抛 NotFoundException', async () => {
     const prisma = buildPrisma();
-    prisma.course.findUnique.mockResolvedValue({ id: 'course_1', slug: 'n8n' });
+    prisma.course.findUnique.mockResolvedValue({ id: 'course_1', slug: 'n8n', published: false });
     prisma.courseVersion.findFirst.mockResolvedValue(null);
     const { service } = await buildService(prisma);
 
