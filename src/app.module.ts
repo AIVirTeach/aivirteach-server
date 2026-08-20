@@ -7,6 +7,7 @@ import { ConfigModule } from './config/config.module';
 import { PrismaModule } from './prisma/prisma.module';
 import { AuthModule } from './auth/auth.module';
 import { HealthModule } from './health/health.module';
+import { CoursesModule } from './courses/courses.module';
 
 @Module({
   imports: [
@@ -16,6 +17,7 @@ import { HealthModule } from './health/health.module';
     AuthModule,
     AdminModule,
     HealthModule,
+    CoursesModule,
   ],
   controllers: [AppController],
   providers: [AppService],
