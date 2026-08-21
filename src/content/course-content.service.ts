@@ -212,6 +212,7 @@ export class CourseContentService {
       configured && (isAbsolute(configured) ? configured : resolve(process.cwd(), configured)),
       resolve(process.cwd(), "course data"),
       resolve(process.cwd(), "../course data"),
+      resolve(process.cwd(), "../course/course data"),
       resolve(__dirname, "../../../../course data"),
     ].filter((candidate): candidate is string => Boolean(candidate));
     const root = candidates.find((candidate) => existsSync(resolve(candidate, "catalog.json")));

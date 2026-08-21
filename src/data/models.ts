@@ -66,5 +66,6 @@ export type ChatMessage = {
   threadId: string;
   role: "student" | "tutor";
   text: string;
+  provider?: string | null;
   createdAt: string;
 };

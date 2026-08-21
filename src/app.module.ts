@@ -8,8 +8,9 @@ import { NotificationsModule } from "./notifications/notifications.module";
 import { UsersModule } from "./users/users.module";
 import { ChatModule } from "./chat/chat.module";
 import { CourseContentModule } from "./content/course-content.module";
+import { LabsModule } from "./labs/labs.module";
 
 @Module({
-  imports: [DataModule, CourseContentModule, HealthModule, UsersModule, CoursesModule, LearningModule, NotificationsModule, DashboardModule, ChatModule],
+  imports: [DataModule, CourseContentModule, HealthModule, UsersModule, CoursesModule, LearningModule, NotificationsModule, DashboardModule, ChatModule, LabsModule],
 })
 export class AppModule {}

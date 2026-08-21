@@ -7,19 +7,20 @@ export const seedUsers: User[] = [
 ];
 
 export const seedCourses: Course[] = [
-  { id: "n8n-agent-builder", title: "Build an AI Daily Briefing with n8n", category: "AI Automation", description: "Build a self-hosted workflow that retrieves, ranks, summarizes, and emails the most important AI and technology news each day.", level: "Intermediate", durationMinutes: 480, lessonCount: 11, published: true },
+  { id: "ai-daily-briefing", title: "Build an AI Daily Briefing with n8n", category: "AI Automation", description: "Build a self-hosted workflow that retrieves, ranks, summarizes, and emails the most important AI and technology news each day.", level: "Intermediate", durationMinutes: 480, lessonCount: 11, published: true },
+  { id: "ai-web-watcher-agent", title: "Build an AI Web Watcher Agent with n8n", category: "AI Automation", description: "Monitor a public webpage, detect meaningful changes, use Gemini to judge relevance, and send alerts through Gmail.", level: "Intermediate", durationMinutes: 540, lessonCount: 11, published: true },
 ];
 
 export const seedEnrollments: Enrollment[] = [
-  { id: "enrollment_maya_briefing", userId: "learner_beginner", courseId: "n8n-agent-builder", active: true, progressPercent: 18, currentModule: "Module 1: Configure the Runtime Environment", enrolledAt: "2026-07-21T08:00:00.000Z" },
-  { id: "enrollment_alex_n8n", userId: "learner_advanced", courseId: "n8n-agent-builder", active: true, progressPercent: 68, currentModule: "Module 2: Build the AI Daily Briefing Workflow", enrolledAt: "2026-05-18T08:00:00.000Z" },
-  { id: "enrollment_jordan_briefing", userId: "learner_all_clear", courseId: "n8n-agent-builder", active: true, progressPercent: 100, currentModule: "All modules and assessments complete", enrolledAt: "2025-11-03T08:00:00.000Z" },
+  { id: "enrollment_maya_briefing", userId: "learner_beginner", courseId: "ai-daily-briefing", active: true, progressPercent: 18, currentModule: "Module 1: Configure the Runtime Environment", enrolledAt: "2026-07-21T08:00:00.000Z" },
+  { id: "enrollment_alex_n8n", userId: "learner_advanced", courseId: "ai-daily-briefing", active: true, progressPercent: 68, currentModule: "Module 2: Build the AI Daily Briefing Workflow", enrolledAt: "2026-05-18T08:00:00.000Z" },
+  { id: "enrollment_jordan_briefing", userId: "learner_all_clear", courseId: "ai-daily-briefing", active: true, progressPercent: 100, currentModule: "All modules and assessments complete", enrolledAt: "2025-11-03T08:00:00.000Z" },
 ];
 
 export const seedPracticeSessions: PracticeSession[] = [
-  { id: "practice_alex_1", userId: "learner_advanced", courseId: "n8n-agent-builder", minutes: 96, startedAt: "2026-08-03T10:00:00.000Z" },
-  { id: "practice_alex_2", userId: "learner_advanced", courseId: "n8n-agent-builder", minutes: 138, startedAt: "2026-08-02T10:00:00.000Z" },
-  { id: "practice_maya_1", userId: "learner_beginner", courseId: "n8n-agent-builder", minutes: 48, startedAt: "2026-08-03T11:00:00.000Z" },
+  { id: "practice_alex_1", userId: "learner_advanced", courseId: "ai-daily-briefing", minutes: 96, startedAt: "2026-08-03T10:00:00.000Z" },
+  { id: "practice_alex_2", userId: "learner_advanced", courseId: "ai-daily-briefing", minutes: 138, startedAt: "2026-08-02T10:00:00.000Z" },
+  { id: "practice_maya_1", userId: "learner_beginner", courseId: "ai-daily-briefing", minutes: 48, startedAt: "2026-08-03T11:00:00.000Z" },
 ];
 
 export const seedNotifications: Notification[] = [

@@ -16,8 +16,9 @@ async function bootstrap() {
   app.useGlobalPipes(new ValidationPipe({ whitelist: true, transform: true }));
 
   const port = Number(process.env.PORT ?? 4000);
-  await app.listen(port);
-  console.log(`AIVirTeach Backend V1 running at http://localhost:${port}/api/v1`);
+  const host = process.env.HOST ?? "127.0.0.1";
+  await app.listen(port, host);
+  console.log(`AIVirTeach Backend V1 running at http://${host}:${port}/api/v1`);
 }
 
 void bootstrap();
