@@ -107,7 +107,7 @@ export class EnrollmentsService {
 
   async completeLesson(userId: string, lessonId: string): Promise<void> {
     const lesson = await this.prisma.courseLesson.findUnique({
-      where: { id: lessonId },
+      where: { contentId: lessonId },
       include: {
         module: {
           include: {
@@ -148,7 +148,7 @@ export class EnrollmentsService {
     const flattened = lesson.module.courseVersion.modules.flatMap(
       (courseModule) => courseModule.lessons,
     );
-    const index = flattened.findIndex((entry) => entry.id === lessonId);
+    const index = flattened.findIndex((entry) => entry.id === lesson.id);
     const nextLessonId = flattened[index + 1]?.id ?? null;
 
     await this.prisma.progress.upsert({

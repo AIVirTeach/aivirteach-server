@@ -121,7 +121,8 @@ describe('EnrollmentsService.completeLesson', () => {
   it('写一行 Activity，并把 Progress 推进到下一课', async () => {
     const prisma = buildPrisma();
     prisma.courseLesson.findUnique.mockResolvedValue({
-      id: 'lesson_1',
+      id: 'lesson_cuid_1',
+      contentId: 'verify-virtual-machine',
       title: 'Lesson One',
       module: {
         id: 'module_1',
@@ -129,7 +130,7 @@ describe('EnrollmentsService.completeLesson', () => {
           courseId: 'course_1',
           modules: [
             {
-              lessons: [{ id: 'lesson_1' }, { id: 'lesson_2' }],
+              lessons: [{ id: 'lesson_cuid_1' }, { id: 'lesson_cuid_2' }],
             },
           ],
         },
@@ -138,18 +139,23 @@ describe('EnrollmentsService.completeLesson', () => {
     prisma.enrollment.findFirst.mockResolvedValue({ id: 'enrollment_1' });
     const { service } = await buildService(prisma);
 
-    await service.completeLesson(USER_ID, 'lesson_1');
+    // 路由参数是 content id（"verify-virtual-machine"），不是内部 cuid。
+    await service.completeLesson(USER_ID, 'verify-virtual-machine');
 
+    expect(prisma.courseLesson.findUnique).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { contentId: 'verify-virtual-machine' } }),
+    );
     expect(prisma.activity.create).toHaveBeenCalledWith(
       expect.objectContaining({
         data: expect.objectContaining({ userId: USER_ID, enrollmentId: 'enrollment_1', kind: 'LESSON' }),
       }),
     );
+    // Progress.currentLessonId 是内部外键，存的是 cuid，不是 content id。
     expect(prisma.progress.upsert).toHaveBeenCalledWith(
       expect.objectContaining({
         where: { enrollmentId: 'enrollment_1' },
-        update: { currentLessonId: 'lesson_2' },
-        create: expect.objectContaining({ enrollmentId: 'enrollment_1', currentLessonId: 'lesson_2' }),
+        update: { currentLessonId: 'lesson_cuid_2' },
+        create: expect.objectContaining({ enrollmentId: 'enrollment_1', currentLessonId: 'lesson_cuid_2' }),
       }),
     );
   });

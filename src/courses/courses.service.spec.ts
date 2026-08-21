@@ -88,7 +88,8 @@ describe('CoursesService.getDetail', () => {
               estimatedMinutes: 150,
               lessons: [
                 {
-                  id: 'lesson_1',
+                  id: 'lesson_cuid_1',
+                  contentId: 'verify-virtual-machine',
                   position: 1,
                   title: 'Lesson One',
                   estimatedMinutes: 25,
@@ -111,7 +112,7 @@ describe('CoursesService.getDetail', () => {
     expect(detail.version).toBe(1);
     expect(detail.modules[0].lessons[0]).toEqual(
       expect.objectContaining({
-        id: 'lesson_1',
+        id: 'verify-virtual-machine',
         activity: { type: 'guided-lab', prompt: 'prompt', completionType: 'learner-confirmation' },
       }),
     );
@@ -145,7 +146,8 @@ describe('CoursesService.getLesson', () => {
         title: 'Module One',
         lessons: [
           {
-            id: 'lesson_1',
+            id: 'lesson_cuid_1',
+            contentId: 'verify-virtual-machine',
             position: 1,
             title: 'Lesson One',
             estimatedMinutes: 15,
@@ -156,7 +158,8 @@ describe('CoursesService.getLesson', () => {
             activityCompletionType: 'learner-confirmation',
           },
           {
-            id: 'lesson_2',
+            id: 'lesson_cuid_2',
+            contentId: 'verify-network',
             position: 2,
             title: 'Lesson Two',
             estimatedMinutes: 15,
@@ -181,13 +184,14 @@ describe('CoursesService.getLesson', () => {
     });
     const service = await buildService(prisma);
 
-    const lesson = await service.getLesson('sample', 'lesson_1');
+    const lesson = await service.getLesson('sample', 'verify-virtual-machine');
 
     expect(lesson.markdown).toBe('line1\nline2');
+    expect(lesson.lesson.id).toBe('verify-virtual-machine');
     expect(lesson.module).toEqual({ id: 'module_1', title: 'Module One', position: 1 });
     expect(lesson.navigation).toEqual({
       previousLessonId: null,
-      nextLessonId: 'lesson_2',
+      nextLessonId: 'verify-network',
       index: 0,
       total: 2,
     });
@@ -204,11 +208,11 @@ describe('CoursesService.getLesson', () => {
     });
     const service = await buildService(prisma);
 
-    const lesson = await service.getLesson('sample', 'lesson_2');
+    const lesson = await service.getLesson('sample', 'verify-network');
 
     expect(lesson.markdown).toBe('line3\nline4');
     expect(lesson.navigation).toEqual({
-      previousLessonId: 'lesson_1',
+      previousLessonId: 'verify-virtual-machine',
       nextLessonId: null,
       index: 1,
       total: 2,
@@ -226,5 +230,18 @@ describe('CoursesService.getLesson', () => {
     const service = await buildService(prisma);
 
     await expect(service.getLesson('sample', 'nope')).rejects.toThrow(NotFoundException);
+  });
+
+  it('用内部 cuid（而不是 content id）查询时抛 NotFoundException——路由参数不能是内部 id', async () => {
+    const prisma = buildPrisma();
+    prisma.course.findUnique.mockResolvedValue({
+      id: 'course_cuid_1',
+      slug: 'sample',
+      published: true,
+      versions: [versionWithTwoLessons],
+    });
+    const service = await buildService(prisma);
+
+    await expect(service.getLesson('sample', 'lesson_cuid_1')).rejects.toThrow(NotFoundException);
   });
 });

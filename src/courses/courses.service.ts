@@ -119,7 +119,7 @@ export class CoursesService {
         description: courseModule.description,
         estimatedMinutes: courseModule.estimatedMinutes,
         lessons: courseModule.lessons.map((lesson) => ({
-          id: lesson.id,
+          id: lesson.contentId,
           position: lesson.position,
           title: lesson.title,
           estimatedMinutes: lesson.estimatedMinutes,
@@ -157,7 +157,7 @@ export class CoursesService {
     const flattened = version.modules.flatMap((courseModule) =>
       courseModule.lessons.map((lesson) => ({ courseModule, lesson })),
     );
-    const index = flattened.findIndex((entry) => entry.lesson.id === lessonId);
+    const index = flattened.findIndex((entry) => entry.lesson.contentId === lessonId);
     if (index === -1) {
       throw new NotFoundException(`课程 ${slug} 里找不到课时：${lessonId}`);
     }
@@ -170,7 +170,7 @@ export class CoursesService {
       courseId: course.slug,
       module: { id: courseModule.id, title: courseModule.title, position: courseModule.position },
       lesson: {
-        id: lesson.id,
+        id: lesson.contentId,
         position: lesson.position,
         title: lesson.title,
         estimatedMinutes: lesson.estimatedMinutes,
@@ -185,8 +185,8 @@ export class CoursesService {
       // LessonAssessment 行要等 assessments.json 落地才会存在，这轮之前先固定返回 null。
       assessment: null,
       navigation: {
-        previousLessonId: flattened[index - 1]?.lesson.id ?? null,
-        nextLessonId: flattened[index + 1]?.lesson.id ?? null,
+        previousLessonId: flattened[index - 1]?.lesson.contentId ?? null,
+        nextLessonId: flattened[index + 1]?.lesson.contentId ?? null,
         index,
         total: flattened.length,
       },

@@ -61,6 +61,7 @@ export class CourseIngestionService {
                 estimatedMinutes: courseModule.estimatedMinutes,
                 lessons: {
                   create: courseModule.lessons.map((lesson) => ({
+                    contentId: lesson.id,
                     position: lesson.position,
                     title: lesson.title,
                     estimatedMinutes: lesson.estimatedMinutes,

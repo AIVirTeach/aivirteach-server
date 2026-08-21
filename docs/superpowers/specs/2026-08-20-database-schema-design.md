@@ -250,6 +250,8 @@ model CourseModule {
 
 model CourseLesson {
   id                     String       @id @default(cuid())
+  // course.json 里作者写的课时 id（如 "verify-virtual-machine"），client 路由参数用这个，不用内部 cuid。
+  contentId              String       @unique
   moduleId               String
   module                 CourseModule @relation(fields: [moduleId], references: [id], onDelete: Cascade)
   position               Int

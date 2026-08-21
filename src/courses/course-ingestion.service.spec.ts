@@ -54,8 +54,8 @@ describe('CourseIngestionService.ingestFromDirectory', () => {
                     title: 'Module One',
                     lessons: {
                       create: [
-                        expect.objectContaining({ position: 1, title: 'Lesson One', assessmentIds: ['check-lesson-1'] }),
-                        expect.objectContaining({ position: 2, title: 'Lesson Two', assessmentIds: ['check-lesson-2'] }),
+                        expect.objectContaining({ contentId: 'lesson-1', position: 1, title: 'Lesson One', assessmentIds: ['check-lesson-1'] }),
+                        expect.objectContaining({ contentId: 'lesson-2', position: 2, title: 'Lesson Two', assessmentIds: ['check-lesson-2'] }),
                       ],
                     },
                   }),
