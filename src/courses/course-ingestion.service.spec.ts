@@ -3,6 +3,7 @@ import { Test } from '@nestjs/testing';
 import { ConflictException } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
+import { CourseAssetStorageService } from './course-asset-storage.service';
 import { CourseIngestionService } from './course-ingestion.service';
 
 const FIXTURE_DIR = join(__dirname, '__fixtures__', 'sample-course');
@@ -15,9 +16,20 @@ const buildPrisma = () => ({
   },
 });
 
-const buildService = async (prisma: ReturnType<typeof buildPrisma>) => {
+const buildAssetStorage = () => ({
+  upload: jest.fn().mockResolvedValue('https://blob.vercel-storage.com/courses/sample-course/cover-abc123.png'),
+});
+
+const buildService = async (
+  prisma: ReturnType<typeof buildPrisma>,
+  assetStorage: ReturnType<typeof buildAssetStorage> = buildAssetStorage(),
+) => {
   const moduleRef = await Test.createTestingModule({
-    providers: [CourseIngestionService, { provide: PrismaService, useValue: prisma }],
+    providers: [
+      CourseIngestionService,
+      { provide: PrismaService, useValue: prisma },
+      { provide: CourseAssetStorageService, useValue: assetStorage },
+    ],
   }).compile();
   return moduleRef.get(CourseIngestionService);
 };
@@ -41,7 +53,11 @@ describe('CourseIngestionService.ingestFromDirectory', () => {
           requirements: ['None.'],
           assets: {
             create: [
-              expect.objectContaining({ objectKey: 'cover.png', type: 'image', altText: 'Cover image' }),
+              expect.objectContaining({
+                objectKey: 'https://blob.vercel-storage.com/courses/sample-course/cover-abc123.png',
+                type: 'image',
+                altText: 'Cover image',
+              }),
             ],
           },
           versions: {
@@ -67,6 +83,19 @@ describe('CourseIngestionService.ingestFromDirectory', () => {
           },
         }),
       }),
+    );
+  });
+
+  it('把每个 asset 的本地文件上传到 Blob 存储，用返回的 URL 作为 objectKey', async () => {
+    const prisma = buildPrisma();
+    const assetStorage = buildAssetStorage();
+    const service = await buildService(prisma, assetStorage);
+
+    await service.ingestFromDirectory(FIXTURE_DIR, 'sha256:test');
+
+    expect(assetStorage.upload).toHaveBeenCalledWith(
+      'courses/sample-course/cover.png',
+      join(FIXTURE_DIR, 'cover.png'),
     );
   });
 
