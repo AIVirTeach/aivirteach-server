@@ -27,16 +27,18 @@ export class EnrollmentsService {
     const course = await this.coursesService.requirePublishedCourseWithLatestVersion(slug);
     const latestVersionId = course.versions[0].id;
 
-    await this.prisma.enrollment.updateMany({
-      where: { userId, active: true },
-      data: { active: false },
-    });
+    const enrollment = await this.prisma.$transaction(async (tx) => {
+      await tx.enrollment.updateMany({
+        where: { userId, active: true },
+        data: { active: false },
+      });
 
-    const enrollment = await this.prisma.enrollment.upsert({
-      where: { userId_courseId: { userId, courseId: course.id } },
-      update: { active: true, courseVersionId: latestVersionId },
-      create: { userId, courseId: course.id, courseVersionId: latestVersionId, active: true },
-      include: { currentModule: true },
+      return tx.enrollment.upsert({
+        where: { userId_courseId: { userId, courseId: course.id } },
+        update: { active: true, courseVersionId: latestVersionId },
+        create: { userId, courseId: course.id, courseVersionId: latestVersionId, active: true },
+        include: { currentModule: true },
+      });
     });
 
     await this.audit.record({
@@ -54,22 +56,26 @@ export class EnrollmentsService {
     const course = await this.coursesService.requirePublishedCourseWithLatestVersion(slug);
     const latestVersionId = course.versions[0].id;
 
-    await this.prisma.enrollment.updateMany({
-      where: { userId, active: true },
-      data: { active: false },
-    });
+    const enrollment = await this.prisma.$transaction(async (tx) => {
+      await tx.enrollment.updateMany({
+        where: { userId, active: true },
+        data: { active: false },
+      });
 
-    const enrollment = await this.prisma.enrollment.upsert({
-      where: { userId_courseId: { userId, courseId: course.id } },
-      update: { active: true, currentModuleId: null, courseVersionId: latestVersionId },
-      create: { userId, courseId: course.id, courseVersionId: latestVersionId, active: true },
-      include: { currentModule: true },
-    });
+      const upserted = await tx.enrollment.upsert({
+        where: { userId_courseId: { userId, courseId: course.id } },
+        update: { active: true, currentModuleId: null, courseVersionId: latestVersionId },
+        create: { userId, courseId: course.id, courseVersionId: latestVersionId, active: true },
+        include: { currentModule: true },
+      });
 
-    await this.prisma.progress.upsert({
-      where: { enrollmentId: enrollment.id },
-      update: { currentLessonId: null },
-      create: { enrollmentId: enrollment.id },
+      await tx.progress.upsert({
+        where: { enrollmentId: upserted.id },
+        update: { currentLessonId: null },
+        create: { enrollmentId: upserted.id },
+      });
+
+      return upserted;
     });
 
     await this.audit.record({

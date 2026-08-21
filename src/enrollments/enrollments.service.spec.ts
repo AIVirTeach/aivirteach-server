@@ -6,17 +6,24 @@ import { AuditService } from '../audit/audit.service';
 import { CoursesService } from '../courses/courses.service';
 import { EnrollmentsService } from './enrollments.service';
 
-const buildPrisma = () => ({
-  enrollment: {
-    updateMany: jest.fn().mockResolvedValue({ count: 0 }),
-    upsert: jest.fn(),
-    findMany: jest.fn(),
-    findFirst: jest.fn(),
-  },
-  progress: { upsert: jest.fn() },
-  courseLesson: { findUnique: jest.fn() },
-  activity: { create: jest.fn() },
-});
+const buildPrisma = () => {
+  const prisma = {
+    enrollment: {
+      updateMany: jest.fn().mockResolvedValue({ count: 0 }),
+      upsert: jest.fn(),
+      findMany: jest.fn(),
+      findFirst: jest.fn(),
+    },
+    progress: { upsert: jest.fn() },
+    courseLesson: { findUnique: jest.fn() },
+    activity: { create: jest.fn() },
+    $transaction: jest.fn(),
+  };
+  // enroll/restart 用 interactive transaction；测试里直接把同一个 prisma 当 tx 传回调用方，
+  // 这样 jest 对 prisma.enrollment.xxx 的断言在事务内外都指向同一个 mock。
+  prisma.$transaction.mockImplementation((callback: (tx: typeof prisma) => unknown) => callback(prisma));
+  return prisma;
+};
 
 const buildCoursesService = () => ({
   requirePublishedCourseWithLatestVersion: jest.fn(),
@@ -106,6 +113,45 @@ describe('EnrollmentsService.enroll', () => {
         action: 'enrollment.enroll',
       }),
     );
+    // updateMany 和 upsert 必须在同一个事务里，否则并发/重试请求可能留下 0 个或 2 个 active enrollment。
+    expect(prisma.$transaction).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('EnrollmentsService.restart', () => {
+  it('把 updateMany/upsert/progress.upsert 放进同一个事务，重置进度到第一课', async () => {
+    const prisma = buildPrisma();
+    const coursesService = buildCoursesService();
+    coursesService.requirePublishedCourseWithLatestVersion.mockResolvedValue(SAMPLE_COURSE);
+    prisma.enrollment.upsert.mockResolvedValue({
+      id: 'enrollment_1',
+      userId: USER_ID,
+      courseId: 'course_1',
+      active: true,
+      currentModule: null,
+      createdAt: new Date('2026-08-20T00:00:00.000Z'),
+    });
+    const { service } = await buildService(prisma, undefined, coursesService);
+
+    const result = await service.restart(USER_ID, 'sample');
+
+    expect(prisma.$transaction).toHaveBeenCalledTimes(1);
+    expect(prisma.enrollment.updateMany).toHaveBeenCalledWith({
+      where: { userId: USER_ID, active: true },
+      data: { active: false },
+    });
+    expect(prisma.enrollment.upsert).toHaveBeenCalledWith(
+      expect.objectContaining({
+        update: { active: true, currentModuleId: null, courseVersionId: 'version_1' },
+      }),
+    );
+    expect(prisma.progress.upsert).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { enrollmentId: 'enrollment_1' },
+        update: { currentLessonId: null },
+      }),
+    );
+    expect(result.courseId).toBe('sample');
   });
 });
 
