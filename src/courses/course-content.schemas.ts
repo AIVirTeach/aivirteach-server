@@ -55,42 +55,64 @@ const ModuleSchema = z.object({
   lessons: z.array(LessonSchema).min(1),
 });
 
-export const CourseContentSchema = z.object({
-  schemaVersion: z.number().int().positive(),
-  id: z.string().min(1),
-  slug: z.string().min(1),
-  version: z.number().int().positive(),
-  status: z.string().min(1),
-  metadata: z.object({
-    title: z.string().min(1),
-    shortTitle: z.string().min(1).optional(),
-    category: z.string().min(1),
-    description: z.string().min(1),
-    level: z.string().min(1),
-    durationMinutes: z.number().int().nonnegative(),
-    lessonCount: z.number().int().nonnegative(),
-    language: z.string().min(1),
-    tags: z.array(z.string().min(1)),
-  }),
-  outcomes: z.array(z.string().min(1)),
-  requirements: z.array(z.string().min(1)),
-  source: z.object({
-    format: z.string().min(1),
-    path: z.string().min(1),
-    encoding: z.enum(SOURCE_ENCODINGS),
-  }),
-  assets: z.array(AssetSchema),
-  introduction: z.object({
-    sourceRange: SourceRangeSchema,
-    featuredAssetIds: z.array(z.string().min(1)),
-  }),
-  welcome: z.object({ path: z.string().min(1) }),
-  modules: z.array(ModuleSchema).min(1),
-  assessments: z.object({
-    path: z.string().min(1),
-    delivery: z.string().min(1),
-  }),
-});
+export const CourseContentSchema = z
+  .object({
+    schemaVersion: z.number().int().positive(),
+    id: z.string().min(1),
+    slug: z.string().min(1),
+    version: z.number().int().positive(),
+    status: z.string().min(1),
+    metadata: z.object({
+      title: z.string().min(1),
+      shortTitle: z.string().min(1).optional(),
+      category: z.string().min(1),
+      description: z.string().min(1),
+      level: z.string().min(1),
+      durationMinutes: z.number().int().nonnegative(),
+      lessonCount: z.number().int().nonnegative(),
+      language: z.string().min(1),
+      tags: z.array(z.string().min(1)),
+    }),
+    outcomes: z.array(z.string().min(1)),
+    requirements: z.array(z.string().min(1)),
+    source: z.object({
+      format: z.string().min(1),
+      path: z.string().min(1),
+      encoding: z.enum(SOURCE_ENCODINGS),
+    }),
+    assets: z.array(AssetSchema),
+    introduction: z.object({
+      sourceRange: SourceRangeSchema,
+      featuredAssetIds: z.array(z.string().min(1)),
+    }),
+    welcome: z.object({ path: z.string().min(1) }),
+    modules: z.array(ModuleSchema).min(1),
+    assessments: z.object({
+      path: z.string().min(1),
+      delivery: z.string().min(1),
+    }),
+  })
+  .superRefine((content, ctx) => {
+    // CourseLesson.contentId 只在数据库里按模块（moduleId + contentId）唯一约束，
+    // 同一课程内跨模块复用课时 id 不会被 DB 拦住，会导致 getLesson/completeLesson 的
+    // flatMap+findIndex 定位到错误的、靠前的那一课，后面那课永久不可达。
+    // 这里在 ingestion 入口（写库之前）就拒绝，把错误挡在内容作者这一层。
+    const firstSeenInModule = new Map<string, number>();
+    content.modules.forEach((courseModule, moduleIndex) => {
+      courseModule.lessons.forEach((lesson) => {
+        const firstModuleIndex = firstSeenInModule.get(lesson.id);
+        if (firstModuleIndex !== undefined) {
+          ctx.addIssue({
+            code: 'custom',
+            message: `课时 id 在同一课程内重复："${lesson.id}"（模块 ${firstModuleIndex + 1} 和模块 ${moduleIndex + 1} 都用了它，课时 id 必须在整个课程内唯一）`,
+            path: ['modules', moduleIndex, 'lessons'],
+          });
+        } else {
+          firstSeenInModule.set(lesson.id, moduleIndex);
+        }
+      });
+    });
+  });
 
 export type CourseContent = z.infer<typeof CourseContentSchema>;
 

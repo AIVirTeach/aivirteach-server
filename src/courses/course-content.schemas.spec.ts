@@ -10,6 +10,25 @@ describe('CourseContentSchema', () => {
     const { modules: _modules, ...broken } = sampleCourse as any;
     expect(() => CourseContentSchema.parse(broken)).toThrow();
   });
+
+  it('同一课程内两个不同模块复用了同一个课时 id 时报错', () => {
+    const [firstModule] = sampleCourse.modules;
+    const duplicated = {
+      ...sampleCourse,
+      modules: [
+        firstModule,
+        {
+          ...firstModule,
+          id: 'module-2',
+          position: 2,
+          title: 'Module Two',
+          lessons: [{ ...firstModule.lessons[0] }],
+        },
+      ],
+    };
+
+    expect(() => CourseContentSchema.parse(duplicated)).toThrow('课时 id 在同一课程内重复');
+  });
 });
 
 describe('mapCourseLevel', () => {

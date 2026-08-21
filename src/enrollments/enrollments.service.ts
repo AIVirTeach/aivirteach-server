@@ -113,10 +113,10 @@ export class EnrollmentsService {
 
   async completeLesson(userId: string, lessonId: string): Promise<EnrollmentResponse> {
     // contentId 只在同一模块内唯一，不同课程会复用同一套课时命名（比如环境搭建步骤），
-    // 所以不能像以前那样直接全局查 contentId——要先定位到用户当前在读的课程，
-    // 再去这门课的版本里按 contentId 找课时。这跟 CoursesService.getLesson 的做法一致。
-    const enrollment = await this.prisma.enrollment.findFirst({
-      where: { userId, active: true },
+    // 所以不能只查 active enrollment——过期的 active 指针会让完成请求记错课程。
+    // 要在用户所有已报名的课程里找出哪门课有这个 contentId，跟 CoursesService.getLesson 一样按 contentId 定位。
+    const enrollments = await this.prisma.enrollment.findMany({
+      where: { userId },
       include: {
         course: true,
         currentModule: true,
@@ -130,17 +130,35 @@ export class EnrollmentsService {
         },
       },
     });
-    if (!enrollment || !enrollment.courseVersion) {
-      throw new NotFoundException(`用户还没有报名任何课程`);
-    }
 
-    const flattened = enrollment.courseVersion.modules.flatMap(
-      (courseModule) => courseModule.lessons,
-    );
-    const index = flattened.findIndex((entry) => entry.contentId === lessonId);
-    if (index === -1) {
+    const matches = enrollments.flatMap((candidate) => {
+      if (!candidate.courseVersion) {
+        return [];
+      }
+      const modules = candidate.courseVersion.modules;
+      const flattened = modules.flatMap((courseModule) => courseModule.lessons);
+      const index = flattened.findIndex((entry) => entry.contentId === lessonId);
+      return index === -1 ? [] : [{ enrollment: candidate, modules, flattened, index }];
+    });
+
+    if (matches.length === 0) {
       throw new NotFoundException(`找不到课时：${lessonId}`);
     }
+
+    if (matches.length > 1) {
+      // contentId 在用户的多门已报名课程里重复，优先用 active 的那门；
+      // 留审计记录，方便日后排查是否真的完成对了课程。
+      await this.audit.record({
+        actor: { type: AuditActorType.USER, id: userId },
+        action: 'enrollment.completeLesson.ambiguousContentId',
+        success: true,
+        targetType: 'CourseLesson',
+        targetId: lessonId,
+      });
+    }
+
+    const { enrollment, modules, flattened, index } =
+      matches.find((candidate) => candidate.enrollment.active) ?? matches[0];
     const lesson = flattened[index];
 
     await this.prisma.activity.create({
@@ -163,7 +181,7 @@ export class EnrollmentsService {
 
     const progressPercent = computeProgressPercent({
       progress: { currentLessonId: nextLessonId },
-      modules: enrollment.courseVersion.modules,
+      modules,
     });
 
     return this.toResponse(enrollment, enrollment.course.slug, progressPercent);
