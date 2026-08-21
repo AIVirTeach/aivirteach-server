@@ -15,7 +15,6 @@ const buildPrisma = () => {
       findFirst: jest.fn(),
     },
     progress: { upsert: jest.fn() },
-    courseLesson: { findUnique: jest.fn() },
     activity: { create: jest.fn() },
     $transaction: jest.fn(),
   };
@@ -156,32 +155,16 @@ describe('EnrollmentsService.restart', () => {
 });
 
 describe('EnrollmentsService.completeLesson', () => {
-  it('课时不存在时抛 NotFoundException', async () => {
+  it('用户没有 active enrollment 时抛 NotFoundException', async () => {
     const prisma = buildPrisma();
-    prisma.courseLesson.findUnique.mockResolvedValue(null);
+    prisma.enrollment.findFirst.mockResolvedValue(null);
     const { service } = await buildService(prisma);
 
     await expect(service.completeLesson(USER_ID, 'missing')).rejects.toThrow(NotFoundException);
   });
 
-  it('写一行 Activity，并把 Progress 推进到下一课', async () => {
+  it('contentId 在当前课程里找不到时抛 NotFoundException', async () => {
     const prisma = buildPrisma();
-    prisma.courseLesson.findUnique.mockResolvedValue({
-      id: 'lesson_cuid_1',
-      contentId: 'verify-virtual-machine',
-      title: 'Lesson One',
-      module: {
-        id: 'module_1',
-        courseVersion: {
-          courseId: 'course_1',
-          modules: [
-            {
-              lessons: [{ id: 'lesson_cuid_1' }, { id: 'lesson_cuid_2' }],
-            },
-          ],
-        },
-      },
-    });
     prisma.enrollment.findFirst.mockResolvedValue({
       id: 'enrollment_1',
       userId: USER_ID,
@@ -190,14 +173,44 @@ describe('EnrollmentsService.completeLesson', () => {
       createdAt: new Date('2026-01-01T00:00:00.000Z'),
       course: { slug: 'sample' },
       currentModule: null,
+      courseVersion: {
+        modules: [{ lessons: [{ id: 'lesson_cuid_1', contentId: 'verify-virtual-machine' }] }],
+      },
     });
     const { service } = await buildService(prisma);
 
-    // 路由参数是 content id（"verify-virtual-machine"），不是内部 cuid。
+    await expect(service.completeLesson(USER_ID, 'missing')).rejects.toThrow(NotFoundException);
+  });
+
+  it('写一行 Activity，并把 Progress 推进到下一课', async () => {
+    const prisma = buildPrisma();
+    prisma.enrollment.findFirst.mockResolvedValue({
+      id: 'enrollment_1',
+      userId: USER_ID,
+      courseId: 'course_1',
+      active: true,
+      createdAt: new Date('2026-01-01T00:00:00.000Z'),
+      course: { slug: 'sample' },
+      currentModule: null,
+      courseVersion: {
+        modules: [
+          {
+            lessons: [
+              { id: 'lesson_cuid_1', contentId: 'verify-virtual-machine', title: 'Lesson One' },
+              { id: 'lesson_cuid_2', contentId: 'verify-network', title: 'Lesson Two' },
+            ],
+          },
+        ],
+      },
+    });
+    const { service } = await buildService(prisma);
+
+    // 路由参数是 content id（"verify-virtual-machine"），不是内部 cuid；
+    // 同一个 contentId 在不同课程里可能重复，所以要先从 active enrollment 定位课程版本再找课时。
     const result = await service.completeLesson(USER_ID, 'verify-virtual-machine');
 
-    expect(prisma.courseLesson.findUnique).toHaveBeenCalledWith(
-      expect.objectContaining({ where: { contentId: 'verify-virtual-machine' } }),
+    expect(prisma.enrollment.findFirst).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { userId: USER_ID, active: true } }),
     );
     expect(prisma.activity.create).toHaveBeenCalledWith(
       expect.objectContaining({

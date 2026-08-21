@@ -112,35 +112,36 @@ export class EnrollmentsService {
   }
 
   async completeLesson(userId: string, lessonId: string): Promise<EnrollmentResponse> {
-    const lesson = await this.prisma.courseLesson.findUnique({
-      where: { contentId: lessonId },
+    // contentId 只在同一模块内唯一，不同课程会复用同一套课时命名（比如环境搭建步骤），
+    // 所以不能像以前那样直接全局查 contentId——要先定位到用户当前在读的课程，
+    // 再去这门课的版本里按 contentId 找课时。这跟 CoursesService.getLesson 的做法一致。
+    const enrollment = await this.prisma.enrollment.findFirst({
+      where: { userId, active: true },
       include: {
-        module: {
+        course: true,
+        currentModule: true,
+        courseVersion: {
           include: {
-            courseVersion: {
-              include: {
-                modules: {
-                  orderBy: { position: 'asc' },
-                  include: { lessons: { orderBy: { position: 'asc' } } },
-                },
-              },
+            modules: {
+              orderBy: { position: 'asc' },
+              include: { lessons: { orderBy: { position: 'asc' } } },
             },
           },
         },
       },
     });
-    if (!lesson) {
-      throw new NotFoundException(`找不到课时：${lessonId}`);
+    if (!enrollment || !enrollment.courseVersion) {
+      throw new NotFoundException(`用户还没有报名任何课程`);
     }
 
-    const courseId = lesson.module.courseVersion.courseId;
-    const enrollment = await this.prisma.enrollment.findFirst({
-      where: { userId, courseId },
-      include: { course: true, currentModule: true },
-    });
-    if (!enrollment) {
-      throw new NotFoundException(`用户还没有报名这门课`);
+    const flattened = enrollment.courseVersion.modules.flatMap(
+      (courseModule) => courseModule.lessons,
+    );
+    const index = flattened.findIndex((entry) => entry.contentId === lessonId);
+    if (index === -1) {
+      throw new NotFoundException(`找不到课时：${lessonId}`);
     }
+    const lesson = flattened[index];
 
     await this.prisma.activity.create({
       data: {
@@ -152,10 +153,6 @@ export class EnrollmentsService {
       },
     });
 
-    const flattened = lesson.module.courseVersion.modules.flatMap(
-      (courseModule) => courseModule.lessons,
-    );
-    const index = flattened.findIndex((entry) => entry.id === lesson.id);
     const nextLessonId = flattened[index + 1]?.id ?? null;
 
     await this.prisma.progress.upsert({
@@ -166,7 +163,7 @@ export class EnrollmentsService {
 
     const progressPercent = computeProgressPercent({
       progress: { currentLessonId: nextLessonId },
-      modules: lesson.module.courseVersion.modules,
+      modules: enrollment.courseVersion.modules,
     });
 
     return this.toResponse(enrollment, enrollment.course.slug, progressPercent);

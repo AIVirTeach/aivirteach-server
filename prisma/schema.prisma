@@ -197,7 +197,9 @@ model CourseModule {
 model CourseLesson {
   id                     String       @id @default(cuid())
   // course.json 里作者写的课时 id（如 "verify-virtual-machine"），client 路由参数用这个，不用内部 cuid。
-  contentId              String       @unique
+  // 按 moduleId 分区唯一，不是全局唯一——不同课程的模块常复用同一套环境搭建步骤命名
+  // （比如 "verify-virtual-machine"），全局唯一会导致第二门课直接摄取失败。
+  contentId              String
   moduleId               String
   module                 CourseModule @relation(fields: [moduleId], references: [id], onDelete: Cascade)
   position               Int
@@ -215,6 +217,7 @@ model CourseLesson {
   progresses  Progress[]
 
   @@unique([moduleId, position])
+  @@unique([moduleId, contentId])
   @@index([moduleId])
 }
 
