@@ -32,4 +32,14 @@ export default tseslint.config(
       "prettier/prettier": ["error", { endOfLine: "auto" }],
     },
   },
+  {
+    // Jest 的 expect.objectContaining() 与 supertest 的 response.body 类型定义都是 any，
+    // 单元测试断言和 e2e 里读 HTTP 响应体因此会触发 no-unsafe-*——这是类型定义的限制，不是真的类型不安全。
+    files: ['**/*.spec.ts', '**/*.e2e-spec.ts'],
+    rules: {
+      '@typescript-eslint/no-unsafe-assignment': 'off',
+      '@typescript-eslint/no-unsafe-member-access': 'off',
+      '@typescript-eslint/no-unsafe-call': 'off',
+    },
+  },
 );

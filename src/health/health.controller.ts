@@ -6,7 +6,7 @@ export class HealthController {
   constructor(private readonly prisma: PrismaService) {}
 
   @Get()
-  async check() {
+  async check(): Promise<{ status: 'ok'; database: 'up' | 'down' }> {
     let database: 'up' | 'down' = 'down';
     try {
       await this.prisma.$queryRaw`SELECT 1`;
@@ -15,11 +15,6 @@ export class HealthController {
       database = 'down';
     }
 
-    return {
-      status: 'ok',
-      database,
-      auth: process.env.CLERK_SECRET_KEY ? 'configured' : 'not_configured',
-      billing: process.env.STRIPE_SECRET_KEY ? 'configured' : 'not_configured',
-    };
+    return { status: 'ok', database };
   }
 }

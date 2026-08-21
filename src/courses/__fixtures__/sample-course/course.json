@@ -1,0 +1,65 @@
+{
+  "schemaVersion": 1,
+  "id": "sample-course",
+  "slug": "sample-course",
+  "version": 1,
+  "status": "published",
+  "metadata": {
+    "title": "Sample Course",
+    "shortTitle": "Sample",
+    "category": "Testing",
+    "description": "A minimal course used only by ingestion tests.",
+    "level": "Beginner",
+    "durationMinutes": 30,
+    "lessonCount": 2,
+    "language": "en",
+    "tags": ["testing"]
+  },
+  "outcomes": ["Understand the ingestion pipeline."],
+  "requirements": ["None."],
+  "source": {
+    "format": "markdown",
+    "path": "lesson-source.md",
+    "encoding": "utf-8"
+  },
+  "assets": [
+    { "id": "cover", "type": "image", "path": "cover.png", "alt": "Cover image" }
+  ],
+  "introduction": {
+    "sourceRange": { "startLine": 1, "endLine": 2 },
+    "featuredAssetIds": ["cover"]
+  },
+  "welcome": { "path": "welcome.json" },
+  "modules": [
+    {
+      "id": "module-1",
+      "position": 1,
+      "title": "Module One",
+      "description": "The only module.",
+      "estimatedMinutes": 30,
+      "lessons": [
+        {
+          "id": "lesson-1",
+          "position": 1,
+          "title": "Lesson One",
+          "estimatedMinutes": 15,
+          "sourceRange": { "startLine": 3, "endLine": 4 },
+          "objectives": ["Read the first section."],
+          "activity": { "type": "guided-lab", "prompt": "Read section one.", "completionType": "learner-confirmation" },
+          "assessmentIds": ["check-lesson-1"]
+        },
+        {
+          "id": "lesson-2",
+          "position": 2,
+          "title": "Lesson Two",
+          "estimatedMinutes": 15,
+          "sourceRange": { "startLine": 5, "endLine": 6 },
+          "objectives": ["Read the second section."],
+          "activity": { "type": "guided-lab", "prompt": "Read section two.", "completionType": "learner-confirmation" },
+          "assessmentIds": ["check-lesson-2"]
+        }
+      ]
+    }
+  ],
+  "assessments": { "path": "assessments.json", "delivery": "server-filtered" }
+}
