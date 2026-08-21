@@ -1,14 +1,18 @@
 import { readFile } from 'node:fs/promises';
-import { resolve } from 'node:path';
+import { extname, resolve } from 'node:path';
 import { ConflictException, Injectable } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import type { Course, CourseVersion } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
+import { CourseAssetStorageService } from './course-asset-storage.service';
 import { CourseContentSchema, mapCourseLevel } from './course-content.schemas';
 
 @Injectable()
 export class CourseIngestionService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly assetStorage: CourseAssetStorageService,
+  ) {}
 
   async ingestFromDirectory(
     contentDir: string,
@@ -18,6 +22,17 @@ export class CourseIngestionService {
     const content = CourseContentSchema.parse(JSON.parse(courseJsonRaw));
 
     const sourceMarkdown = await readFile(resolve(contentDir, content.source.path), content.source.encoding);
+
+    const assets = await Promise.all(
+      content.assets.map(async (asset) => ({
+        objectKey: await this.assetStorage.upload(
+          `courses/${content.slug}/${asset.id}${extname(asset.path)}`,
+          resolve(contentDir, asset.path),
+        ),
+        type: asset.type,
+        altText: asset.alt,
+      })),
+    );
 
     try {
       return await this.prisma.course.create({
@@ -36,11 +51,7 @@ export class CourseIngestionService {
           outcomes: content.outcomes,
           requirements: content.requirements,
           assets: {
-            create: content.assets.map((asset) => ({
-              objectKey: asset.path,
-              type: asset.type,
-              altText: asset.alt,
-            })),
+            create: assets,
           },
           versions: {
             create: {
