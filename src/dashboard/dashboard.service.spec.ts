@@ -68,6 +68,53 @@ describe('DashboardService.getDashboard', () => {
     expect(dashboard.progress.skillsMastered).toBe(0);
     expect(dashboard.progress.weeklyHours).toHaveLength(7);
   });
+
+  it('有 active enrollment 时用课程 slug（不是内部 cuid）拼 activeCourse，并算出 progressPercent', async () => {
+    const prisma = buildPrisma();
+    prisma.user.findUniqueOrThrow.mockResolvedValue({
+      id: 'user_1',
+      displayName: 'Learner',
+      email: 'learner@example.com',
+      role: 'Learner',
+      plan: 'PREMIUM',
+      level: 2,
+      timezone: 'Asia/Kuala_Lumpur',
+      createdAt: new Date('2026-08-01T00:00:00.000Z'),
+    });
+    prisma.enrollment.findFirst.mockResolvedValue({
+      id: 'enrollment_1',
+      userId: 'user_1',
+      active: true,
+      createdAt: new Date('2026-08-10T00:00:00.000Z'),
+      course: {
+        slug: 'sample-course',
+        title: 'Sample Course',
+        category: 'AI',
+        description: 'desc',
+        level: 'BEGINNER',
+        durationMinutes: 60,
+        lessonCount: 4,
+        published: true,
+        coverAssetId: null,
+      },
+      progress: { currentLessonId: 'lesson_2' },
+      courseVersion: {
+        modules: [
+          { lessons: [{ id: 'lesson_1' }, { id: 'lesson_2' }] },
+          { lessons: [{ id: 'lesson_3' }, { id: 'lesson_4' }] },
+        ],
+      },
+    });
+    const service = await buildService(prisma);
+
+    const dashboard = await service.getDashboard('user_1');
+
+    expect(dashboard.activeCourse).not.toBeNull();
+    expect(dashboard.activeCourse?.id).toBe('sample-course');
+    expect(dashboard.activeCourse?.level).toBe('Beginner');
+    expect(dashboard.activeCourse?.enrollment.courseId).toBe('sample-course');
+    expect(dashboard.activeCourse?.enrollment.progressPercent).toBe(50);
+  });
 });
 
 describe('DashboardService.recordPractice', () => {

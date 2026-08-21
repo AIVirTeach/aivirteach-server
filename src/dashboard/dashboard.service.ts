@@ -18,8 +18,18 @@ export function computeProgressPercent(enrollment: EnrollmentWithVersion): numbe
   return Math.round(((index + 1) / flattened.length) * 100);
 }
 
-function dayKey(date: Date): string {
-  return date.toISOString().slice(0, 10);
+function dayKey(date: Date, timezone: string): string {
+  return new Intl.DateTimeFormat('en-CA', {
+    timeZone: timezone,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).format(date);
+}
+
+function previousDayKey(key: string): string {
+  const [year, month, day] = key.split('-').map(Number);
+  return new Date(Date.UTC(year, month - 1, day - 1)).toISOString().slice(0, 10);
 }
 
 export type DashboardResponse = {
@@ -98,10 +108,10 @@ export class DashboardService {
 
     const [streakDays, tasksCompleted, totalPracticeMinutes, weeklyHours, unreadNotificationCount, recentActivity] =
       await Promise.all([
-        this.computeStreakDays(userId),
+        this.computeStreakDays(userId, user.timezone),
         this.prisma.attempt.count({ where: { status: 'PASS', enrollment: { userId } } }),
         this.sumPracticeMinutes(userId),
-        this.computeWeeklyHours(userId),
+        this.computeWeeklyHours(userId, user.timezone),
         this.prisma.notification.count({ where: { userId, readAt: null } }),
         this.prisma.activity.findMany({
           where: { userId },
@@ -196,20 +206,22 @@ export class DashboardService {
     await this.prisma.practiceSession.create({ data: { userId, minutes } });
   }
 
-  private async computeStreakDays(userId: string): Promise<number> {
+  private async computeStreakDays(userId: string, timezone: string): Promise<number> {
     const activities = await this.prisma.activity.findMany({
       where: { userId },
       select: { occurredAt: true },
       orderBy: { occurredAt: 'desc' },
     });
-    const days = [...new Set(activities.map((activity) => dayKey(activity.occurredAt)))].sort().reverse();
+    const days = [...new Set(activities.map((activity) => dayKey(activity.occurredAt, timezone)))]
+      .sort()
+      .reverse();
     if (days.length === 0) return 0;
 
     let streak = 1;
-    let cursor = new Date(days[0]);
+    let cursorKey = days[0];
     for (let i = 1; i < days.length; i++) {
-      cursor = new Date(cursor.getTime() - DAY_MS);
-      if (dayKey(cursor) !== days[i]) break;
+      cursorKey = previousDayKey(cursorKey);
+      if (cursorKey !== days[i]) break;
       streak++;
     }
     return streak;
@@ -223,9 +235,9 @@ export class DashboardService {
     return result._sum.minutes ?? 0;
   }
 
-  private async computeWeeklyHours(userId: string): Promise<number[]> {
-    const since = new Date(Date.now() - 6 * DAY_MS);
-    since.setUTCHours(0, 0, 0, 0);
+  private async computeWeeklyHours(userId: string, timezone: string): Promise<number[]> {
+    // 多缓冲 1 天，覆盖时区偏移（最大到 UTC+14/-12），避免边界会话被数据库查询提前滤掉。
+    const since = new Date(Date.now() - 7 * DAY_MS);
 
     const sessions = await this.prisma.practiceSession.findMany({
       where: { userId, createdAt: { gte: since } },
@@ -234,13 +246,13 @@ export class DashboardService {
 
     const minutesByDay = new Map<string, number>();
     for (const session of sessions) {
-      const key = dayKey(session.createdAt);
+      const key = dayKey(session.createdAt, timezone);
       minutesByDay.set(key, (minutesByDay.get(key) ?? 0) + session.minutes);
     }
 
     const hours: number[] = [];
     for (let i = 6; i >= 0; i--) {
-      const key = dayKey(new Date(Date.now() - i * DAY_MS));
+      const key = dayKey(new Date(Date.now() - i * DAY_MS), timezone);
       hours.push(Math.round(((minutesByDay.get(key) ?? 0) / 60) * 100) / 100);
     }
     return hours;
