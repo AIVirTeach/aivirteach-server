@@ -1,5 +1,7 @@
 import { join } from 'node:path';
 import { Test } from '@nestjs/testing';
+import { ConflictException } from '@nestjs/common';
+import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { CourseIngestionService } from './course-ingestion.service';
 
@@ -73,5 +75,18 @@ describe('CourseIngestionService.ingestFromDirectory', () => {
     const service = await buildService(prisma);
 
     await expect(service.ingestFromDirectory('/tmp/does-not-exist')).rejects.toThrow();
+  });
+
+  it('slug/contentId 冲突（P2002）时转成 ConflictException，不是原始 Prisma 错误', async () => {
+    const prisma = buildPrisma();
+    prisma.course.create.mockRejectedValue(
+      new Prisma.PrismaClientKnownRequestError('Unique constraint failed on the fields: (`slug`)', {
+        code: 'P2002',
+        clientVersion: '6.19.3',
+      }),
+    );
+    const service = await buildService(prisma);
+
+    await expect(service.ingestFromDirectory(FIXTURE_DIR, 'sha256:test')).rejects.toThrow(ConflictException);
   });
 });

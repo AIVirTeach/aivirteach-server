@@ -1,4 +1,4 @@
-import { Controller, Param, Post, Get, Req, UseGuards } from '@nestjs/common';
+import { Controller, HttpCode, Param, Post, Get, Req, UseGuards } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { JwtAuthGuard, type AuthenticatedRequest } from '../auth/jwt-auth.guard';
 import { EnrollmentsService, type EnrollmentResponse } from './enrollments.service';
@@ -33,6 +33,7 @@ export class EnrollmentsController {
   }
 
   @Post('lessons/:lessonId/complete')
+  @HttpCode(204)
   completeLesson(
     @Param('lessonId') lessonId: string,
     @Req() request: AuthenticatedRequest,

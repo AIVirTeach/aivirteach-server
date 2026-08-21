@@ -1,5 +1,22 @@
 import { z } from 'zod';
 
+// Node readFile 支持的 BufferEncoding 取值；course.json 里写错（如 "uft-8"）要在 Zod 这层拒绝，
+// 不能等到 readFile 内部抛一个含糊的低级错误。
+const SOURCE_ENCODINGS = [
+  'ascii',
+  'utf8',
+  'utf-8',
+  'utf16le',
+  'utf-16le',
+  'ucs2',
+  'ucs-2',
+  'base64',
+  'base64url',
+  'latin1',
+  'binary',
+  'hex',
+] as const;
+
 const SourceRangeSchema = z.object({
   startLine: z.number().int().positive(),
   endLine: z.number().int().positive(),
@@ -60,7 +77,7 @@ export const CourseContentSchema = z.object({
   source: z.object({
     format: z.string().min(1),
     path: z.string().min(1),
-    encoding: z.string().min(1),
+    encoding: z.enum(SOURCE_ENCODINGS),
   }),
   assets: z.array(AssetSchema),
   introduction: z.object({

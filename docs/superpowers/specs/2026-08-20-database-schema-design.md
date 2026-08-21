@@ -171,6 +171,8 @@ model RefreshToken {
 model Course {
   id              String      @id @default(cuid())
   slug            String      @unique
+  // 可空是因为运营 CLI 早期建的课程（course:create <slug> <title> 时代）没有内容目录、没有 content.id 可存；
+  // 走 course-ingestion 摄取管线新建的课程一定会有值。CourseLesson.contentId 不留这个口子，因为它是随这条摄取管线一起加的新表。
   contentId       String?     @unique
   title           String
   shortTitle      String?
