@@ -78,7 +78,8 @@ node -e "console.log(require('node:crypto').randomBytes(48).toString('base64url'
 | 命令 | 参数 | 作用 |
 |---|---|---|
 | `invite <email>` | | 邀请一个用户，生成一次性 `invitationToken` |
-| `course:create <slug> <title>` | `--imageDigest`（可选） | 新建课程，同时建第一个未发布的版本 |
+| `course:create <contentDir>` | `--image-digest`（可选） | 从课程内容目录（含 `course.json`）摄取新建课程，同时建第一个未发布的版本 |
+| `course:publish <slug>` | | 发布课程的最新版本 |
 | `enroll <email> <courseSlug>` | | 给用户开课 |
 | `quota:grant <email> <minutes>` | | 给用户发运行额度（分钟） |
 
@@ -91,8 +92,10 @@ node -e "console.log(require('node:crypto').randomBytes(48).toString('base64url'
 npm run cli -- invite someone@example.com -o "你的邮箱" -r "联调测试账号" --execute
 # 拿到返回的 invitationToken，再调 POST /auth/invitations/accept 激活
 
-npm run cli -- course:create demo-course "Demo Course" -o "你的邮箱" -r "联调用课程" --execute
-npm run cli -- enroll someone@example.com demo-course -o "你的邮箱" -r "开课" --execute
+npm run cli -- course:create /path/to/course-content-dir -o "你的邮箱" -r "联调用课程" --execute
+# course-content-dir 下要有 course.json（定义课程/模块/课时结构，见 src/courses/course-content.schemas.ts）
+npm run cli -- course:publish <slug> -o "你的邮箱" -r "发布" --execute
+npm run cli -- enroll someone@example.com <slug> -o "你的邮箱" -r "开课" --execute
 npm run cli -- quota:grant someone@example.com 60 -o "你的邮箱" -r "发额度" --execute
 ```
 
