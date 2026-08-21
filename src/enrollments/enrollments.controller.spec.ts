@@ -43,15 +43,17 @@ describe('EnrollmentsController', () => {
     expect(service.listForUser).toHaveBeenCalledWith('user_1');
   });
 
-  it('POST /lessons/:lessonId/complete 用认证用户的 userId 调用 service.completeLesson', async () => {
-    const service = { completeLesson: jest.fn().mockResolvedValue(undefined) };
+  it('POST /lessons/:lessonId/complete 用认证用户的 userId 调用 service.completeLesson，返回 { enrollment }', async () => {
+    const service = { completeLesson: jest.fn().mockResolvedValue({ id: 'enrollment_1' }) };
     const moduleRef = await Test.createTestingModule({
       controllers: [EnrollmentsController],
       providers: [{ provide: EnrollmentsService, useValue: service }, JWT_AUTH_GUARD_STUB],
     }).compile();
     const controller = moduleRef.get(EnrollmentsController);
 
-    await controller.completeLesson('lesson_1', AUTH_REQUEST as any);
+    await expect(controller.completeLesson('lesson_1', AUTH_REQUEST as any)).resolves.toEqual({
+      enrollment: { id: 'enrollment_1' },
+    });
     expect(service.completeLesson).toHaveBeenCalledWith('user_1', 'lesson_1');
   });
 });

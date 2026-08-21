@@ -182,11 +182,19 @@ describe('EnrollmentsService.completeLesson', () => {
         },
       },
     });
-    prisma.enrollment.findFirst.mockResolvedValue({ id: 'enrollment_1' });
+    prisma.enrollment.findFirst.mockResolvedValue({
+      id: 'enrollment_1',
+      userId: USER_ID,
+      courseId: 'course_1',
+      active: true,
+      createdAt: new Date('2026-01-01T00:00:00.000Z'),
+      course: { slug: 'sample' },
+      currentModule: null,
+    });
     const { service } = await buildService(prisma);
 
     // 路由参数是 content id（"verify-virtual-machine"），不是内部 cuid。
-    await service.completeLesson(USER_ID, 'verify-virtual-machine');
+    const result = await service.completeLesson(USER_ID, 'verify-virtual-machine');
 
     expect(prisma.courseLesson.findUnique).toHaveBeenCalledWith(
       expect.objectContaining({ where: { contentId: 'verify-virtual-machine' } }),
@@ -203,6 +211,11 @@ describe('EnrollmentsService.completeLesson', () => {
         update: { currentLessonId: 'lesson_cuid_2' },
         create: expect.objectContaining({ enrollmentId: 'enrollment_1', currentLessonId: 'lesson_cuid_2' }),
       }),
+    );
+    // currentLessonId 推进到 lesson_cuid_2（第 2/2 课），返回值要带上更新后的 enrollment，
+    // client 完成课时后靠这个更新本地状态。
+    expect(result).toEqual(
+      expect.objectContaining({ id: 'enrollment_1', courseId: 'sample', progressPercent: 100 }),
     );
   });
 });
