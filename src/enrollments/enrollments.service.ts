@@ -111,7 +111,7 @@ export class EnrollmentsService {
     );
   }
 
-  async completeLesson(userId: string, lessonId: string): Promise<void> {
+  async completeLesson(userId: string, lessonId: string): Promise<EnrollmentResponse> {
     const lesson = await this.prisma.courseLesson.findUnique({
       where: { contentId: lessonId },
       include: {
@@ -136,6 +136,7 @@ export class EnrollmentsService {
     const courseId = lesson.module.courseVersion.courseId;
     const enrollment = await this.prisma.enrollment.findFirst({
       where: { userId, courseId },
+      include: { course: true, currentModule: true },
     });
     if (!enrollment) {
       throw new NotFoundException(`用户还没有报名这门课`);
@@ -162,6 +163,13 @@ export class EnrollmentsService {
       update: { currentLessonId: nextLessonId },
       create: { enrollmentId: enrollment.id, currentLessonId: nextLessonId },
     });
+
+    const progressPercent = computeProgressPercent({
+      progress: { currentLessonId: nextLessonId },
+      modules: lesson.module.courseVersion.modules,
+    });
+
+    return this.toResponse(enrollment, enrollment.course.slug, progressPercent);
   }
 
   private toResponse(
