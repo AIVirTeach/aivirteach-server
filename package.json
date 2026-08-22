@@ -34,6 +34,7 @@
     "@node-rs/argon2": "^2.0.2",
     "@prisma/client": "^6.19.3",
     "@vercel/blob": "^2.8.0",
+    "@vercel/functions": "^3.9.5",
     "dotenv": "^17.4.2",
     "jose": "^6.2.8",
     "nest-commander": "^3.20.1",
