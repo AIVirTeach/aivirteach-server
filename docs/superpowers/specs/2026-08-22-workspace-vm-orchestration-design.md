@@ -150,26 +150,6 @@ Labs service.py（不改代码，原样用）
 
 ## 部署清单（给负责 Cloudflare Tunnel 的同事）
 
-这部分不涉及写代码，是 Cloudflare 后台配置 + Labs 主机上装 `cloudflared`。
-
-1. **Tunnel ingress 规则**：Labs 是三个独立进程（各自 systemd unit），按 hostname 分别路由到本地端口，
-   不能只开一条笼统转发：
-   - `labs-vm.<domain>` → `127.0.0.1:8760`（VM Manager，这次要用到）
-   - `labs-agent.<domain>` → `127.0.0.1:8770`（AI 诊断 Agent，这次要用到）
-   - `8765`（Diagnostic Gateway）**不需要**对外暴露——按 `aivirteach-labs/README.md`，8765 默认只允许来自
-     `127.0.0.1:8760` 的请求，是 8760/8770 内部调用的服务，不是给 server 直接打的。
-   - 建议预留第三个 hostname（比如 `labs-console.<domain>`）给未来的 Guacamole 网关，现在不用配置内容，
-     只是让 Tunnel 的路由表未来加一条不用推倒重来。
-2. **Cloudflare Access Application + Service Token**：只给上面两个 hostname（`labs-vm`、`labs-agent`）建
-   Access 保护，发一对 Service Token（Client ID + Secret）专门给 server 用。未授权请求在到达 FastAPI 之前
-   就被 Cloudflare 边缘挡掉，作为现有静态 token 之外的第一层防线。
-3. **现有的静态 token 不动**：`AIVIRTEACH_API_TOKEN`（VM Manager）、`AIVIRTEACH_AGENT_TOKEN`（Agent）保留
-   原样，作为 Cloudflare Access 之后的第二层防线，不需要改代码或轮换。
-4. **建/删 VM 这类破坏性操作**，边缘层加个 rate limit / WAF 规则。
-
-Server 侧后续实现 `LabsClient` 时需要的新环境变量（这次 spec 只记录目标形状，不在这次创建）：
-
-- `LABS_VM_BASE_URL`（`https://labs-vm.<domain>`）
-- `LABS_AGENT_BASE_URL`（`https://labs-agent.<domain>`，留给未来诊断功能用）
-- `CF_ACCESS_CLIENT_ID` / `CF_ACCESS_CLIENT_SECRET`
-- `AIVIRTEACH_API_TOKEN`（跟 Labs 那边配置的值一致）
+这一节写于实现之前，只记录目标形状。`LabsClient` 落地后实际只调用了 VM Manager（`POST /v1/vms`），
+没有用到 Agent 相关接口，`LABS_AGENT_BASE_URL` 也没有出现在 server 代码里。以当前代码为准的详细清单见
+[`docs/deployment/labs-cloudflare-tunnel.md`](../../deployment/labs-cloudflare-tunnel.md)，这里不再重复维护。
