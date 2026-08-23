@@ -16,6 +16,9 @@ const EnvSchema = z.object({
   AIVIRTEACH_API_TOKEN: z.string().min(1).optional(),
   CF_ACCESS_CLIENT_ID: z.string().min(1).optional(),
   CF_ACCESS_CLIENT_SECRET: z.string().min(1).optional(),
+  // websockify 对外的 wss:// 基础地址，给浏览器建 RDP WebSocket 连接用；
+  // 跟 LABS_VM_BASE_URL（VM 生命周期 HTTP API）是两个不同用途的地址。
+  LABS_CONSOLE_WS_URL: z.url().optional(),
 });
 
 export type Env = z.infer<typeof EnvSchema>;
