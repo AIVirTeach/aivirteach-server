@@ -1,164 +1,187 @@
-# Console/RDP 远程桌面接入设计：桌面客户端直连 Labs VM
+# Console/RDP 远程桌面接入设计：浏览器内嵌 IronRDP + websockify 直连 Labs VM
 
 ## 背景
 
 [Workspace VM 编排设计](./2026-08-22-workspace-vm-orchestration-design.md)（"前半段"，`aivirteach-server` PR #8、`aivirteach-client` PR #3）已经实现：学员在 `/workspace` 页面触发 Labs 建 VM，通过 WebSocket 收到状态更新（`CREATING`/`RUNNING`/`ERROR`）。但那份设计明确排除了"学员怎么真正连上 VM 桌面"这件事，留到"后半段单独立项"。
 
-这份设计就是后半段：学员点一下，能在桌面客户端里看到、操作自己那台 VM 的真实图形界面。
+这份设计就是后半段：学员点一下，在同一个 `/workspace` 页面里直接看到、操作自己那台 VM 的真实图形界面——不需要安装任何东西。
+
+**这是对已批准过一版设计的替代，不是补充。** 此前有一版基于 Tauri（Rust + WebView）原生桌面客户端的设计（`aivirteach-client` 的 `vm_vlient` 分支）已经写完完整实现计划，讨论过程中出于"想要跨平台、这只是个快速 MVP"的考虑，改为纯浏览器方案。原生客户端方向作废，本文档取代之前的版本。
 
 ## 关键事实核对
 
 - VM 里跑的是 xrdp（`aivirteach-labs/libvirt/scripts/create-learner-vm.sh` 里 cloud-init 装的），RDP 是学员使用的主协议。
 - QEMU 层的 VNC（`vm-control.sh vnc`）只绑定 Labs 主机的 `127.0.0.1`，端口是 `5900+display号`，照出的是物理控制台画面，跟 xrdp 开的桌面会话不是同一个东西，只适合底层诊断，不适合作学员桌面入口。
-- RDP（VM 内部 3389 端口）只能从 Labs 主机通过 libvirt 的 NAT 网桥 `virbr0`（`192.168.122.0/24`）到达，外网/学员的电脑都够不着，必须有个东西从 Labs 主机内部转发出来。
-- `aivirteach-client` 仓库里已经有一个未合并的 `vm_vlient` 分支（无对应 PR），是一个 **Tauri（Rust + WebView）原生桌面应用 Demo**：Rust 用 `ironrdp` crate 直接建 RDP 会话、解码画面为 RGBA 帧，React 只负责把帧画到 `<canvas>`，键鼠事件原生转发。README 原话："界面不会生成或模拟远程桌面"。
-  - 现状：Windows-only（用 `ssh.exe`、Windows 凭据管理器存密码）；SSH 隧道写死连 `arclab@10.162.179.63` 这个跳板机，目标写死 `192.168.122.210:3389`。
-  - 但 `RdpRequest` 结构体（`src-tauri/src/lib.rs`）已经是参数化的（`bastion_host`/`bastion_user`/`target_host`/`target_port`/`rdp_username`/`rdp_password`/`rdp_domain` 等都是前端传参进 Rust），不是硬编码，改造成本主要在"参数从哪来"，不是重写 Rust 核心逻辑。
-- `aivirteach-labs` 的 `vm-control.sh credentials` 命令已经能读出 RDP 用户名密码（`GET /v1/vms/{lab_id}/credentials` 接口已存在），Labs 应用代码不需要为这次改动。
-- Cloudflare（2026 现状）：Tunnel 本身免费；Access 50 用户以内免费，超过 $7/用户/月——按 demo 规模，这次不涉及额外成本。`cloudflared access tcp`/`access rdp` 是官方支持的私有网络 TCP 转发功能（2025-10 起 Access 私有网络应用支持任意端口/协议，不是临时拼凑）。
-  - 已知风险：`cloudflared` 2026.6.0 有回归 bug，`access tcp`/`access ssh` 会忽略 service token 的免交互认证，退化成弹浏览器登录（[cloudflare/cloudflared#1673](https://github.com/cloudflare/cloudflared/issues/1673)），2026.5.1 版本正常。客户端捆绑的 `cloudflared` 必须锁定 2026.5.1。
-- Server 端已有"一次性、哈希存储"的 opaque token 模式可以直接复用：`prisma/schema.prisma` 的 `Invitation` 模型（`tokenHash String @unique`、`expiresAt`、`acceptedAt`）+ `src/auth/tokens.ts` 的 `generateOpaqueToken()`（32 字节随机数，base64url）/`hashOpaqueToken()`（SHA-256），`AuthService.acceptInvitation()` 是这个模式的参考实现。
+- RDP（VM 内部 3389 端口）只能从 Labs 主机通过 libvirt 的 NAT 网桥 `virbr0`（`192.168.122.0/24`）到达，外网/学员浏览器都够不着，必须有个东西从 Labs 主机内部转发出来——而且浏览器没法像原生客户端那样自己开 TCP socket，只能用 WebSocket。
+- **`ironrdp-web`**：IronRDP 项目（跟原来 `vm_vlient` 用的 `ironrdp` Rust crate 是同一套底层实现）官方维护的浏览器 WebAssembly 构建，Devolutions Gateway 的免费 Web 界面、Cloudflare 自家的浏览器 RDP 方案都是拿它做生产环境用的，不是实验性玩具。提供 RDP 连接、键鼠/滚轮输入、剪贴板同步，直接在浏览器里跑。浏览器本身无法开原始 TCP socket——需要一个 WebSocket↔TCP 的桥接层。
+- **`websockify`**：成熟的现成工具（最早给 noVNC 用的），负责 WS↔TCP 原始字节转发，跟具体协议无关。它的 `--token-plugin=TokenFile --token-source=<目录>` 模式支持"一个进程、按 token 动态路由到不同后端目标"——目录里每个文件名是一个 token，内容是 `<token>: <host>:<port>`，这正是 OpenStack Horizon/noVNC 给多 VM 控制台代理用的机制。用这个可以让一个 websockify 进程服务所有学员，不用给每个 VM 起一个转发进程。
+- `aivirteach-labs` 的 `vm-control.sh credentials` 命令已经能读出 RDP 用户名密码（`GET /v1/vms/{lab_id}/credentials` 接口已存在），字段名是 `password`（不是 `rdp_password`，那是创建接口响应里的字段名，容易搞混）。这次还需要给 Labs 加一个新接口，见下方"组件设计"。
+- Cloudflare Tunnel 本身免费，Labs 主机已经在用（见 [`docs/deployment/labs-cloudflare-tunnel.md`](../../deployment/labs-cloudflare-tunnel.md)）。这次只需要给 Tunnel 新增一条普通的 WSS 可用的 HTTP hostname 路由指到 `websockify` 监听的本地端口，**不需要** Cloudflare Access 私有网络应用、不需要 Access Service Token、不需要管 `cloudflared` 版本锁定——这些都是上一版 Tauri 设计里"客户端直连内网"才需要的机制，纯浏览器方案完全绕开了。
+- Server 端已有"生成随机不透明 token"的工具函数可以直接复用：`src/auth/tokens.ts` 的 `generateOpaqueToken()`（32 字节随机数，base64url）。这次不需要复用 `Invitation` 模型那套哈希存储模式——原因见下方"设计原则"。
 
 ## 不做的事（明确排除的范围）
 
-- **不用浏览器/Guacamole 方案**——明确要原生 Rust 客户端，不是网页里的远程桌面。这一点在讨论中反复确认过。
+- **不做原生桌面客户端**——`vm_vlient`/Tauri/Rust 方向已经作废，不再基于它继续开发。
+- **不搭 Guacamole**——它是成熟方案，但要自建 `guacd` C 守护进程、历史上常搭配 Tomcat/Java，长期维护成本比复用 `ironrdp-web`（跟原生方案同源）+ 现成 `websockify` 高，图形密集场景延迟也有文档记录的劣势。
+- **不引入 Cloudflare Access Service Token 层**——一次性 routing token 本身的高熵值 + Labs 主机现有 Cloudflare Tunnel（本来就不直接暴露在公网）被认为对 MVP 已经够用。
+- **不做严格的单次核销**——token 只在"生成"这一步保证唯一（`generateOpaqueToken()` 的随机性），但 `websockify` 的 `TokenFile` 层本身不支持"用过一次就失效"，靠 TTL 兜底（token 文件几分钟后被清理）。这意味着理论上同一个 token 在过期前可以被重复用来发起连接。MVP 范围内接受这个简化，已经跟用户确认过。
 - **不给学员开放 VM 生命周期控制**（重启/关机/强制重置）——这轮只做"看到、操作桌面"本身，出问题走诊断 agent 或人工介入。
-- **不做跨平台**（Mac/Linux）——继续跟 `vm_vlient` 现有 Demo 一样只做 Windows，这块后续如果要做是独立的后续工作。
-- **不给 Rust 客户端搭建自动化测试框架**——`ironrdp`/子进程这些本来就不好 mock，这轮按"demo 打通真实连接 + 完整下载安装体验"的范围来，用手动验证清单代替，这个处理方式跟前半段"Labs 真实网络这段测不了、写清楚靠人工过一遍"是同一个原则，不是双重标准。Server 侧新增接口仍然要写自动化测试。
 - **诊断 Agent（8770 端口）集成**——不在这轮范围，`labs-agent.<domain>` 仍然只是预留 hostname。
+- **跨平台适配不再是一个需要单独排除的问题**——浏览器方案天然跨平台，这条排除项随 Tauri 方向一起作废。
 
 ## 设计原则
 
-- **两层凭据，两种生命周期，都不硬编码进客户端安装包**：
-  - 短效层：一次性、绑定单个 workspaceId 的 handoff token，5 分钟有效期，用一次即废——解决"这次连接是不是这个学员本人发起的、要连他自己那台 VM"。
-  - 长效层：Cloudflare Access Service Token，月度轮换、集中管理——解决"这是不是我们认可的客户端 App 在敲门"这个网络层粗粒度门禁，不区分具体是哪个学员。
-  - 两者都在同一次 token 换取请求（见下方"数据流"）里由 server 现发给客户端，不写死在发布的安装包里——写死的密钥任何装了 App 的人都能反编译拿到，形同公开；运行时下发意味着轮换只需要改 server 配置，不需要重新发布客户端。
-- **`rdp_password` 绝不落库**：延续前半段 `labs-client.ts`"故意不读取、不透出 `rdp_password`"的原则——这次终于要用它的时候，也是现取现用现扔，只活在 Rust 进程内存里，断开连接就清除。
-- **复用现有代码模式，不重新发明**：一次性 token 直接复用 `Invitation` 模型 + `src/auth/tokens.ts` 的哈希存储模式，不额外造一套机制。
+- **单层短效 token，只做路由，不做身份验证**：学员点击按钮时的身份已经由 `/workspace` 页面现有的 JWT 会话验证过了，这次新增的一次性 token 唯一的作用是告诉 `websockify`"这个 WebSocket 连接该转发到哪台 VM"，不再需要像上一版 Tauri 设计那样用它去跨越浏览器到原生进程的信任边界。5 分钟有效期，绑定单个 workspaceId。
+- **不为一次性 routing token 建数据库表**——这是写这份文档时发现的、比上一版更简单的方案，主动指出来：上一版设计需要"发放 token → 之后另一次独立请求用 token 兑换"两步握手（因为要跨越浏览器到 Tauri 进程的边界），所以需要把 token 哈希存库，供第二次请求核对。这一版里，token 的生成、注册给 Labs、返回给浏览器全部发生在**同一个** HTTP 请求处理函数里，没有"之后另一次独立请求"这回事，落库查不到任何东西——所以不建 `ConsoleHandoff` 之类的 Prisma model，`generateOpaqueToken()` 生成完直接用，不落库。
+- **`rdp_password` 现取现用现扔**：延续前半段 `labs-client.ts`"故意不读取、不透出 `rdp_password`"的原则——这次用到它时，服务端现问 Labs 现要，直接透传给浏览器响应，不落库、不记日志。终点从原生进程内存变成浏览器 JS 内存，只在 `ironrdp-web` 握手那一下用一次；跟原生进程比，浏览器没法"主动清零内存"，这是纯浏览器方案的固有取舍，不是本设计能解决的问题，明确记录在这里而不是假装没有。
+- **复用现成工具，不重新发明**：`websockify` 做 WS↔TCP 转发，`ironrdp-web` 做 RDP 协议和渲染，都是别人已经做好、验证过的东西；新写的代码只是"服务端一个接口 + Labs 一个接口 + 网页里嵌一个组件"这三块胶水。
 
 ## 架构
 
+**阶段一：学员点击按钮，服务端准备连接**
+
 ```
-┌─────────────────┐         ┌──────────────────────┐         ┌──────────────────────┐
-│  /workspace 网页  │         │   aivirteach-server   │         │    aivirteach-labs    │
-│  (Next.js, 已有)  │         │   (NestJS, Vercel)     │         │  (FastAPI + libvirt)  │
-│                  │ ①点击    │                        │         │                       │
-│  "启动客户端"按钮  │────────>│  POST .../console-token│         │                       │
-│                  │ ②token  │  (发一次性 token)        │         │                       │
-│                  │<────────│                        │         │                       │
-│  触发 deep link   │         │                        │         │                       │
-└────────┬─────────┘         │  POST /workspaces/      │         │  GET /v1/vms/{id}/    │
-         │ ③ aivirteach-      │    console-session      │  ⑤现取   │    credentials         │
-         │   console://       │  (换真实连接信息，        │────────>│                       │
-         │   connect?token=…  │   token 立即失效)        │<────────│  (rdp_password 等)    │
-         ▼                   └───────────┬────────────┘         └──────────────────────┘
-┌──────────────────┐                     │ ⑥返回 ip/rdpPort/
-│ vm_vlient 桌面客户端│<────────────────────┘   rdpUsername/rdpPassword/
-│  (Tauri + Rust)   │  ④调用 console-session   cfAccessClientId/Secret
-│                   │
-│  cloudflared       │  ⑦ Access 私有网络 TCP 隧道（长效层门禁）
-│  access tcp/rdp   │─────────────────────────────────┐
-│  (锁定 2026.5.1)   │                                  ▼
-│                   │                        ┌──────────────────────┐
-│  ironrdp 建 RDP    │  ⑧ RDP（短效层密码）       │   labs-console.<domain>│
-│  会话，原生渲染      │─────────────────────────>│   → Labs 主机内网 VM   │
-└──────────────────┘                          └──────────────────────┘
+┌────────────────────┐     ①POST /workspaces/:id/     ┌────────────────────────┐
+│    /workspace 网页    │        console-session          │     aivirteach-server    │
+│  (Next.js，已有 JWT    │────────────────────────────────>│     (NestJS, Vercel)     │
+│   会话，PR #3)         │                                 │                          │
+│                     │                                 │  校验 owner + status     │
+│                     │                                 │  = RUNNING               │
+│                     │                                 │  生成一次性 token         │
+│                     │                                 │  (generateOpaqueToken)   │
+│                     │                                 └────────────┬─────────────┘
+│                     │                                              │
+│                     │                          ②POST /v1/vms/{id}/console-token
+│                     │                            {token, ttlSeconds}
+│                     │                                              ▼
+│                     │                                 ┌────────────────────────┐
+│                     │                          ③GET /v1/vms/{id}/  aivirteach-labs │
+│                     │                            credentials       (FastAPI)     │
+│                     │                                 │  写 websockify           │
+│                     │                                 │  TokenFile 条目           │
+│                     │                                 │  (顺带清理过期文件)        │
+│                     │                                 └────────────┬─────────────┘
+│  ④拿到 wsUrl/         │<────────────────────────────────────────────┘
+│    rdpUsername/      │
+│    rdpPassword       │
+└──────────┬──────────┘
+```
+
+**阶段二：浏览器直接建立 RDP 会话**
+
+```
+┌────────────────────┐   ⑤WebSocket 连接    ┌──────────────────────┐   ⑦查 TokenFile   ┌──────────────────┐
+│  ironrdp-web (WASM)  │  wss://labs-console. │      websockify        │   找到目标 ip:port  │  Labs 主机内网 VM   │
+│  组件，嵌在 /workspace │  <domain>/?token=…   │  (TokenFile 插件)       │────────────────>│  192.168.122.x:3389│
+│  页面里               │──────────────────────>│  监听在 Labs 主机本地端口 │<────────────────│  (xrdp)            │
+│                     │                       │  通过 Cloudflare       │   ⑧RDP 协议数据    └──────────────────┘
+│  ⑥完成 RDP 握手,       │<──────────────────────│  Tunnel 暴露            │   (WS 包裹)
+│    渲染桌面到 canvas,   │   RDP 数据 (WS 包裹)   └──────────────────────┘
+│    键鼠/剪贴板转发       │
+└────────────────────┘
 ```
 
 ## 组件设计
 
 ### Server：`aivirteach-server`
 
-**Prisma schema 新增**（镜像 `Invitation` 模型的模式）：
+**不新增 Prisma model**（原因见"设计原则"）。
 
-```prisma
-model ConsoleHandoff {
-  id          String    @id @default(cuid())
-  workspaceId String
-  workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
-  tokenHash   String    @unique
-  expiresAt   DateTime
-  redeemedAt  DateTime?
-  createdAt   DateTime  @default(now())
-
-  @@index([workspaceId])
-}
-```
-
-`Workspace` 模型加一行反向关系 `consoleHandoffs ConsoleHandoff[]`。
-
-**`src/workspace/labs-client.ts` 新增方法**：
+**`src/workspace/labs-client.ts` 新增两个方法**：
 
 ```typescript
 export type VmCredentials = {
   rdpUsername: string;
   rdpPassword: string;
-  rdpPort: number;
 };
 
 async getCredentials(labId: string): Promise<VmCredentials> {
   // 同 createVm：缺配置抛 ServiceUnavailableException，非 2xx 抛格式化 Error
   // GET `${LABS_VM_BASE_URL}/v1/vms/${labId}/credentials`，带同样的 Authorization + CF-Access 头
 }
+
+async registerConsoleToken(labId: string, token: string, ttlSeconds: number): Promise<void> {
+  // POST `${LABS_VM_BASE_URL}/v1/vms/${labId}/console-token`
+  // body: { token, ttlSeconds }
+  // 非 2xx 抛格式化 Error，跟 createVm/getCredentials 同一套错误处理风格
+}
 ```
 
-**`src/workspace/workspace.controller.ts` 新增两个接口**：
+**`src/workspace/workspace.controller.ts` 新增一个接口**：
 
-- `POST /workspaces/:enrollmentId/console-token`：校验调用者是该 enrollment 的 owner 且 `workspace.status === RUNNING`，生成 `generateOpaqueToken()`，存 `hashOpaqueToken()` 后的值 + 5 分钟后的 `expiresAt`，返回原始 token（明文只在这一次响应里出现，之后只存哈希）。
-- `POST /workspaces/console-session`：body 带 `token`。查 `ConsoleHandoff`，校验存在、未过期、未被兑换（`redeemedAt === null`）；**原子标记已兑换**（`updateMany({ where: { id, redeemedAt: null }, data: { redeemedAt: new Date() } })`，用受影响行数判断竞态，不能"先查后写"）；重新查一次当前 `workspace.status`，非 `RUNNING` 就拒绝；调 `LabsClient.getCredentials()` 现取密码；从 `ENV` 读取新增的 Access Service Token 环境变量；组装并返回连接信息。
+- `POST /workspaces/:enrollmentId/console-session`：走现有的 class-level `JwtAuthGuard`（不像上一版 Tauri 设计那样需要单独放开鉴权——调用方就是已登录学员本人的浏览器）。校验调用者是该 enrollment 的 owner 且 `workspace.status === RUNNING`；生成一次性 token（`generateOpaqueToken()`，不落库）；调 `LabsClient.registerConsoleToken()` 把 token 和 5 分钟 TTL 登记给 Labs；调 `LabsClient.getCredentials()` 现取用户名密码；组装返回：
 
-**`src/config/env.ts` 新增环境变量**：`CF_ACCESS_CONSOLE_CLIENT_ID`、`CF_ACCESS_CONSOLE_CLIENT_SECRET`（学员客户端用的 Access Service Token，跟现有 `CF_ACCESS_CLIENT_ID`/`SECRET`——server 调 Labs VM Manager API 用的那对——是两个不同用途的凭据，分开配置、分开轮换）。
+```typescript
+type ConsoleSessionResponse = {
+  wsUrl: string; // `${LABS_CONSOLE_WS_URL}/?token=${token}`
+  rdpUsername: string;
+  rdpPassword: string;
+  expiresAt: string; // ISO 时间戳，纯展示用（"链接 5 分钟后过期"提示）
+};
+```
 
-### Client：`aivirteach-client` 的 `vm_vlient` 分支（在此分支基础上继续加，暂无 PR，做完后新开一个）
+**`src/config/env.ts` 新增环境变量**：`LABS_CONSOLE_WS_URL`（`websockify` 对外的 wss:// 基础地址，比如 `wss://labs-console.<domain>`，跟现有 `LABS_VM_BASE_URL`——那个是 VM Manager HTTP API 的地址——是两个不同用途的配置）。不需要新增任何 Cloudflare Access 相关的环境变量（上一版的 `CF_ACCESS_CONSOLE_CLIENT_ID`/`SECRET` 整个作废）。
 
-- 注册自定义协议 `aivirteach-console://`（Tauri deep link 插件），处理 `connect?token=…`。
-- 客户端启动/唤醒后，用 token 调 `POST /workspaces/console-session`，拿到的 `ip`/`rdpPort`/`rdpUsername`/`rdpPassword`/`cfAccessClientId`/`cfAccessClientSecret` 填进现有的 `RdpRequest` 结构（字段基本能直接对上，`bastion_host`/`bastion_user` 这两个 SSH 专属字段换成 `cloudflared access tcp` 需要的目标 hostname + Access 凭据）。
-- 现有"先起子进程开本地端口转发，再让 `ironrdp` 连本地端口"的结构不变，只是子进程从 `ssh.exe` 换成捆绑的 `cloudflared access tcp`（锁定 2026.5.1）。
-- 网页侧（`app/workspace/page.tsx`，已实现的部分）加"启动客户端"按钮：调 `console-token`，触发 deep link；做"客户端未安装"的检测兜底（触发后几秒内页面仍可见/未失焦，判定唤起失败，切换成下载引导）。
+### Client：`aivirteach-client` 的 `feat/workspace-vm-orchestration`（PR #3）
+
+- 新增一个客户端组件（比如 `app/workspace/console-viewer.tsx`），封装 `ironrdp-web` 的浏览器 Web 组件（IronRDP 官方维护，具体 npm 包名/引入方式作为实现计划的第一个任务去调研+验证，见"测试"一节的 spike 任务——这是本设计里唯一没有先例验证过的集成点，其余部分都是复用有文档、有实际生产案例的现成组件）。
+- 这个组件必须是纯客户端组件（`"use client"`，只在 `useEffect`/事件回调里碰 `window`/`WebAssembly`），因为 `aivirteach-client` 用 `vinext`/`wrangler`/`@cloudflare/vite-plugin` 的 Cloudflare Workers 风格构建——WASM 模块不能在 SSR/Workers 运行时那一侧被执行，只能在浏览器 hydrate 之后跑。
+- 组件 props：`wsUrl`、`rdpUsername`、`rdpPassword`；内部行为：建立 WebSocket 连接、完成 RDP 握手、把画面渲染到内部 `<canvas>`、转发键鼠/滚轮/剪贴板事件；对外暴露 `onConnect`/`onError`/`onDisconnect` 回调，方便页面展示对应状态。
+- `app/workspace/page.tsx`（已实现的部分）加"启动远程桌面"按钮：调 `console-session`，拿到响应后把 `console-viewer` 组件渲染出来（比如展开一个面板/modal），不再有 deep link、不再需要"客户端未安装"检测这类逻辑——这是纯浏览器方案省掉的一整类复杂度。
 
 ### Labs：`aivirteach-labs`
 
-应用代码不需要改动。需要的是主机上的 Cloudflare Tunnel 配置变更（运维工作，见下方"部署清单更新"）。
+**`libvirt/scripts/vm-control.sh` 新增一个子命令**（跟现有 `credentials`/`ip`/`vnc` 子命令并列）：
+
+- `register-console-token <lab_id> <token> <ttl_seconds>`：先清理 token 目录里 mtime 超过 TTL 的旧文件（`find <目录> -mmin +5 -delete` 这类逻辑），再查出这台 VM 的内网 IP 和 RDP 端口（复用现有查 IP/查 credentials 的逻辑），写一个新文件到 `websockify` 的 `TokenFile` 目录：`<token>: <internal_ip>:<rdp_port>`。这样清理逻辑跟着每次注册顺带执行，不需要额外配一个 cron。
+
+**`service.py` 新增一个路由**：
+
+- `POST /v1/vms/{lab_id}/console-token`：解析 body 里的 `token`/`ttlSeconds`，调用上面的 `vm-control.sh register-console-token`，跟现有路由一样的鉴权方式（Authorization + CF-Access 头）。
+
+**运维新增**（不是应用代码，属于部署清单范畴）：`websockify` 作为一个服务跑在 Labs 主机上（比如 `systemd` 管理），带 `--token-plugin=TokenFile --token-source=<目录>` 参数监听本地端口；Cloudflare Tunnel 新增一条普通 WSS hostname 路由（`labs-console.<domain>` → `http://localhost:<websockify端口>`），不是 Access 私有网络应用。具体启动参数、目录权限留到实现阶段验证。
 
 ## 数据流（创建连接的完整时序）
 
-1. `t=0`：学员点击 `/workspace` 上的"启动客户端"（前提 `workspace.status === RUNNING`）。
-2. Server 签发一次性 token（5 分钟有效期，绑定这一个 workspaceId，尚未兑换）。
-3. 浏览器触发 deep link：`aivirteach-console://connect?token=…`。
-4. OS 弹出"是否打开 XX 客户端？"，学员确认；未安装客户端时这一步不会触发，网页要有兜底检测。
-5. 客户端启动/唤醒，捕获 URL 里的 token。
-6. 客户端拿 token 调 `console-session`；server 校验通过的瞬间原子标记该 token 已兑换，不能再用第二次。
-7. Server 重新校验 workspace 当前状态仍是 `RUNNING`，现取 `rdp_password`（问 Labs 的 `/v1/vms/{lab_id}/credentials`，不落库），连同 Access Service Token 一起返回。
-8. 客户端用 Access Service Token 过 `cloudflared access tcp/rdp` 的网络门禁（长效层），用第 7 步的一次性密码建立 RDP 会话（`ironrdp`，原生渲染）。
-9. 断开连接：密码从 Rust 进程内存清除（除非学员主动勾选"记住密码"写入系统凭据管理器），关闭 `cloudflared` 子进程。
+1. `t=0`：学员在 `/workspace` 页面点击"启动远程桌面"（前提 `workspace.status === RUNNING`，页面已有这个状态）。
+2. 浏览器带着现有 JWT 会话调 `POST /workspaces/:enrollmentId/console-session`。
+3. Server 校验 owner + status，生成一次性 token（不落库）。
+4. Server 调 Labs 的 `console-token` 接口登记 token→目标 VM 的映射（顺带清理旧 token 文件）。
+5. Server 调 Labs 的 `credentials` 接口现取 `rdpUsername`/`rdpPassword`。
+6. Server 把 `{ wsUrl, rdpUsername, rdpPassword, expiresAt }` 返回给浏览器。
+7. 浏览器渲染出 `ironrdp-web` 组件，用 `wsUrl` 建立 WebSocket 连接。
+8. `websockify` 收到连接，查 `TokenFile` 找到 token 对应的目标 `ip:port`，建立到 VM 内网 RDP 端口的 TCP 连接，开始双向转发字节。
+9. `ironrdp-web` 在这条 WebSocket 上完成 RDP 协议握手（用第 6 步拿到的用户名密码），开始渲染桌面画面、转发键鼠/剪贴板。
+10. 学员关闭页面/离开：浏览器原生关闭 WebSocket 连接，`websockify` 检测到连接断开后关闭对应的后端 TCP 连接，不需要任何额外清理代码。
 
 ## 错误处理
 
-1. **客户端未安装**：deep link 未注册协议处理器，浏览器无明确反馈。网页侧检测超时/失焦，失败则展示下载引导。
-2. **Token 过期或已被兑换**：`console-session` 返回明确的 401/410，客户端展示"链接已过期，请回网页重新点击"。
-3. **VM 状态在换 token 期间变化**（点击时 RUNNING，兑换时已 ERROR/被删）：`console-session` 重新查一次当前状态，不信 token 里的旧状态，非 RUNNING 就拒绝并返回对应错误。
-4. **Labs 现取 `rdp_password` 失败**（Labs 挂了、凭据文件不存在）：显式返回 502/503，绝不能返回空密码让客户端拿着空密码硬连。
-5. **一次性 token 的重放竞态**：用 `updateMany` + 受影响行数判断而非"先查后写"，保证并发请求下只有一次成功。
-6. **`cloudflared` 子进程起不来 / Access 认证被拒**：新增的第三类错误（网络/门禁层），要跟现有 Demo 已经区分好的 SSH 层错误、RDP 层错误分开展示，不能混在一起让学员分不清是网络问题还是密码问题。
-7. **RDP 握手本身失败**：沿用现有 Demo 的处理（展示 RDP 返回的真实错误，不回退到假画面）。
-8. **断开/退出时的清理**：内存密码清除、关闭 `cloudflared` 子进程和 RDP 会话，不留后台残留——Demo 已处理，照搬。
+1. **workspace 状态不是 RUNNING**：`console-session` 直接返回 409，不生成 token、不调 Labs，浏览器展示"VM 还没准备好"。
+2. **Labs 登记 token 失败**（Labs 挂了、VM 已被删除）：显式返回 502/503，绝不能返回一个实际没登记成功的 `wsUrl`。
+3. **Labs 现取密码失败**：同上，502/503，绝不能返回空密码让浏览器拿着空密码硬连。
+4. **WebSocket/TCP 层连不上**（`websockify` 没在跑、Tunnel 路由配错、token 文件已经被 TTL 清理掉）：这是浏览器建立 WS 连接这一步的失败，跟"RDP 握手失败"分开展示——前者提示"无法连接远程桌面服务，请重试"，后者是下面第 5 条。
+5. **RDP 握手本身失败**（凭据错、xrdp 没就绪）：展示 `ironrdp-web` 报的真实错误，不回退到假画面、不吞掉错误。
+6. **页面关闭/离开**：浏览器原生关闭 WebSocket，`websockify` 端跟着关闭到 VM 的 TCP 连接——不需要额外清理逻辑，比原生客户端方案简单（不用管子进程残留）。
+7. **token 在 TTL 内被重复使用**：已在"不做的事"里明确记录为 MVP 范围内接受的简化，不是需要设计防御的错误场景。
 
 ## 测试
 
-- **Server**：`console-token`/`console-session` 两个接口按现有 `workspace.controller.spec.ts`/`workspace.service.spec.ts` 的写法补单元/集成测试，重点覆盖错误处理里的第 2/3/4/5 条（token 过期、状态重新校验、Labs 凭据获取失败、并发重放）。
-- **Client（Rust/Tauri）**：不搭建自动化测试框架（见"不做的事"）。改为手动验证清单：
-  - [ ] 客户端已安装：网页点击 → 弹出确认框 → 拉起客户端 → 自动连上、看到真实桌面
-  - [ ] 客户端未安装：网页点击 → 检测到未拉起 → 展示下载引导
-  - [ ] Token 过期后才点确认框：客户端展示明确的"链接已过期"错误
-  - [ ] VM 在换 token 期间被删除/出错：客户端展示对应错误，不是空白或卡死
-  - [ ] 断开连接后，任务管理器里没有残留的 `cloudflared`/RDP 相关进程
+- **Server**：`console-session` 接口按现有 `workspace.controller.spec.ts`/`workspace.service.spec.ts` 的写法（mock `LabsClient` 各方法）补单元/集成测试，重点覆盖错误处理里的第 1/2/3 条（状态校验、Labs 登记失败、Labs 取密码失败）。
+- **Labs**：`register-console-token` 子命令 + 新路由，参照 Labs 仓库现有的测试方式（具体写法留到写实现计划时核对，这个仓库的测试规范还没有仔细看过）。
+- **浏览器 `ironrdp-web` 集成**：跟真实 RDP 连接一样没法很好 mock，用手动验证清单，比原生客户端那版短（不用测安装检测、不用测残留进程）：
+  - [ ] VM 是 RUNNING 时点击"启动远程桌面" → 几秒内看到真实桌面画面 → 可以用键鼠操作、剪贴板同步正常
+  - [ ] VM 不是 RUNNING 时点击 → 展示"VM 还没准备好"，不发起任何连接
+  - [ ] `websockify` 没起/Tunnel 路由配错 → 展示"无法连接远程桌面服务"，不是卡死转圈
+  - [ ] 关闭/离开页面 → 浏览器原生关闭连接，Labs 主机上 `websockify` 到 VM 的连接跟着断开
+
+**第一优先级任务：spike 验证 `ironrdp-web` + `websockify` 组合可行**——这两个各自都是有生产案例的成熟工具，但"`ironrdp-web` 通过 `websockify` 转发连真实 xrdp"这个组合没有查到已知先例。在写周边的服务端/Labs 接口之前，先花一个任务把最小可行路径跑通：本地/测试环境起一个 `websockify`，配一条手工写的 `TokenFile` 记录指向一台跑 xrdp 的机器，浏览器里跑 `ironrdp-web` 连上去，能看到真实桌面画面。如果这一步跑不通，整个方案需要重新评估，所以必须在其余任务之前做。
 
 ## 部署清单更新
 
-这份设计落地后，需要把 [`docs/deployment/labs-cloudflare-tunnel.md`](../../deployment/labs-cloudflare-tunnel.md) 里"明确不在这份清单范围内"一节中"Console/VNC 直连 Labs（Guacamole 网关）——单独立项……这次不需要建对应的 Access Application"这句话删掉，换成实际生效的配置：
+这份设计落地后，需要更新 [`docs/deployment/labs-cloudflare-tunnel.md`](../../deployment/labs-cloudflare-tunnel.md)：
 
-- `labs-console.<domain>` 从"占位保留"变成真正生效的 **Cloudflare Access 私有网络应用**（TCP/RDP，不是 HTTP hostname 路由），指向 Labs 主机内部的 VM 网段。
-- 新建一对**学员客户端专用**的 Access Service Token（对应 server 端新增的 `CF_ACCESS_CONSOLE_CLIENT_ID`/`SECRET`），跟 server 调 Labs VM Manager API 用的那对 Service Token 分开建、分开轮换。
-- 明确提醒：Labs 主机和客户端捆绑的 `cloudflared` 都必须锁定 **2026.5.1**，不能跟随最新版（2026.6.0 的 service token 回归 bug，见"关键事实核对"）。
+- `labs-console.<domain>` 从"占位保留"变成真正生效的 Cloudflare Tunnel **普通 HTTP(S)/WSS hostname 路由**（不是 Access 私有网络应用），指向 Labs 主机本地的 `websockify` 端口。
+- 新增 `websockify` 服务的部署步骤（安装、`systemd` 配置、`TokenFile` 目录、启动参数）。
+- 删除上一版遗留的"需要锁定 `cloudflared` 2026.5.1""需要 Access Service Token"相关内容——这些是原生客户端直连方案才需要的，纯浏览器方案不涉及。
 
 这次不在这份设计文档里直接改那份部署清单，等实现阶段验证过配置确实可行后再更新，避免文档记的是"计划"而不是"验证过的事实"。
