@@ -10,6 +10,7 @@ import { HealthModule } from './health/health.module';
 import { CoursesModule } from './courses/courses.module';
 import { EnrollmentsModule } from './enrollments/enrollments.module';
 import { DashboardModule } from './dashboard/dashboard.module';
+import { WorkspaceModule } from './workspace/workspace.module';
 
 @Module({
   imports: [
@@ -22,6 +23,7 @@ import { DashboardModule } from './dashboard/dashboard.module';
     CoursesModule,
     EnrollmentsModule,
     DashboardModule,
+    WorkspaceModule,
   ],
   controllers: [AppController],
   providers: [AppService],

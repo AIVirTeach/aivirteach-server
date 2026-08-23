@@ -1,11 +1,13 @@
 import 'dotenv/config';
 import { NestFactory } from '@nestjs/core';
+import { WsAdapter } from '@nestjs/platform-ws';
 import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
 import { AppModule } from './app.module';
 import { ENV, type Env } from './config/env';
 
 async function bootstrap() {
   const app = await NestFactory.create(AppModule);
+  app.useWebSocketAdapter(new WsAdapter(app));
   // process.env 在这里读到的是未校验的原始值；ENV 是 ConfigModule 在启动期
   // 校验过的唯一可信来源，两处都读会导致默认值各写各的、彼此不同步。
   const env = app.get<Env>(ENV);
