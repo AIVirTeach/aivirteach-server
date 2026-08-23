@@ -632,6 +632,25 @@ describe('WorkspaceService.createConsoleSession', () => {
     expect(labsClient.getCredentials).not.toHaveBeenCalled();
   });
 
+  it('LABS_CONSOLE_WS_URL 未配置时抛出 ServiceUnavailableException，不调用 Labs', async () => {
+    const labsClient = buildLabsClient();
+    const { service, prisma } = await buildService({ labsClient, env: { LABS_CONSOLE_WS_URL: undefined } });
+    prisma.enrollment.findUnique.mockResolvedValue(ENROLLMENT);
+    prisma.workspace.findUnique.mockResolvedValue({
+      id: 'ws_1',
+      enrollmentId: 'enr_1',
+      status: WorkspaceStatus.RUNNING,
+      labId: 'ws_1',
+      rdpUsername: 'learner',
+    });
+
+    await expect(service.createConsoleSession('user_1', 'enr_1')).rejects.toBeInstanceOf(
+      ServiceUnavailableException,
+    );
+    expect(labsClient.registerConsoleToken).not.toHaveBeenCalled();
+    expect(labsClient.getCredentials).not.toHaveBeenCalled();
+  });
+
   it('Labs 登记 token 失败时抛出 BadGatewayException，不透出内部错误信息', async () => {
     const labsClient = buildLabsClient();
     labsClient.registerConsoleToken.mockRejectedValue(new Error('Labs 登记 console token 失败（502）：boom'));
@@ -691,7 +710,7 @@ describe('WorkspaceService.createConsoleSession', () => {
 });
 ```
 
-这个测试需要 `buildService` helper 提供 `ENV`——检查 `src/workspace/workspace.service.spec.ts` 顶部的 `buildService` 函数，加一个默认 provider `{ provide: ENV, useValue: { LABS_CONSOLE_WS_URL: 'wss://labs-console.test' } }`（跟 `PrismaService`/`AuditService` 等其它 provider 同样的 `overrides` 模式），文件顶部 import 里加 `ENV`、`BadGatewayException`。
+这个测试需要 `buildService` helper 支持按测试用例覆盖 `ENV`（不能只给一个写死的默认值，因为上面新加的用例需要把 `LABS_CONSOLE_WS_URL` 显式覆盖成 `undefined`）——检查 `src/workspace/workspace.service.spec.ts` 顶部的 `buildService` 函数，给它的 `overrides` 参数类型加一个 `env?: Partial<Env>` 字段，provider 改成 `{ provide: ENV, useValue: { LABS_CONSOLE_WS_URL: 'wss://labs-console.test', ...overrides.env } }`（默认给一个可用值，跟 `labsClient`/`gateway`/`audit` 同样的 override 模式；`{ env: { LABS_CONSOLE_WS_URL: undefined } }` 这样传就能覆盖掉默认值），文件顶部 import 里加 `ENV`、`BadGatewayException`、`ServiceUnavailableException`。
 
 - [ ] **Step 2：跑测试确认失败**
 
@@ -712,6 +731,7 @@ import {
   Inject,
   Injectable,
   NotFoundException,
+  ServiceUnavailableException,
 } from '@nestjs/common';
 import { ENV, type Env } from '../config/env';
 import { generateOpaqueToken } from '../auth/tokens';
@@ -733,6 +753,10 @@ import { generateOpaqueToken } from '../auth/tokens';
 
 ```typescript
   async createConsoleSession(userId: string, enrollmentId: string): Promise<ConsoleSessionResult> {
+    if (!this.env.LABS_CONSOLE_WS_URL) {
+      throw new ServiceUnavailableException('远程桌面服务未配置：缺少 LABS_CONSOLE_WS_URL');
+    }
+
     const enrollment = await this.requireOwnedEnrollment(userId, enrollmentId);
     const workspace = await this.prisma.workspace.findUnique({ where: { enrollmentId: enrollment.id } });
     if (!workspace) throw new NotFoundException('没有找到这个课程的工作区');

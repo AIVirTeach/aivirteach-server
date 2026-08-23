@@ -91,13 +91,13 @@
 
 ```typescript
 export type VmCredentials = {
-  rdpUsername: string;
-  rdpPassword: string;
+  password: string;
 };
 
 async getCredentials(labId: string): Promise<VmCredentials> {
   // 同 createVm：缺配置抛 ServiceUnavailableException，非 2xx 抛格式化 Error
   // GET `${LABS_VM_BASE_URL}/v1/vms/${labId}/credentials`，带同样的 Authorization + CF-Access 头
+  // 只透出 password 字段——rdpUsername 已经在 provisionInBackground 时存进 Workspace 表了，这里不用再问 Labs 要一次
 }
 
 async registerConsoleToken(labId: string, token: string, ttlSeconds: number): Promise<void> {
