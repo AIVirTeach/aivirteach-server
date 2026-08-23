@@ -33,4 +33,25 @@ describe('WorkspaceController', () => {
     });
     expect(service.create).toHaveBeenCalledWith('user_1', 'enr_1');
   });
+
+  it('POST :enrollmentId/console-session 用认证用户的 userId 调用 service.createConsoleSession', async () => {
+    const service = {
+      createConsoleSession: jest.fn().mockResolvedValue({
+        wsUrl: 'wss://labs-console.test/?token=abc',
+        rdpUsername: 'learner',
+        rdpPassword: 'secret',
+        expiresAt: '2026-08-24T00:05:00.000Z',
+      }),
+    };
+    const moduleRef = await Test.createTestingModule({
+      controllers: [WorkspaceController],
+      providers: [{ provide: WorkspaceService, useValue: service }, JWT_AUTH_GUARD_STUB],
+    }).compile();
+    const controller = moduleRef.get(WorkspaceController);
+
+    const result = await controller.createConsoleSession('enr_1', AUTH_REQUEST as any);
+
+    expect(result.wsUrl).toBe('wss://labs-console.test/?token=abc');
+    expect(service.createConsoleSession).toHaveBeenCalledWith('user_1', 'enr_1');
+  });
 });

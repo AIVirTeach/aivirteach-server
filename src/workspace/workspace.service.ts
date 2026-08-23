@@ -1,12 +1,30 @@
-import { ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
+import {
+  BadGatewayException,
+  ConflictException,
+  ForbiddenException,
+  Inject,
+  Injectable,
+  NotFoundException,
+  ServiceUnavailableException,
+} from '@nestjs/common';
 import { AuditActorType, WorkspaceStatus, type Workspace } from '@prisma/client';
 import { waitUntil } from '@vercel/functions';
 import { PrismaService } from '../prisma/prisma.service';
 import { AuditService } from '../audit/audit.service';
+import { ENV, type Env } from '../config/env';
+import { generateOpaqueToken } from '../auth/tokens';
 import { LabsClient } from './labs-client';
 import { WorkspaceGateway } from './workspace.gateway';
 
 const STALE_CREATING_MS = 5 * 60 * 1000;
+const CONSOLE_TOKEN_TTL_SECONDS = 300;
+
+export type ConsoleSessionResult = {
+  wsUrl: string;
+  rdpUsername: string;
+  rdpPassword: string;
+  expiresAt: string;
+};
 
 @Injectable()
 export class WorkspaceService {
@@ -15,6 +33,7 @@ export class WorkspaceService {
     private readonly audit: AuditService,
     private readonly labsClient: LabsClient,
     private readonly gateway: WorkspaceGateway,
+    @Inject(ENV) private readonly env: Env,
   ) {}
 
   async getForEnrollment(userId: string, enrollmentId: string): Promise<Workspace> {
@@ -29,6 +48,47 @@ export class WorkspaceService {
       });
     }
     return workspace;
+  }
+
+  async createConsoleSession(userId: string, enrollmentId: string): Promise<ConsoleSessionResult> {
+    if (!this.env.LABS_CONSOLE_WS_URL) {
+      throw new ServiceUnavailableException('远程桌面服务未配置：缺少 LABS_CONSOLE_WS_URL');
+    }
+
+    const enrollment = await this.requireOwnedEnrollment(userId, enrollmentId);
+    const workspace = await this.prisma.workspace.findUnique({ where: { enrollmentId: enrollment.id } });
+    if (!workspace) throw new NotFoundException('没有找到这个课程的工作区');
+    if (workspace.status !== WorkspaceStatus.RUNNING) {
+      throw new ConflictException('工作区还没准备好，请稍后再试');
+    }
+
+    // status === RUNNING 时 labId/rdpUsername 一定有值——两者在 provisionInBackground 里
+    // 跟 status 更新是同一次 prisma.workspace.update() 调用，不会出现「RUNNING 但缺字段」的状态。
+    const token = generateOpaqueToken();
+    const ttlSeconds = CONSOLE_TOKEN_TTL_SECONDS;
+    let credentialsPassword: string;
+    try {
+      await this.labsClient.registerConsoleToken(workspace.labId!, token, ttlSeconds);
+      credentialsPassword = (await this.labsClient.getCredentials(workspace.labId!)).password;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : '未知错误';
+      throw new BadGatewayException(`无法连接远程桌面服务：${message}`);
+    }
+
+    await this.audit.record({
+      actor: { type: AuditActorType.USER, id: userId },
+      action: 'workspace.console-session',
+      success: true,
+      targetType: 'Workspace',
+      targetId: workspace.id,
+    });
+
+    return {
+      wsUrl: `${this.env.LABS_CONSOLE_WS_URL}/?token=${token}`,
+      rdpUsername: workspace.rdpUsername!,
+      rdpPassword: credentialsPassword,
+      expiresAt: new Date(Date.now() + ttlSeconds * 1000).toISOString(),
+    };
   }
 
   async create(userId: string, enrollmentId: string): Promise<Workspace> {

@@ -1,8 +1,15 @@
-import { ForbiddenException, NotFoundException } from '@nestjs/common';
+import {
+  BadGatewayException,
+  ConflictException,
+  ForbiddenException,
+  NotFoundException,
+  ServiceUnavailableException,
+} from '@nestjs/common';
 import { Test } from '@nestjs/testing';
 import { WorkspaceStatus } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { AuditService } from '../audit/audit.service';
+import { ENV, type Env } from '../config/env';
 import { LabsClient } from './labs-client';
 import { WorkspaceGateway } from './workspace.gateway';
 import { WorkspaceService } from './workspace.service';
@@ -15,7 +22,13 @@ function buildPrisma() {
 }
 
 async function buildService(
-  overrides: { prisma?: ReturnType<typeof buildPrisma>; labsClient?: any; gateway?: any; audit?: any } = {},
+  overrides: {
+    prisma?: ReturnType<typeof buildPrisma>;
+    labsClient?: any;
+    gateway?: any;
+    audit?: any;
+    env?: Partial<Env>;
+  } = {},
 ) {
   const prisma = overrides.prisma ?? buildPrisma();
   const labsClient = overrides.labsClient ?? { createVm: jest.fn() };
@@ -29,6 +42,7 @@ async function buildService(
       { provide: AuditService, useValue: audit },
       { provide: LabsClient, useValue: labsClient },
       { provide: WorkspaceGateway, useValue: gateway },
+      { provide: ENV, useValue: { LABS_CONSOLE_WS_URL: 'wss://labs-console.test', ...overrides.env } },
     ],
   }).compile();
   return { service: moduleRef.get(WorkspaceService), prisma, labsClient, gateway, audit };
@@ -166,5 +180,121 @@ describe('WorkspaceService.provisionInBackground', () => {
       expect.objectContaining({ action: 'workspace.create', success: false, targetId: 'ws_1' }),
     );
     expect(gateway.broadcastStatus).toHaveBeenCalledWith(updated);
+  });
+});
+
+describe('WorkspaceService.createConsoleSession', () => {
+  function buildLabsClient() {
+    return {
+      createVm: jest.fn(),
+      getCredentials: jest.fn().mockResolvedValue({ password: 'secret-pw' }),
+      registerConsoleToken: jest.fn().mockResolvedValue(undefined),
+    };
+  }
+
+  it('enrollment 不属于当前用户时拒绝', async () => {
+    const { service, prisma } = await buildService({ labsClient: buildLabsClient() });
+    prisma.enrollment.findUnique.mockResolvedValue({ ...ENROLLMENT, userId: 'someone_else' });
+    await expect(service.createConsoleSession('user_1', 'enr_1')).rejects.toBeInstanceOf(ForbiddenException);
+  });
+
+  it('没有 workspace 记录时 404', async () => {
+    const { service, prisma } = await buildService({ labsClient: buildLabsClient() });
+    prisma.enrollment.findUnique.mockResolvedValue(ENROLLMENT);
+    prisma.workspace.findUnique.mockResolvedValue(null);
+    await expect(service.createConsoleSession('user_1', 'enr_1')).rejects.toBeInstanceOf(NotFoundException);
+  });
+
+  it('workspace 状态不是 RUNNING 时拒绝，不调用 Labs', async () => {
+    const labsClient = buildLabsClient();
+    const { service, prisma } = await buildService({ labsClient });
+    prisma.enrollment.findUnique.mockResolvedValue(ENROLLMENT);
+    prisma.workspace.findUnique.mockResolvedValue({
+      id: 'ws_1',
+      enrollmentId: 'enr_1',
+      status: WorkspaceStatus.CREATING,
+      labId: null,
+      rdpUsername: null,
+    });
+
+    await expect(service.createConsoleSession('user_1', 'enr_1')).rejects.toThrow(ConflictException);
+    expect(labsClient.registerConsoleToken).not.toHaveBeenCalled();
+    expect(labsClient.getCredentials).not.toHaveBeenCalled();
+  });
+
+  it('LABS_CONSOLE_WS_URL 未配置时抛出 ServiceUnavailableException，不调用 Labs', async () => {
+    const labsClient = buildLabsClient();
+    const { service, prisma } = await buildService({ labsClient, env: { LABS_CONSOLE_WS_URL: undefined } });
+    prisma.enrollment.findUnique.mockResolvedValue(ENROLLMENT);
+    prisma.workspace.findUnique.mockResolvedValue({
+      id: 'ws_1',
+      enrollmentId: 'enr_1',
+      status: WorkspaceStatus.RUNNING,
+      labId: 'ws_1',
+      rdpUsername: 'learner',
+    });
+
+    await expect(service.createConsoleSession('user_1', 'enr_1')).rejects.toBeInstanceOf(
+      ServiceUnavailableException,
+    );
+    expect(labsClient.registerConsoleToken).not.toHaveBeenCalled();
+    expect(labsClient.getCredentials).not.toHaveBeenCalled();
+  });
+
+  it('Labs 登记 token 失败时抛出 BadGatewayException，不透出内部错误信息', async () => {
+    const labsClient = buildLabsClient();
+    labsClient.registerConsoleToken.mockRejectedValue(new Error('Labs 登记 console token 失败（502）：boom'));
+    const { service, prisma } = await buildService({ labsClient });
+    prisma.enrollment.findUnique.mockResolvedValue(ENROLLMENT);
+    prisma.workspace.findUnique.mockResolvedValue({
+      id: 'ws_1',
+      enrollmentId: 'enr_1',
+      status: WorkspaceStatus.RUNNING,
+      labId: 'ws_1',
+      rdpUsername: 'learner',
+    });
+
+    await expect(service.createConsoleSession('user_1', 'enr_1')).rejects.toBeInstanceOf(BadGatewayException);
+    expect(labsClient.getCredentials).not.toHaveBeenCalled();
+  });
+
+  it('Labs 取密码失败时抛出 BadGatewayException', async () => {
+    const labsClient = buildLabsClient();
+    labsClient.getCredentials.mockRejectedValue(new Error('Labs 获取凭据失败（404）：boom'));
+    const { service, prisma } = await buildService({ labsClient });
+    prisma.enrollment.findUnique.mockResolvedValue(ENROLLMENT);
+    prisma.workspace.findUnique.mockResolvedValue({
+      id: 'ws_1',
+      enrollmentId: 'enr_1',
+      status: WorkspaceStatus.RUNNING,
+      labId: 'ws_1',
+      rdpUsername: 'learner',
+    });
+
+    await expect(service.createConsoleSession('user_1', 'enr_1')).rejects.toBeInstanceOf(BadGatewayException);
+  });
+
+  it('RUNNING 时：登记 token、取密码、组装返回值', async () => {
+    const labsClient = buildLabsClient();
+    const { service, prisma, audit } = await buildService({ labsClient });
+    prisma.enrollment.findUnique.mockResolvedValue(ENROLLMENT);
+    prisma.workspace.findUnique.mockResolvedValue({
+      id: 'ws_1',
+      enrollmentId: 'enr_1',
+      status: WorkspaceStatus.RUNNING,
+      labId: 'ws_1',
+      rdpUsername: 'learner',
+    });
+
+    const result = await service.createConsoleSession('user_1', 'enr_1');
+
+    expect(result.rdpUsername).toBe('learner');
+    expect(result.rdpPassword).toBe('secret-pw');
+    expect(result.wsUrl).toMatch(/^wss:\/\/labs-console\.test\/\?token=/);
+    expect(labsClient.registerConsoleToken).toHaveBeenCalledWith('ws_1', expect.any(String), 300);
+    expect(labsClient.getCredentials).toHaveBeenCalledWith('ws_1');
+    expect(audit.record).toHaveBeenCalledWith(
+      expect.objectContaining({ action: 'workspace.console-session', success: true, targetId: 'ws_1' }),
+    );
   });
 });
