@@ -83,3 +83,110 @@ describe('LabsClient.createVm', () => {
     );
   });
 });
+
+describe('LabsClient.getCredentials', () => {
+  const originalFetch = global.fetch;
+  afterEach(() => {
+    global.fetch = originalFetch;
+    jest.restoreAllMocks();
+  });
+
+  it('缺少 Labs 配置时抛出 ServiceUnavailableException', async () => {
+    const client = await buildClient({});
+    await expect(client.getCredentials('workspace_1')).rejects.toBeInstanceOf(ServiceUnavailableException);
+  });
+
+  it('GET /v1/vms/:labId/credentials，只透出 password 字段', async () => {
+    const fetchMock = jest.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ lab_id: 'workspace_1', username: 'learner', password: 'secret', rdp_port: 3389 }),
+    });
+    global.fetch = fetchMock as unknown as typeof fetch;
+
+    const client = await buildClient({
+      LABS_VM_BASE_URL: 'https://labs-vm.example.com',
+      AIVIRTEACH_API_TOKEN: 'labs-token',
+    });
+
+    const result = await client.getCredentials('workspace_1');
+
+    expect(result).toEqual({ password: 'secret' });
+    expect(fetchMock).toHaveBeenCalledWith(
+      'https://labs-vm.example.com/v1/vms/workspace_1/credentials',
+      expect.objectContaining({
+        headers: expect.objectContaining({ Authorization: 'Bearer labs-token' }),
+      }),
+    );
+  });
+
+  it('Labs 返回非 2xx 时抛出带状态码和详情的错误', async () => {
+    global.fetch = jest.fn().mockResolvedValue({
+      ok: false,
+      status: 404,
+      statusText: 'Not Found',
+      text: async () => 'Credential file not found',
+    }) as unknown as typeof fetch;
+
+    const client = await buildClient({
+      LABS_VM_BASE_URL: 'https://labs-vm.example.com',
+      AIVIRTEACH_API_TOKEN: 'labs-token',
+    });
+
+    await expect(client.getCredentials('workspace_1')).rejects.toThrow(
+      'Labs 获取凭据失败（404）：Credential file not found',
+    );
+  });
+});
+
+describe('LabsClient.registerConsoleToken', () => {
+  const originalFetch = global.fetch;
+  afterEach(() => {
+    global.fetch = originalFetch;
+    jest.restoreAllMocks();
+  });
+
+  it('缺少 Labs 配置时抛出 ServiceUnavailableException', async () => {
+    const client = await buildClient({});
+    await expect(client.registerConsoleToken('workspace_1', 'tok', 300)).rejects.toBeInstanceOf(
+      ServiceUnavailableException,
+    );
+  });
+
+  it('POST /v1/vms/:labId/console-token，带上 token 和 ttlSeconds', async () => {
+    const fetchMock = jest.fn().mockResolvedValue({ ok: true, json: async () => ({ registered: true }) });
+    global.fetch = fetchMock as unknown as typeof fetch;
+
+    const client = await buildClient({
+      LABS_VM_BASE_URL: 'https://labs-vm.example.com',
+      AIVIRTEACH_API_TOKEN: 'labs-token',
+    });
+
+    await client.registerConsoleToken('workspace_1', 'tok-abc', 300);
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      'https://labs-vm.example.com/v1/vms/workspace_1/console-token',
+      expect.objectContaining({
+        method: 'POST',
+        body: JSON.stringify({ token: 'tok-abc', ttl_seconds: 300 }),
+      }),
+    );
+  });
+
+  it('Labs 返回非 2xx 时抛出带状态码和详情的错误', async () => {
+    global.fetch = jest.fn().mockResolvedValue({
+      ok: false,
+      status: 502,
+      statusText: 'Bad Gateway',
+      text: async () => 'Command exited with 1.',
+    }) as unknown as typeof fetch;
+
+    const client = await buildClient({
+      LABS_VM_BASE_URL: 'https://labs-vm.example.com',
+      AIVIRTEACH_API_TOKEN: 'labs-token',
+    });
+
+    await expect(client.registerConsoleToken('workspace_1', 'tok', 300)).rejects.toThrow(
+      'Labs 登记 console token 失败（502）：Command exited with 1.',
+    );
+  });
+});
