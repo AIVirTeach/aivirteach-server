@@ -91,14 +91,51 @@ curl -i https://labs-vm.<domain>/v1/vms/nonexistent/status \
   -H "Authorization: Bearer <AIVIRTEACH_API_TOKEN>"
 ```
 
-最后把 `LABS_VM_BASE_URL=https://labs-vm.<domain>`、`AIVIRTEACH_API_TOKEN`、`CF_ACCESS_CLIENT_ID`、
-`CF_ACCESS_CLIENT_SECRET` 四个填进 server 的 Vercel 项目环境变量，重新部署，走一遍
-`/workspace` 页面的手动验证（design spec 里 Task 7 Step 6，也是目前 PR #8 / PR #3 测试计划里唯一没打钩的一项）。
+Labs 侧这一层通了之后，接第 6 节把 server / client 也接起来，走一遍完整的端到端验证。
+
+## 6. 端到端联调 Checklist（Labs → Server → Client）
+
+> 三块分别由不同人跑：Labs 那部分需要能碰到实际主机的人做；Server/Client 这两块谁跑都行，
+> 但顺序不能反——client 要连的 server 必须先能打通 Labs，否则点"启动"只会卡在建 VM 这一步。
+
+### Labs（前置，做完第 1-5 节才能进这里）
+
+- [ ] `curl http://127.0.0.1:8760/health`（Labs 主机本地）拿到 200
+- [ ] `curl https://labs-vm.<domain>/health`（外部，不带 token）被 Cloudflare Access 拦截，**不是** 200
+- [ ] 带上 Service Token + `AIVIRTEACH_API_TOKEN` 的 `curl`（见第 5 节两条命令）拿到 200
+
+### Server（部署到 Vercel）
+
+> 建议先用 PR #8 的 Preview Deployment 测，不要先合并到 main——出问题改完直接推同一分支重跑，
+> 不污染 main。
+
+- [ ] Vercel 项目 Preview 环境加上本文档第 2、3 节生成的 4 个变量：`LABS_VM_BASE_URL`、
+      `AIVIRTEACH_API_TOKEN`、`CF_ACCESS_CLIENT_ID`、`CF_ACCESS_CLIENT_SECRET`
+- [ ] 确认 `DATABASE_URL`、`JWT_SECRET` 等既有变量在 Preview 环境也生效（不是只配了 Production）
+- [ ] 触发一次 Preview 部署，记下分配到的 URL
+
+### Client（本地跑，指向上面的 Preview URL）
+
+- [ ] `aivirteach-client` 切到 PR #3 分支（`feat/workspace-vm-orchestration`）
+- [ ] `.env.local` 设置：
+  ```
+  NEXT_PUBLIC_BACKEND_MODE=remote
+  NEXT_PUBLIC_REMOTE_API_BASE_URL=https://<上面记下的 Preview URL>/api/v1
+  ```
+- [ ] `npm run dev` 起本地 client
+- [ ] 登录 → 选一门配了 workspace 的课程 → 进 `/workspace` → 点击启动
+- [ ] Network 面板确认建 VM 的 POST 请求成功（说明 server → Cloudflare Access → Labs 这条链路通了）
+- [ ] 页面状态自动变成 `RUNNING`（WebSocket 推送，不用手动刷新）
+- [ ] （可选）故意在 Labs 侧制造失败（比如临时改错 `AIVIRTEACH_API_TOKEN`），确认页面能展示 `ERROR`
+      状态而不是卡死转圈
+
+全部打勾后 PR #8 / PR #3 才可以合并——这也是 design spec 里 Task 7 Step 6 最后一项未完成的手动验证。
 
 ## 明确不在这份清单范围内
 
-- Server（`aivirteach-server`）自己的 Vercel 部署配置——这是另一件事，不属于 Labs Tunnel
-- `WorkspaceGateway` 的 WebSocket 端点（`/api/v1/workspaces/socket`）——这是 server 自己暴露给
-  client 浏览器的，走 server 自己的公网地址，不经过这条 Labs Tunnel，不需要在这里配置
+- Server（`aivirteach-server`）自己的 Vercel 项目搭建（build 设置、自定义域名等）——这是另一件事，
+  第 6 节只覆盖这次要新加的 4 个环境变量
+- `WorkspaceGateway` 的 WebSocket 端点（`/api/v1/workspaces/socket`）走 server 自己的公网地址，
+  不经过 Labs Tunnel，不需要单独配置
 - Console/VNC 直连 Labs（Guacamole 网关）——单独立项，`labs-agent`、`labs-console` 之类的 hostname
   只是预留位置，这次不需要建对应的 Access Application
