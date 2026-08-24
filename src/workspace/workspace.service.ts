@@ -72,6 +72,13 @@ export class WorkspaceService {
       credentialsPassword = (await this.labsClient.getCredentials(workspace.labId!)).password;
     } catch (error) {
       const message = error instanceof Error ? error.message : '未知错误';
+      await this.audit.record({
+        actor: { type: AuditActorType.USER, id: userId },
+        action: 'workspace.console-session',
+        success: false,
+        targetType: 'Workspace',
+        targetId: workspace.id,
+      });
       throw new BadGatewayException(`无法连接远程桌面服务：${message}`);
     }
 

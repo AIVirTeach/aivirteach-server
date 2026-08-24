@@ -241,10 +241,10 @@ describe('WorkspaceService.createConsoleSession', () => {
     expect(labsClient.getCredentials).not.toHaveBeenCalled();
   });
 
-  it('Labs 登记 token 失败时抛出 BadGatewayException，不透出内部错误信息', async () => {
+  it('Labs 登记 token 失败时抛出 BadGatewayException', async () => {
     const labsClient = buildLabsClient();
     labsClient.registerConsoleToken.mockRejectedValue(new Error('Labs 登记 console token 失败（502）：boom'));
-    const { service, prisma } = await buildService({ labsClient });
+    const { service, prisma, audit } = await buildService({ labsClient });
     prisma.enrollment.findUnique.mockResolvedValue(ENROLLMENT);
     prisma.workspace.findUnique.mockResolvedValue({
       id: 'ws_1',
@@ -256,6 +256,9 @@ describe('WorkspaceService.createConsoleSession', () => {
 
     await expect(service.createConsoleSession('user_1', 'enr_1')).rejects.toBeInstanceOf(BadGatewayException);
     expect(labsClient.getCredentials).not.toHaveBeenCalled();
+    expect(audit.record).toHaveBeenCalledWith(
+      expect.objectContaining({ action: 'workspace.console-session', success: false, targetId: 'ws_1' }),
+    );
   });
 
   it('Labs 取密码失败时抛出 BadGatewayException', async () => {
