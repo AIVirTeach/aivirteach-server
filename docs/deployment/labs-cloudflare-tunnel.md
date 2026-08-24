@@ -90,10 +90,22 @@ Tunnel 路由接成正式的**，否则出问题很难判断是 Tunnel 配置错
 只被 server（一段后端代码）调用，可以带 `CF-Access-Client-Id`/`CF-Access-Client-Secret` 这种
 机器对机器凭据。`labs-console.<domain>` 是**学员浏览器里的 WASM 组件直接连的**，浏览器没有办法
 （也不应该）持有这两个 Service Token 值——塞进前端代码等于把凭据发给每个访问页面的人。这条连接
-唯一的保护是 `register-console-token` 生成的一次性路由 token（32 字节随机、5 分钟过期、只能告诉
-`websockify` 转发到哪台 VM，不做身份验证）——身份验证已经在浏览器打这个请求之前，由 `/workspace`
-页面现有的 JWT 会话完成了。如果给 `labs-console.<domain>` 建了 Access Application，学员点击"启动
-远程桌面"会直接被 Cloudflare 拦截（浏览器没有 Access 登录态），这个功能会整个打不开。
+唯一的保护是 `register-console-token` 生成的一次性路由 token（32 字节随机、只能告诉 `websockify`
+转发到哪台 VM，不做身份验证）——身份验证已经在浏览器打这个请求之前，由 `/workspace` 页面现有的
+JWT 会话完成了。如果给 `labs-console.<domain>` 建了 Access Application，学员点击"启动远程桌面"
+会直接被 Cloudflare 拦截（浏览器没有 Access 登录态），这个功能会整个打不开。
+
+**关于"5 分钟过期"的真实情况，不要当成硬保证**：token 的 TTL（默认 300 秒）只在
+`register-console-token` 子命令**自己被调用时**顺便清理旧文件（`vm-control.sh` 里
+`find -mmin +N -delete`）——websockify 本身不检查文件的 mtime，也没有配置任何定时任务。也就是说
+如果某台 Labs 主机很长一段时间没有新的学员点击"启动远程桌面"（没有新的注册调用发生），几小时前
+生成的旧 token 理论上会一直留在 `/etc/aivirteach-labs/console-tokens/` 里、一直可用——不是真的
+"5 分钟后失效"，而是"下一次有人注册新 token 时，恰好比它晚了 5 分钟以上的旧 token 才会被清掉"。
+这是刻意的设计取舍（[计划文档](../superpowers/plans/2026-08-23-console-rdp-access.md)的 Global
+Constraints 明确要求"不单独配置 cron"），不是这份文档的疏漏。知道这一点很重要：泄露出去的
+`wsUrl`（比如浏览器历史记录、截图里带了 URL）在主机空闲期间可能比预期活得久得多——如果之后要收紧
+这一点，加一个真正的定时清理（cron / systemd timer）是最直接的办法，但那是一次需要重新评估
+"不单独配置 cron"这条约束的改动，不要在不确认的情况下顺手加上。
 
 只给 `labs-vm.<domain>` 建一个 Access Application（`labs-agent` 等 server 端实现了诊断功能再建）：
 
