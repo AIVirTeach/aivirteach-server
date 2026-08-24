@@ -10,6 +10,15 @@ const EnvSchema = z.object({
   PORT: z.coerce.number().int().positive().default(4000),
   // Tauri v2 webview 的源；本地网页调试再往白名单里追加
   CORS_ORIGINS: z.string().min(1).default('tauri://localhost'),
+  // Labs 的 VM 生命周期接口——本地/CI 不配这几个也要能跑，缺配置只在真正调用
+  // LabsClient 时报错，不在进程启动时让整个 server 起不来。
+  LABS_VM_BASE_URL: z.url().optional(),
+  AIVIRTEACH_API_TOKEN: z.string().min(1).optional(),
+  CF_ACCESS_CLIENT_ID: z.string().min(1).optional(),
+  CF_ACCESS_CLIENT_SECRET: z.string().min(1).optional(),
+  // websockify 对外的 wss:// 基础地址，给浏览器建 RDP WebSocket 连接用；
+  // 跟 LABS_VM_BASE_URL（VM 生命周期 HTTP API）是两个不同用途的地址。
+  LABS_CONSOLE_WS_URL: z.url().optional(),
 });
 
 export type Env = z.infer<typeof EnvSchema>;
