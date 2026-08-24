@@ -3,7 +3,8 @@ import { OnGatewayConnection, WebSocketGateway } from '@nestjs/websockets';
 import type { IncomingMessage } from 'http';
 import type { WebSocket } from 'ws';
 import { ENV, type Env } from '../config/env';
-import { verifyAccessToken } from '../auth/tokens';
+import { verifyAccessToken, type AccessTokenClaims } from '../auth/tokens';
+import { PrismaService } from '../prisma/prisma.service';
 
 type WorkspaceSocket = WebSocket & { enrollmentId?: string };
 
@@ -16,7 +17,10 @@ type BroadcastableWorkspace = { id: string; enrollmentId: string; status: string
 export class WorkspaceGateway implements OnGatewayConnection {
   private readonly sockets = new Set<WorkspaceSocket>();
 
-  constructor(@Inject(ENV) private readonly env: Env) {}
+  constructor(
+    @Inject(ENV) private readonly env: Env,
+    private readonly prisma: PrismaService,
+  ) {}
 
   async handleConnection(client: WorkspaceSocket, request: IncomingMessage): Promise<void> {
     const url = new URL(request.url ?? '', 'http://internal');
@@ -28,10 +32,17 @@ export class WorkspaceGateway implements OnGatewayConnection {
       return;
     }
 
+    let claims: AccessTokenClaims;
     try {
-      await verifyAccessToken(token, this.env.JWT_SECRET);
+      claims = await verifyAccessToken(token, this.env.JWT_SECRET);
     } catch {
       client.close(4001, 'token 无效或已过期');
+      return;
+    }
+
+    const enrollment = await this.prisma.enrollment.findUnique({ where: { id: enrollmentId } });
+    if (!enrollment || enrollment.userId !== claims.sub) {
+      client.close(4001, '无权访问这个 enrollment');
       return;
     }
 
