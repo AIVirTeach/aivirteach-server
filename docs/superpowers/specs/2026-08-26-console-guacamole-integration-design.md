@@ -6,10 +6,11 @@
 
 **这是对那份设计的替代，不是补充。** 同事在 `aivirteach-labs` 上另起了一个 `vm_agent_local` 分支，把 Labs 主机的桌面接入方案换成了 Apache Guacamole（`guacd` + `guacamole` webapp，Docker Compose 部署），并已经把这个分支部署到了 Labs 主机（通过 Cloudflare Quick Tunnel 临时验证）。核对代码后确认：`vm_agent_local` 的 `service.py` 里根本没有 `POST /v1/vms/{lab_id}/console-token` 这个接口（IronRDP 版设计里 `websockify` token 登记用的那个），取而代之的是一个铸造 Guacamole 加密票据的 `POST /v1/vms/{lab_id}/browser-sessions`。也就是说 Labs 侧的实现路径已经变了，`aivirteach-server`/`aivirteach-client` 现有代码接不上去。
 
-跟用户确认过三个关键范围决策：
+跟用户确认过两个关键范围决策：
 1. 不引入 Tauri 桌面壳——`aivirteach-client` 上确实还有同事另起的 `vm_vlient` 分支（2 个 commit 的 Rust/Tauri 早期实验，未接入正式代码，`docs/desktop-app.md` 也不存在），但这次明确只在现有 Next.js 浏览器客户端里做，不跟进 Tauri 方向。
 2. 浏览器端用 `guacamole-common-js` 自己接 Guacamole 的 WebSocket tunnel，渲染到我们自己的容器里，不用 iframe 嵌 Guacamole 官方 Web UI。
-3. `WorkspaceGateway`（IronRDP 版为 websockify token 转发/校验写的自建 NestJS WebSocket 网关）整个删除——Guacamole 票据本身已经是加密签名、绑定 VM、限时过期的，不需要再有一层我们自己的 WebSocket 网关做转发或二次校验。
+
+**订正（brainstorming 阶段的一个事实性错误）**：讨论过程中一度以为 `src/workspace/workspace.gateway.ts`（`WorkspaceGateway`）是给 websockify/RDP 流量转发用的 NestJS WebSocket 网关，并决定连同它的 IDOR 修复一起整个删除。重新读代码后确认这是错的——`WorkspaceGateway` 是 PR #8（workspace VM 编排）引入的**工作区创建状态推送通道**（`/api/v1/workspaces/socket`，推送 `{type: "workspace.status", workspace}`，客户端 `app/lib/ws.ts` 消费），只用来通知前端 VM 从 `CREATING` 变成 `RUNNING`/`ERROR`，从来没有经手过任何 RDP/console 流量——即使在 IronRDP 版设计里，浏览器也是直接连 `websockify`，不经过这个网关。这份设计**不改动 `WorkspaceGateway`**，之前修的 IDOR 保持原样。
 
 **不改动 `aivirteach-labs` 仓库**——`vm_agent_local` 是同事的工作，这份设计只覆盖 `aivirteach-server`、`aivirteach-client` 如何对接它已经暴露出来的 Guacamole 接口。
 
@@ -31,7 +32,7 @@
 - **不碰 `aivirteach-labs` 仓库**——Guacamole 的部署、`browser-sessions` 接口本身、Docker Compose 配置都是同事在 `vm_agent_local` 分支上的工作，这份设计不涉及改它。
 - **不引入 Tauri**——`vm_vlient` 分支是另一件未完成的事，不在这轮范围内跟进。
 - **不用 iframe 嵌 Guacamole 官方 Web UI**——用 `guacamole-common-js` 自己接。
-- **不保留 `WorkspaceGateway`**——整个删除，包括它的 IDOR 修复代码和测试；ownership 校验挪到 REST 端点里。
+- **不改动 `WorkspaceGateway`**——它是工作区创建状态推送通道，跟 RDP/console 传输无关，见上面"背景"一节的订正；保留原样，不删、不改、不迁移逻辑。
 - **不做服务端阻塞等待 VM 就绪**——`console-session` 接口每次被调用只转发 Labs 当前返回的 `state`，不在服务端内部轮询，由客户端负责重复请求。
 - **不新增 Prisma model**——`browser-sessions` 的票据（`data`/`expiresAt`）不落库，每次现取现转发，延续 IronRDP 版设计"单次请求内一次性生成一次性使用"的原则。
 - **不重新设计 Cloudflare Tunnel/Access 的整体拓扑**——沿用 IronRDP 版设计已经定下的"`labs-vm` 挂 Access，`labs-console` 不挂 Access"的模型，只是 `labs-console` 现在转发到 Guacamole 而不是 `websockify`。是否要改成同事文档里提到的"同源 path 反代"，这次不采纳（`aivirteach-client` 部署在 Vercel，Next.js 的 `rewrites()` 对外部目标不可靠地支持 WebSocket upgrade 转发，继续用独立 Cloudflare Tunnel hostname 更稳妥，也更贴近现有部署文档的经验）。
@@ -39,7 +40,7 @@
 ## 设计原则
 
 - **RDP 密码全程不经过 `aivirteach-server`**：Labs 直接把密码加密进 Guacamole 票据，我们的服务端只是转发这个不透明的 `data` 字符串，不解密、不查看、不落库、不记日志。
-- **票据加密签名本身就是安全边界，不需要我们自己的网关再包一层**：`WorkspaceGateway` 在 IronRDP 版里的职责（校验 enrollment 归属、转发 token）现在拆成两半——归属校验挪到已有 JWT 鉴权保护的 REST 端点（`POST /workspaces/:enrollmentId/console-session`）里做一次；票据本身的防伪造/防篡改/防重放（签名 + 过期时间）由 Guacamole 协议保证，浏览器之后直连 Guacamole，不再经过我们的服务端。
+- **票据加密签名本身就是安全边界**：enrollment 归属校验在已有 JWT 鉴权保护的 REST 端点（`POST /workspaces/:enrollmentId/console-session`，沿用 `requireOwnedEnrollment`）里做一次；票据本身的防伪造/防篡改/防重放（签名 + 过期时间）由 Guacamole 协议保证，浏览器拿到票据之后直连 Guacamole，不再经过我们的服务端——这条路径本来就不经过 `WorkspaceGateway`，这次改动前后一致。
 - **轮询责任在客户端，不在服务端**：VM 从关机到 RDP 就绪可能要几十秒到几分钟，服务端每次调用只做一次转发，不阻塞等待——这样不占用 serverless 函数的执行时间，也能让页面展示"VM 启动中"这类中间状态，而不是一直转圈直到超时才有反馈。
 - **复用现有 enrollment 归属校验模式**：沿用 `workspace.service.ts` 里已经有的 `requireOwnedEnrollment` 写法，不新造一套校验逻辑。
 
@@ -92,7 +93,7 @@
 
 ### Server：`aivirteach-server`（`docs/console-rdp-access-spec` 分支，原地改）
 
-**删除**：`src/workspace/workspace.gateway.ts`、`src/workspace/workspace.gateway.spec.ts`，以及 `WorkspaceModule` 里对 `WorkspaceGateway` 的注册。
+**不动**：`src/workspace/workspace.gateway.ts`、`WorkspaceModule` 里对它的注册——工作区状态推送，跟这次改动无关。
 
 **`src/workspace/labs-client.ts`**：删除 `getCredentials()`、`registerConsoleToken()`，新增：
 
@@ -163,7 +164,7 @@ type ConsoleSessionResponse = {
 
 ## 测试
 
-- **Server**：`console-session` 接口按现有 `workspace.controller.spec.ts`/`workspace.service.spec.ts` 的写法（mock `LabsClient.createBrowserSession`）补单元/集成测试，重点覆盖错误处理第 1/3 条（状态校验、Labs 调用失败）以及 `state` 透传的几种取值。`labs-client.spec.ts` 补 `createBrowserSession` 的测试（复用现有 `createVm`/`getCredentials` 测试的 mock 模式）。`WorkspaceGateway` 相关测试随源文件一起删除。
+- **Server**：`console-session` 接口按现有 `workspace.controller.spec.ts`/`workspace.service.spec.ts` 的写法（mock `LabsClient.createBrowserSession`）补单元/集成测试，重点覆盖错误处理第 1/3 条（状态校验、Labs 调用失败）以及 `state` 透传的几种取值。`labs-client.spec.ts` 补 `createBrowserSession` 的测试（复用现有 `createVm`/`getCredentials` 测试的 mock 模式）。`workspace.gateway.spec.ts` 不动。
 - **浏览器 `guacamole-common-js` 集成**：无法很好 mock，用手动验证清单：
   - [ ] VM 是 RUNNING 时点击"启动远程桌面" → 展示"启动中"（如果 VM 之前是关机状态）或直接进入连接 → 几秒内看到真实桌面画面 → 可以用键鼠操作、剪贴板同步正常
   - [ ] VM 不是 RUNNING 时点击 → 展示"VM 还没准备好"，不发起任何 Labs 调用
