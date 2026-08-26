@@ -145,36 +145,57 @@ npm run dev
 
 把最终确认可行的 import 写法记下来，供 Task 6 使用。
 
-- [ ] **Step 4：完整走一遍"票据 → authToken → WebSocket tunnel → 看到桌面"**
+- [ ] **Step 4：完整走一遍"票据 → authToken → WebSocket tunnel → 看到桌面"，且必须用浏览器自己的 `fetch()` 换 `authToken`（不能手工粘贴）**
+
+**为什么不能像 Step 2 那样用 curl 拿 `authToken` 再手工粘贴过来**：Task 5 的 `console-viewer.tsx` 在真实生产环境里是浏览器 JS 直接 `fetch()` 跨源调用 `${guacamoleBaseUrl}api/tokens`（`aivirteach-client` 的域名 vs. `labs-console.<domain>`，两个不同源）。curl 没有浏览器的同源策略，验证不出 Guacamole 的 Tomcat 部署到底有没有对这个跨源 `fetch()` 返回 `Access-Control-Allow-Origin` 响应头——Apache Guacamole 默认不带 CORS 响应头，如果生产环境也没加，`console-viewer.tsx` 的 `fetch()` 会直接报 CORS 错误，界面上只会看到一个含糊的网络错误。这一步必须让浏览器自己发这个请求，才能在合并任何周边代码之前发现这个问题。Vite dev server（默认 `http://localhost:5173`）和 Guacamole（`http://localhost:8080`）本来就是不同 origin，足够模拟这个场景。
 
 在 `src/main.ts` 里接着刚才验证过的 import 写法，写：
 
 ```typescript
-const authToken = /* 手工从 Step 2 的 curl 响应里复制出来的 authToken 字符串 */ "PASTE_HERE";
-const connectionId = /* Guacamole /api/tokens 响应里 connections 字段下的连接 ID，通常直接是 identifier，核对实际响应结构 */ "PASTE_HERE";
+const ticketData = /* 手工从 Step 2 生成的 ticket.txt 内容粘贴进来（是 data 字段本身，不是 authToken） */ "PASTE_HERE";
 
-const tunnel = new Guacamole.WebSocketTunnel("ws://localhost:8080/guacamole/websocket-tunnel");
-const client = new Guacamole.Client(tunnel);
+async function connect() {
+  const tokenResponse = await fetch("http://localhost:8080/guacamole/api/tokens", {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({ data: ticketData }),
+  });
+  if (!tokenResponse.ok) {
+    throw new Error(`api/tokens 换 authToken 失败（${tokenResponse.status}）`);
+  }
+  const tokenBody = (await tokenResponse.json()) as {
+    authToken: string;
+    connections?: Record<string, { identifier?: string }>;
+  };
+  console.log("token response body:", tokenBody); // 用来核对 connections 字段的实际结构/key
 
-const display = client.getDisplay();
-document.body.appendChild(display.getElement());
+  const tunnel = new Guacamole.WebSocketTunnel("ws://localhost:8080/guacamole/websocket-tunnel");
+  const client = new Guacamole.Client(tunnel);
 
-client.onerror = (status) => console.error("Guacamole client error:", status);
-tunnel.onerror = (status) => console.error("Tunnel error:", status);
+  const display = client.getDisplay();
+  document.body.appendChild(display.getElement());
 
-const params = new URLSearchParams({
-  token: authToken,
-  GUAC_DATA_SOURCE: "json",
-  GUAC_ID: connectionId,
-  GUAC_TYPE: "c",
-  GUAC_WIDTH: "1024",
-  GUAC_HEIGHT: "768",
-});
-client.connect(params.toString());
+  client.onerror = (status) => console.error("Guacamole client error:", status);
+  tunnel.onerror = (status) => console.error("Tunnel error:", status);
+
+  const connectionId = /* 核对上面 console.log 出的 tokenBody.connections 实际结构后填 */ "PASTE_HERE";
+  const params = new URLSearchParams({
+    token: tokenBody.authToken,
+    GUAC_DATA_SOURCE: "json",
+    GUAC_ID: connectionId,
+    GUAC_TYPE: "c",
+    GUAC_WIDTH: "1024",
+    GUAC_HEIGHT: "768",
+  });
+  client.connect(params.toString());
+}
+
+connect().catch((error) => console.error("connect() failed:", error));
 ```
 
 浏览器打开页面，检查：
 
+- DevTools Network 面板能看到 `POST http://localhost:8080/guacamole/api/tokens` 请求成功（状态 200，不是被 CORS 拦截的 `(failed) net::ERR_FAILED`）——DevTools Console 里如果出现 `has been blocked by CORS policy` 字样，这一步直接判定失败，进 Step 5 的 no-go 分支。
 - DevTools Network 面板能看到到 `/guacamole/websocket-tunnel` 的 WebSocket 连接，状态 101 Switching Protocols。
 - 页面上出现 `rdp-target` 容器里 xrdp 桌面的真实画面（不是空白/错误）。
 - `client.onerror`/`tunnel.onerror` 没有触发。
@@ -186,7 +207,8 @@ client.connect(params.toString());
 - 最终确认可行的 `import` 写法（供 Task 6 的 `console-viewer.tsx` 用）。
 - `client.connect()` 的 `data` 参数里，实测哪些 key 是必须的（`GUAC_DATA_SOURCE`/`GUAC_ID`/`GUAC_TYPE` 具体取值，`connectionId` 到底等不等于 Labs 那边票据里 `connections` 字典的 key，即示例里的 `lab_id`）。
 - 1.5.0 客户端连 1.6.0 服务端是否有任何协议不兼容的警告/报错（即使最终能连上，也要记录控制台里出现过的任何 warning）。
-- 如果哪一步失败：记录清楚失败在哪、报什么错，**STOP**，回去跟人类伙伴讨论要不要调整设计（比如是否需要服务端代理 Guacamole 的 REST 调用），不要跳过验证直接往下走。
+- **Step 4 的 `fetch('/api/tokens')` 有没有被 CORS 拦截。** 如果本地 Docker Compose 部署的 Guacamole 默认就不带 `Access-Control-Allow-Origin`，几乎可以确定 Labs 主机上同样的镜像/部署方式也不会带——这种情况下**不能**指望生产环境"可能配了反代加上了 CORS 头"就蒙混过关，必须明确 no-go，回去跟人类伙伴讨论是否要在 `aivirteach-server` 里加一个转发 `/api/tokens` 请求的代理端点（浏览器改成调我们自己的服务端，服务端再服务端对服务端地调用 Guacamole，没有浏览器同源限制），这会实质性改变 Task 4/Task 5 的设计，不是小修小补。
+- 如果哪一步失败：记录清楚失败在哪、报什么错，**STOP**，回去跟人类伙伴讨论要不要调整设计，不要跳过验证直接往下走。
 
 **只有这一步验证通过，才能继续 Task 2。**
 
@@ -238,12 +260,22 @@ docker compose down -v   # 清理本地测试环境，这些容器不需要保�
   });
 ```
 
+再加一个新用例（校验结尾斜杠——见下面 Step 3 的说明，`console-viewer.tsx` 直接用字符串拼接 `${guacamoleBaseUrl}api/tokens`，不带结尾斜杠会拼出错误的 URL）：
+
+```typescript
+  it('LABS_GUACAMOLE_BASE_URL 配置了但不以 / 结尾时抛错', () => {
+    expect(() =>
+      loadEnv({ ...validSource, LABS_GUACAMOLE_BASE_URL: 'https://labs-console.test' }),
+    ).toThrow(/LABS_GUACAMOLE_BASE_URL/);
+  });
+```
+
 - [ ] **Step 2：跑测试确认失败**
 
 ```bash
 npm test -- src/config/env.spec.ts
 ```
-Expected: 这两个用例 FAIL（`LABS_GUACAMOLE_BASE_URL` 字段还不存在于 schema 里，`loadEnv(validSource)` 返回的对象里没有这个 key，`toBeUndefined()` 断言本身会通过，但第二个用例期待抛错、实际不会抛——因为未知字段会被 Zod 直接忽略，不校验）。
+Expected: 这三个用例 FAIL（`LABS_GUACAMOLE_BASE_URL` 字段还不存在于 schema 里，`loadEnv(validSource)` 返回的对象里没有这个 key，`toBeUndefined()` 断言本身会通过，但后两个用例期待抛错、实际不会抛——因为未知字段会被 Zod 直接忽略，不校验）。
 
 - [ ] **Step 3：改 `EnvSchema`**
 
@@ -268,7 +300,13 @@ Expected: 这两个用例 FAIL（`LABS_GUACAMOLE_BASE_URL` 字段还不存在于
   CF_ACCESS_CLIENT_SECRET: z.string().min(1).optional(),
   // Guacamole webapp 的 https:// 根路径，给浏览器建 Guacamole 会话用；
   // 跟 LABS_VM_BASE_URL（VM 生命周期 HTTP API）是两个不同用途的地址。
-  LABS_GUACAMOLE_BASE_URL: z.url().optional(),
+  // 必须以 / 结尾——client 侧 `console-viewer.tsx` 直接字符串拼接
+  // `${guacamoleBaseUrl}api/tokens`/`${wsBase}websocket-tunnel`，不在这里强制的话，
+  // 少了结尾斜杠会拼出一个语法正确但指向错误主机的 URL，报错会很难查。
+  LABS_GUACAMOLE_BASE_URL: z
+    .url()
+    .refine((value) => value.endsWith('/'), 'LABS_GUACAMOLE_BASE_URL 必须以 / 结尾（Guacamole webapp 根路径）')
+    .optional(),
 ```
 
 - [ ] **Step 4：跑测试确认通过**
@@ -294,6 +332,7 @@ LABS_CONSOLE_WS_URL=
 AIVIRTEACH_SESSION_TOKEN=
 
 # Labs 主机上 Guacamole webapp 的 https:// 根路径（Console/RDP 浏览器直连用）
+# 必须以 / 结尾，例如 https://labs-console.example.com/guacamole/
 LABS_GUACAMOLE_BASE_URL=
 ```
 
@@ -378,6 +417,33 @@ describe('LabsClient.createBrowserSession', () => {
         method: 'POST',
         headers: expect.objectContaining({ Authorization: 'Bearer session-token' }),
         body: JSON.stringify({ subject: 'user_1' }),
+      }),
+    );
+  });
+
+  it('配置了 CF Access 时带上 CF-Access 请求头（跟 createVm 一致）', async () => {
+    const fetchMock = jest.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ lab_id: 'workspace_1', state: 'starting' }),
+    });
+    global.fetch = fetchMock as unknown as typeof fetch;
+
+    const client = await buildClient({
+      LABS_VM_BASE_URL: 'https://labs-vm.example.com',
+      AIVIRTEACH_SESSION_TOKEN: 'session-token',
+      CF_ACCESS_CLIENT_ID: 'cf-id',
+      CF_ACCESS_CLIENT_SECRET: 'cf-secret',
+    });
+
+    await client.createBrowserSession('workspace_1', 'user_1');
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      'https://labs-vm.example.com/v1/vms/workspace_1/browser-sessions',
+      expect.objectContaining({
+        headers: expect.objectContaining({
+          'CF-Access-Client-Id': 'cf-id',
+          'CF-Access-Client-Secret': 'cf-secret',
+        }),
       }),
     );
   });
@@ -1025,10 +1091,11 @@ import { ConsoleViewer } from "./console-viewer";
   const [consoleLoading, setConsoleLoading] = useState(false);
 ```
 
-后面加一个 ref 记录轮询定时器和开始时间：
+后面加两个 ref：一个记录轮询定时器，一个记录"这一轮轮询是否已经作废"（workspace 状态离开 RUNNING、或组件卸载时会置位）——只清定时器不够：如果状态变化/卸载发生在某次 `api.consoleSession()` 请求已经发出、还没返回的当口，`clearTimeout` 只能清掉*还没触发*的下一次定时器，清不掉这次已经在飞行中的请求；不加这个标志位，请求返回后仍会 `setConsoleSession`/`setConsoleLoading`（对着已经卸载的组件调用，或者把已经清空的 `consoleSession` 又设置回去），并且还会排一个新的 `setTimeout`——这个新定时器排上的时候，卸载/状态切换的清理早就跑完了，没有第二次机会去清它，轮询就在后台停不下来。这个模式跟本文件里其它 `useEffect`（`ensureWorkspace`/`measureLatency` 等）用的 `active` 标志位是同一个道理，只是这里要跨一个事件处理函数和两个 `useEffect` 共享，所以用 ref 而不是闭包变量：
 
 ```typescript
   const consolePollTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const consolePollCancelled = useRef(false);
 ```
 
 把现有的 `startConsoleSession` 函数：
@@ -1057,6 +1124,13 @@ import { ConsoleViewer } from "./console-viewer";
 
   async function startConsoleSession() {
     if (!enrollment) return;
+    // 上一轮轮询可能因为超时/报错而结束但定时器已经清空、也可能是用户重新点击重试——
+    // 无论哪种情况，开始新一轮之前先把旧状态清干净，保证同一时刻只有一条轮询链在跑。
+    if (consolePollTimer.current) {
+      clearTimeout(consolePollTimer.current);
+      consolePollTimer.current = null;
+    }
+    consolePollCancelled.current = false;
     setConsoleLoading(true);
     setConsoleError("");
     const deadline = Date.now() + consolePollDeadlineMs;
@@ -1065,6 +1139,7 @@ import { ConsoleViewer } from "./console-viewer";
       if (!enrollment) return;
       try {
         const session = await api.consoleSession(enrollment.id);
+        if (consolePollCancelled.current) return; // 请求在飞行中时这一轮轮询已经作废，结果直接丢弃
         if (session.state === "ready") {
           setConsoleSession(session);
           setConsoleLoading(false);
@@ -1077,6 +1152,7 @@ import { ConsoleViewer } from "./console-viewer";
         }
         consolePollTimer.current = setTimeout(() => void poll(), consolePollIntervalMs);
       } catch (caught) {
+        if (consolePollCancelled.current) return;
         setConsoleError(caught instanceof Error ? caught.message : "无法启动远程桌面");
         setConsoleLoading(false);
       }
@@ -1091,6 +1167,7 @@ import { ConsoleViewer } from "./console-viewer";
 ```typescript
   useEffect(() => {
     if (workspace?.status !== "RUNNING") {
+      consolePollCancelled.current = true;
       setConsoleSession(null);
       setConsoleError("");
       if (consolePollTimer.current) {
@@ -1104,7 +1181,10 @@ import { ConsoleViewer } from "./console-viewer";
 再加一个卸载时清理定时器的 `useEffect`（放在其它 `useEffect(() => () => {...}, [])` 清理逻辑旁边，跟现有 `refreshTimer` 的清理方式一致）：
 
 ```typescript
-  useEffect(() => () => { if (consolePollTimer.current) clearTimeout(consolePollTimer.current); }, []);
+  useEffect(() => () => {
+    consolePollCancelled.current = true;
+    if (consolePollTimer.current) clearTimeout(consolePollTimer.current);
+  }, []);
 ```
 
 - [ ] **Step 3：更新渲染逻辑**
@@ -1188,6 +1268,8 @@ git commit -m "feat: poll console-session until ready, wire ConsoleViewer to Gua
 - [ ] **Step 1：确认 Labs 主机上 Guacamole 服务状态**
 
 跟同事核对：`vm_agent_local` 分支的 Docker Compose（`guacd` + `guacamole`）在 Labs 主机上是不是长期运行的服务（而不是同事本地临时起的），Guacamole webapp 实际对外端口是多少（Docker Compose 里默认映射是 `8080`，但同事之前发的 Quick Tunnel 信息里 `guacamole: 8090`，两者不一致，需要问清楚哪个是准的）。
+
+顺带确认一件事（读过 `vm_agent_local` 分支 `vm-manager/service.py` 的 `create_browser_session` 源码发现的）：这个接口每次被调用都会现查一次 VM 状态，如果状态是 `shut off` 就调用 `VM_CONTROL_SCRIPT start` 然后立刻返回 `state="starting"`，不等它真的起来。我们这边客户端每 2.5 秒轮询一次这同一个接口——如果 VM 从关机到 libvirt 报告状态变化中间隔了不止一个轮询周期（很可能），`VM_CONTROL_SCRIPT start` 会在同一台 VM 还没起来的时候被连续调用好几次。需要问同事：这个脚本对着一台已经在启动中的 VM 重复调用 `start` 是不是安全的（幂等/直接忽略），还是会报错——如果会报错，`create_browser_session` 会把这个错误原样抛出来，我们这边 `console-session` 就会在某次轮询里突然变成 502，即使 VM 其实正在正常启动。这不是我们这边能改的（`aivirteach-labs` 不碰），但如果同事确认会报错，需要回来一起讨论要不要把轮询间隔拉长，或者请同事那边加一个"已经在 starting 就直接跳过 start 调用"的短路判断。
 
 - [ ] **Step 2：Cloudflare Tunnel 路由确认**
 
