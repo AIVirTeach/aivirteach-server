@@ -24,7 +24,7 @@
   - 这个 `data` 票据本身不能直接用来连 RDP，必须先 POST 给 Guacamole 自己的 `/api/tokens` 换成真正的 Guacamole `authToken`，浏览器/`guacamole-common-js` 才能拿 `authToken` 开 WebSocket tunnel。
 - `browser-sessions` 走的是**跟现有 VM 生命周期 API 相同的主机和 Cloudflare Access 保护**（`labs-vm.<domain>`，`CF-Access-Client-Id`/`CF-Access-Client-Secret`）——这次不需要为它新增任何 Cloudflare 配置，只是同一个 Access Application 下多一条路由。
 - 真正的 Guacamole WebSocket tunnel（浏览器直连，走 `labs-console.<domain>`，不挂 Access——原因跟 IronRDP 版设计里 `labs-console` 不挂 Access 一致：浏览器没法持有 Service Token，身份验证已经在 `/workspace` 页面的 JWT 会话完成，这次换成 Guacamole 票据本身的加密+过期做保护）现在指向的是 Labs 主机上 Guacamole webapp 的端口（Docker Compose 里是 `8080`），不再是 `websockify` 的 `6080`。
-- `guacamole-common-js` 是 Apache Guacamole 官方项目发布的浏览器客户端库（跟 `guacd`/`guacamole` webapp 同一个上游项目维护），提供 `Guacamole.Client` + `Guacamole.WebSocketTunnel`/`Guacamole.HTTPTunnel`，渲染到调用方提供的 DOM 元素、通过 `client.getDisplay().getElement()` 拿到画面节点，鼠标/键盘转发用 `Guacamole.Mouse`/`Guacamole.Keyboard` 两个配套类。npm 上有官方 [`guacamole-common-js`](https://www.npmjs.com/package/guacamole-common-js) 包，但没有官方 TypeScript 类型定义——这是本设计**唯一没有先例验证过的集成点**（`guacamole-common-js` 本身在生产环境广泛使用，但类型缺失 + 具体 API 手感需要一个 spike 任务确认，见"测试"一节）。
+- `guacamole-common-js`（npm 上的 [`guacamole-common-js`](https://www.npmjs.com/package/guacamole-common-js) 包，[padarom/guacamole-common-js](https://github.com/padarom/guacamole-common-js) 维护）是 Apache Guacamole 官方浏览器客户端源码的第三方 npm 打包——Apache Guacamole 项目本身不发布 npm 包，这是社区通用的引入方式，最新版 `1.5.0`（发布于 2023-03）。提供 `Guacamole.Client`（`connect(data?: any)`/`getDisplay()`/`disconnect()`/`sendMouseState()`/`sendKeyEvent()` 等）+ `Guacamole.WebSocketTunnel`（构造函数 `new WebSocketTunnel(tunnelURL: string)`），渲染到调用方提供的 DOM 元素、通过 `client.getDisplay().getElement()` 拿到画面节点，鼠标/键盘转发用 `Guacamole.Mouse`/`Guacamole.Keyboard` 两个配套类（用法已核实，见实现计划）。**有官方 TypeScript 类型定义**：`@types/guacamole-common-js`（DefinitelyTyped 维护，当前版本 `1.5.5`），不需要手写 `.d.ts`。这次唯一没有先例验证过的集成点是：npm 包最新只到 `1.5.0`，而 Labs 的 Docker Compose 部署的是 `guacd`/`guacamole` `1.6.0`——1.5.0 版本的 JS 客户端库能不能正常连 1.6.0 版本的服务端，需要一个 spike 任务实测确认（见"测试"一节），不能假设次版本号不同就必然兼容。
 - `aivirteach-server` 现有 `LabsClient.getCredentials()`/`registerConsoleToken()` 只被 `createConsoleSession` 一处调用（已用 `grep` 核实），删除它们不影响任何其它路径。
 
 ## 不做的事（明确排除的范围）
@@ -129,7 +129,7 @@ type ConsoleSessionResponse = {
 ```
 
 **`src/config/env.ts`**：
-- 新增 `AIVIRTEACH_SESSION_TOKEN`（必填字符串，跟 `AIVIRTEACH_API_TOKEN` 语义上是两个不同密钥——建议加一条校验确保配置的值跟 `AIVIRTEACH_API_TOKEN` 不同，Labs 服务端已经有这条校验，服务端这边对称加一条能更早发现配错）。
+- 新增 `AIVIRTEACH_SESSION_TOKEN`（可选字符串，延续 `LABS_VM_BASE_URL`/`AIVIRTEACH_API_TOKEN` 现有的"本地/CI 不配也能跑，真正调用 Labs 时才报错"约定，不在 schema 层面强制必填）——跟 `AIVIRTEACH_API_TOKEN` 语义上是两个不同密钥，在 `LabsClient.createBrowserSession()` 里加一条校验确保两者配置了且不相同，Labs 服务端已经有这条校验，服务端这边对称加一条能更早发现配错）。
 - `LABS_CONSOLE_WS_URL` 重命名为 `LABS_GUACAMOLE_BASE_URL`（值形如 `https://labs-console.<domain>/guacamole/`，指向 Guacamole webapp 的根路径；客户端从这个值派生出 `api/tokens` 和 `websocket-tunnel` 两个具体地址，不在服务端拼死）。
 - 不变：`LABS_VM_BASE_URL`、`AIVIRTEACH_API_TOKEN`、`CF_ACCESS_CLIENT_ID`、`CF_ACCESS_CLIENT_SECRET`。
 
@@ -138,7 +138,7 @@ type ConsoleSessionResponse = {
 - **`app/workspace/console-viewer.tsx`**：整个重写，改用 `guacamole-common-js`：
   - props 改为 `data`、`expiresAt`、`guacamoleBaseUrl`（对应服务端新响应结构）。
   - 内部：先 `fetch(\`${guacamoleBaseUrl}api/tokens\`, { method: "POST", body: new URLSearchParams({ data }) })` 换 `authToken`；再把 `guacamoleBaseUrl` 的 scheme 从 `https:` 换成 `wss:`（`http:` 换成 `ws:`，只是为了支持本地非 TLS 调试）得到 tunnel 用的 base，`new Guacamole.WebSocketTunnel(\`${wsBase}websocket-tunnel\`)` + `new Guacamole.Client(tunnel)` 建立连接（连接参数里带 `authToken` + `GUAC_DATA_SOURCE=json` + 连接标识，具体参数名以 `guacamole-common-js` 实际版本文档/spike 结果为准，不在设计阶段写死）；把 `client.getDisplay().getElement()` 挂到组件内部容器 DOM 节点；用 `Guacamole.Mouse`/`Guacamole.Keyboard` 转发键鼠事件——这部分直接替换掉原来接 `ironrdp-web` 的等价逻辑，组件对外暴露的 `onConnect`/`onError`/`onDisconnect` 回调接口保持不变，`app/workspace/page.tsx` 侧基本不用改。
-  - 依赖：新增 npm 包 `guacamole-common-js`；由于没有官方类型定义，需要在 `aivirteach-client` 里补一份最小 `.d.ts`（只声明本组件实际用到的那几个类/方法，不追求覆盖整个库）。
+  - 依赖：新增 npm 包 `guacamole-common-js` + `@types/guacamole-common-js`（DefinitelyTyped 官方类型，不需要手写 `.d.ts`）。
 - **`app/workspace/page.tsx`**：新增轮询逻辑——调用 `console-session` 后，`state !== "ready"` 时每 2-3 秒重新调用，超过 2 分钟未 ready 则展示明确的超时错误（不再继续轮询）；`state === "ready"` 时才渲染 `console-viewer` 组件。原有"workspace 状态离开 RUNNING 时清空 consoleSession/consoleError"的 `useEffect` 逻辑保留，字段名跟着新响应结构调整。
 
 ## 数据流（创建连接的完整时序）
@@ -172,7 +172,7 @@ type ConsoleSessionResponse = {
   - [ ] Guacamole webapp 没起/Tunnel 路由配错 → 展示明确的"无法连接"错误，不是卡死转圈
   - [ ] 关闭/离开页面 → WebSocket 连接正常关闭，Labs 主机上 Guacamole 的会话跟着清理
 
-**第一优先级任务：spike 验证 `guacamole-common-js` 的实际连接参数**——npm 包本身没有官方类型定义，`Guacamole.Client.connect()` 的连接字符串参数格式（`token`/`GUAC_DATA_SOURCE`/`GUAC_ID` 等具体 key）需要对着实际部署的 Guacamole 版本（Docker Compose 里 `GUACAMOLE_VERSION:-1.6.0`）验证，不能只凭官方文档假设。在写周边的服务端/客户端胶水代码之前，先花一个任务把最小可行路径跑通：本地起一个能连到 Labs 测试环境（或本地 Docker 起一份同版本 Guacamole + guacd）的最小 HTML/组件，手工构造一个 `browser-sessions` 返回的 `data`，验证"拿 `data` 换 `authToken` → 开 WebSocket tunnel → 看到真实桌面画面"这条路径可行。如果这一步跑不通，需要重新评估是否要在 `aivirteach-server` 里加一层服务端代理 Guacamole 的 REST 调用（而不是浏览器直接跨域调 `api/tokens`），所以必须在其余任务之前做。
+**第一优先级任务：spike 验证 `guacamole-common-js` 1.5.0 客户端库对 Guacamole 1.6.0 服务端的真实连接参数**——`Guacamole.Client.connect()` 的连接字符串参数格式（`token`/`GUAC_DATA_SOURCE`/`GUAC_ID` 等具体 key）需要对着 1.6.0 版本实测，不能只凭文档假设两个次版本号之间兼容。在写周边的服务端/客户端胶水代码之前，先花一个任务把最小可行路径跑通：本地 Docker Compose 起一份 1.6.0 版本的 `guacd` + `guacamole`，手工用 Node 脚本按 Labs `_encrypt_guacamole_payload` 同样的算法（HMAC-SHA256 签名 + AES-128-CBC 零 IV 加密）构造一个 `data` 票据，验证"拿 `data` 换 `authToken` → 开 WebSocket tunnel → 看到真实桌面画面"这条路径可行。如果这一步跑不通，需要重新评估是否要在 `aivirteach-server` 里加一层服务端代理 Guacamole 的 REST 调用（而不是浏览器直接跨域调 `api/tokens`），所以必须在其余任务之前做。
 
 ## 部署清单更新
 
