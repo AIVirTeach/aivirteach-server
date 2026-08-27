@@ -1,29 +1,14 @@
-import {
-  BadGatewayException,
-  ConflictException,
-  ForbiddenException,
-  Inject,
-  Injectable,
-  NotFoundException,
-  ServiceUnavailableException,
-} from '@nestjs/common';
+import { BadGatewayException, ConflictException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import { AuditActorType, WorkspaceStatus, type Workspace } from '@prisma/client';
 import { waitUntil } from '@vercel/functions';
 import { PrismaService } from '../prisma/prisma.service';
 import { AuditService } from '../audit/audit.service';
-import { ENV, type Env } from '../config/env';
 import { LabsClient, type BrowserSession } from './labs-client';
 import { WorkspaceGateway } from './workspace.gateway';
 
 const STALE_CREATING_MS = 5 * 60 * 1000;
 
-export type ConsoleSessionResult = {
-  labId: string;
-  state: string;
-  data?: string;
-  expiresAt?: string;
-  guacamoleBaseUrl?: string;
-};
+export type ConsoleSessionResult = BrowserSession;
 
 @Injectable()
 export class WorkspaceService {
@@ -32,7 +17,6 @@ export class WorkspaceService {
     private readonly audit: AuditService,
     private readonly labsClient: LabsClient,
     private readonly gateway: WorkspaceGateway,
-    @Inject(ENV) private readonly env: Env,
   ) {}
 
   async getForEnrollment(userId: string, enrollmentId: string): Promise<Workspace> {
@@ -50,10 +34,6 @@ export class WorkspaceService {
   }
 
   async createConsoleSession(userId: string, enrollmentId: string): Promise<ConsoleSessionResult> {
-    if (!this.env.LABS_GUACAMOLE_BASE_URL) {
-      throw new ServiceUnavailableException('远程桌面服务未配置：缺少 LABS_GUACAMOLE_BASE_URL');
-    }
-
     const enrollment = await this.requireOwnedEnrollment(userId, enrollmentId);
     const workspace = await this.prisma.workspace.findUnique({ where: { enrollmentId: enrollment.id } });
     if (!workspace) throw new NotFoundException('没有找到这个课程的工作区');
@@ -88,10 +68,7 @@ export class WorkspaceService {
       });
     }
 
-    return {
-      ...session,
-      guacamoleBaseUrl: session.state === 'ready' ? this.env.LABS_GUACAMOLE_BASE_URL : undefined,
-    };
+    return session;
   }
 
   async create(userId: string, enrollmentId: string): Promise<Workspace> {

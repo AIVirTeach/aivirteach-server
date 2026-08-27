@@ -20,15 +20,6 @@ const EnvSchema = z.object({
   AIVIRTEACH_SESSION_TOKEN: z.string().min(1).optional(),
   CF_ACCESS_CLIENT_ID: z.string().min(1).optional(),
   CF_ACCESS_CLIENT_SECRET: z.string().min(1).optional(),
-  // Guacamole webapp 的 https:// 根路径，给浏览器建 Guacamole 会话用；
-  // 跟 LABS_VM_BASE_URL（VM 生命周期 HTTP API）是两个不同用途的地址。
-  // 必须以 / 结尾——client 侧 `console-viewer.tsx` 直接字符串拼接
-  // `${guacamoleBaseUrl}api/tokens`/`${wsBase}websocket-tunnel`，不在这里强制的话，
-  // 少了结尾斜杠会拼出一个语法正确但指向错误主机的 URL，报错会很难查。
-  LABS_GUACAMOLE_BASE_URL: z
-    .url()
-    .refine((value) => value.endsWith('/'), 'LABS_GUACAMOLE_BASE_URL 必须以 / 结尾（Guacamole webapp 根路径）')
-    .optional(),
 });
 
 export type Env = z.infer<typeof EnvSchema>;

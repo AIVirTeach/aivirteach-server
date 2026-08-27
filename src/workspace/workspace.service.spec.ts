@@ -1,15 +1,8 @@
-import {
-  BadGatewayException,
-  ConflictException,
-  ForbiddenException,
-  NotFoundException,
-  ServiceUnavailableException,
-} from '@nestjs/common';
+import { BadGatewayException, ConflictException, ForbiddenException, NotFoundException } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
 import { WorkspaceStatus } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { AuditService } from '../audit/audit.service';
-import { ENV, type Env } from '../config/env';
 import { LabsClient } from './labs-client';
 import { WorkspaceGateway } from './workspace.gateway';
 import { WorkspaceService } from './workspace.service';
@@ -27,7 +20,6 @@ async function buildService(
     labsClient?: any;
     gateway?: any;
     audit?: any;
-    env?: Partial<Env>;
   } = {},
 ) {
   const prisma = overrides.prisma ?? buildPrisma();
@@ -42,7 +34,6 @@ async function buildService(
       { provide: AuditService, useValue: audit },
       { provide: LabsClient, useValue: labsClient },
       { provide: WorkspaceGateway, useValue: gateway },
-      { provide: ENV, useValue: { LABS_GUACAMOLE_BASE_URL: 'https://labs-console.test/guacamole/', ...overrides.env } },
     ],
   }).compile();
   return { service: moduleRef.get(WorkspaceService), prisma, labsClient, gateway, audit };
@@ -224,23 +215,6 @@ describe('WorkspaceService.createConsoleSession', () => {
     expect(labsClient.createBrowserSession).not.toHaveBeenCalled();
   });
 
-  it('LABS_GUACAMOLE_BASE_URL 未配置时抛出 ServiceUnavailableException，不调用 Labs', async () => {
-    const labsClient = buildLabsClient();
-    const { service, prisma } = await buildService({ labsClient, env: { LABS_GUACAMOLE_BASE_URL: undefined } });
-    prisma.enrollment.findUnique.mockResolvedValue(ENROLLMENT);
-    prisma.workspace.findUnique.mockResolvedValue({
-      id: 'ws_1',
-      enrollmentId: 'enr_1',
-      status: WorkspaceStatus.RUNNING,
-      labId: 'ws_1',
-    });
-
-    await expect(service.createConsoleSession('user_1', 'enr_1')).rejects.toBeInstanceOf(
-      ServiceUnavailableException,
-    );
-    expect(labsClient.createBrowserSession).not.toHaveBeenCalled();
-  });
-
   it('Labs 调用失败时抛出 BadGatewayException，写失败审计', async () => {
     const labsClient = buildLabsClient();
     labsClient.createBrowserSession.mockRejectedValue(new Error('Labs 创建浏览器会话失败（502）：boom'));
@@ -259,7 +233,7 @@ describe('WorkspaceService.createConsoleSession', () => {
     );
   });
 
-  it('state=starting 时透传结果，不带 guacamoleBaseUrl，不写审计', async () => {
+  it('state=starting 时透传结果，不写审计', async () => {
     const labsClient = buildLabsClient();
     labsClient.createBrowserSession.mockResolvedValue({ labId: 'ws_1', state: 'starting' });
     const { service, prisma, audit } = await buildService({ labsClient });
@@ -273,11 +247,11 @@ describe('WorkspaceService.createConsoleSession', () => {
 
     const result = await service.createConsoleSession('user_1', 'enr_1');
 
-    expect(result).toEqual({ labId: 'ws_1', state: 'starting', data: undefined, expiresAt: undefined, guacamoleBaseUrl: undefined });
+    expect(result).toEqual({ labId: 'ws_1', state: 'starting' });
     expect(audit.record).not.toHaveBeenCalled();
   });
 
-  it('state=ready 时透传 data/expiresAt，附带 guacamoleBaseUrl，写成功审计', async () => {
+  it('state=ready 时透传 data/expiresAt，写成功审计', async () => {
     const labsClient = buildLabsClient();
     const { service, prisma, audit } = await buildService({ labsClient });
     prisma.enrollment.findUnique.mockResolvedValue(ENROLLMENT);
@@ -295,7 +269,6 @@ describe('WorkspaceService.createConsoleSession', () => {
       state: 'ready',
       data: 'encrypted-ticket',
       expiresAt: '2026-08-24T00:05:00.000Z',
-      guacamoleBaseUrl: 'https://labs-console.test/guacamole/',
     });
     expect(labsClient.createBrowserSession).toHaveBeenCalledWith('ws_1', 'user_1');
     expect(audit.record).toHaveBeenCalledWith(

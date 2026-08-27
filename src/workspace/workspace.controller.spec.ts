@@ -41,7 +41,6 @@ describe('WorkspaceController', () => {
         state: 'ready',
         data: 'encrypted-ticket',
         expiresAt: '2026-08-24T00:05:00.000Z',
-        guacamoleBaseUrl: 'https://labs-console.test/guacamole/',
       }),
     };
     const moduleRef = await Test.createTestingModule({
@@ -53,7 +52,7 @@ describe('WorkspaceController', () => {
     const result = await controller.createConsoleSession('enr_1', AUTH_REQUEST as any);
 
     expect(result.state).toBe('ready');
-    expect(result.guacamoleBaseUrl).toBe('https://labs-console.test/guacamole/');
+    expect(result.data).toBe('encrypted-ticket');
     expect(service.createConsoleSession).toHaveBeenCalledWith('user_1', 'enr_1');
   });
 });
