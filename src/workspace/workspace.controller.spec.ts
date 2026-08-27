@@ -37,10 +37,11 @@ describe('WorkspaceController', () => {
   it('POST :enrollmentId/console-session 用认证用户的 userId 调用 service.createConsoleSession', async () => {
     const service = {
       createConsoleSession: jest.fn().mockResolvedValue({
-        wsUrl: 'wss://labs-console.test/?token=abc',
-        rdpUsername: 'learner',
-        rdpPassword: 'secret',
+        labId: 'ws_1',
+        state: 'ready',
+        data: 'encrypted-ticket',
         expiresAt: '2026-08-24T00:05:00.000Z',
+        guacamoleBaseUrl: 'https://labs-console.test/guacamole/',
       }),
     };
     const moduleRef = await Test.createTestingModule({
@@ -51,7 +52,8 @@ describe('WorkspaceController', () => {
 
     const result = await controller.createConsoleSession('enr_1', AUTH_REQUEST as any);
 
-    expect(result.wsUrl).toBe('wss://labs-console.test/?token=abc');
+    expect(result.state).toBe('ready');
+    expect(result.guacamoleBaseUrl).toBe('https://labs-console.test/guacamole/');
     expect(service.createConsoleSession).toHaveBeenCalledWith('user_1', 'enr_1');
   });
 });

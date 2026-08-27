@@ -42,7 +42,7 @@ async function buildService(
       { provide: AuditService, useValue: audit },
       { provide: LabsClient, useValue: labsClient },
       { provide: WorkspaceGateway, useValue: gateway },
-      { provide: ENV, useValue: { LABS_CONSOLE_WS_URL: 'wss://labs-console.test', ...overrides.env } },
+      { provide: ENV, useValue: { LABS_GUACAMOLE_BASE_URL: 'https://labs-console.test/guacamole/', ...overrides.env } },
     ],
   }).compile();
   return { service: moduleRef.get(WorkspaceService), prisma, labsClient, gateway, audit };
@@ -187,8 +187,12 @@ describe('WorkspaceService.createConsoleSession', () => {
   function buildLabsClient() {
     return {
       createVm: jest.fn(),
-      getCredentials: jest.fn().mockResolvedValue({ password: 'secret-pw' }),
-      registerConsoleToken: jest.fn().mockResolvedValue(undefined),
+      createBrowserSession: jest.fn().mockResolvedValue({
+        labId: 'ws_1',
+        state: 'ready',
+        data: 'encrypted-ticket',
+        expiresAt: '2026-08-24T00:05:00.000Z',
+      }),
     };
   }
 
@@ -214,36 +218,32 @@ describe('WorkspaceService.createConsoleSession', () => {
       enrollmentId: 'enr_1',
       status: WorkspaceStatus.CREATING,
       labId: null,
-      rdpUsername: null,
     });
 
     await expect(service.createConsoleSession('user_1', 'enr_1')).rejects.toThrow(ConflictException);
-    expect(labsClient.registerConsoleToken).not.toHaveBeenCalled();
-    expect(labsClient.getCredentials).not.toHaveBeenCalled();
+    expect(labsClient.createBrowserSession).not.toHaveBeenCalled();
   });
 
-  it('LABS_CONSOLE_WS_URL 未配置时抛出 ServiceUnavailableException，不调用 Labs', async () => {
+  it('LABS_GUACAMOLE_BASE_URL 未配置时抛出 ServiceUnavailableException，不调用 Labs', async () => {
     const labsClient = buildLabsClient();
-    const { service, prisma } = await buildService({ labsClient, env: { LABS_CONSOLE_WS_URL: undefined } });
+    const { service, prisma } = await buildService({ labsClient, env: { LABS_GUACAMOLE_BASE_URL: undefined } });
     prisma.enrollment.findUnique.mockResolvedValue(ENROLLMENT);
     prisma.workspace.findUnique.mockResolvedValue({
       id: 'ws_1',
       enrollmentId: 'enr_1',
       status: WorkspaceStatus.RUNNING,
       labId: 'ws_1',
-      rdpUsername: 'learner',
     });
 
     await expect(service.createConsoleSession('user_1', 'enr_1')).rejects.toBeInstanceOf(
       ServiceUnavailableException,
     );
-    expect(labsClient.registerConsoleToken).not.toHaveBeenCalled();
-    expect(labsClient.getCredentials).not.toHaveBeenCalled();
+    expect(labsClient.createBrowserSession).not.toHaveBeenCalled();
   });
 
-  it('Labs 登记 token 失败时抛出 BadGatewayException', async () => {
+  it('Labs 调用失败时抛出 BadGatewayException，写失败审计', async () => {
     const labsClient = buildLabsClient();
-    labsClient.registerConsoleToken.mockRejectedValue(new Error('Labs 登记 console token 失败（502）：boom'));
+    labsClient.createBrowserSession.mockRejectedValue(new Error('Labs 创建浏览器会话失败（502）：boom'));
     const { service, prisma, audit } = await buildService({ labsClient });
     prisma.enrollment.findUnique.mockResolvedValue(ENROLLMENT);
     prisma.workspace.findUnique.mockResolvedValue({
@@ -251,33 +251,33 @@ describe('WorkspaceService.createConsoleSession', () => {
       enrollmentId: 'enr_1',
       status: WorkspaceStatus.RUNNING,
       labId: 'ws_1',
-      rdpUsername: 'learner',
     });
 
     await expect(service.createConsoleSession('user_1', 'enr_1')).rejects.toBeInstanceOf(BadGatewayException);
-    expect(labsClient.getCredentials).not.toHaveBeenCalled();
     expect(audit.record).toHaveBeenCalledWith(
       expect.objectContaining({ action: 'workspace.console-session', success: false, targetId: 'ws_1' }),
     );
   });
 
-  it('Labs 取密码失败时抛出 BadGatewayException', async () => {
+  it('state=starting 时透传结果，不带 guacamoleBaseUrl，不写审计', async () => {
     const labsClient = buildLabsClient();
-    labsClient.getCredentials.mockRejectedValue(new Error('Labs 获取凭据失败（404）：boom'));
-    const { service, prisma } = await buildService({ labsClient });
+    labsClient.createBrowserSession.mockResolvedValue({ labId: 'ws_1', state: 'starting' });
+    const { service, prisma, audit } = await buildService({ labsClient });
     prisma.enrollment.findUnique.mockResolvedValue(ENROLLMENT);
     prisma.workspace.findUnique.mockResolvedValue({
       id: 'ws_1',
       enrollmentId: 'enr_1',
       status: WorkspaceStatus.RUNNING,
       labId: 'ws_1',
-      rdpUsername: 'learner',
     });
 
-    await expect(service.createConsoleSession('user_1', 'enr_1')).rejects.toBeInstanceOf(BadGatewayException);
+    const result = await service.createConsoleSession('user_1', 'enr_1');
+
+    expect(result).toEqual({ labId: 'ws_1', state: 'starting', data: undefined, expiresAt: undefined, guacamoleBaseUrl: undefined });
+    expect(audit.record).not.toHaveBeenCalled();
   });
 
-  it('RUNNING 时：登记 token、取密码、组装返回值', async () => {
+  it('state=ready 时透传 data/expiresAt，附带 guacamoleBaseUrl，写成功审计', async () => {
     const labsClient = buildLabsClient();
     const { service, prisma, audit } = await buildService({ labsClient });
     prisma.enrollment.findUnique.mockResolvedValue(ENROLLMENT);
@@ -286,16 +286,18 @@ describe('WorkspaceService.createConsoleSession', () => {
       enrollmentId: 'enr_1',
       status: WorkspaceStatus.RUNNING,
       labId: 'ws_1',
-      rdpUsername: 'learner',
     });
 
     const result = await service.createConsoleSession('user_1', 'enr_1');
 
-    expect(result.rdpUsername).toBe('learner');
-    expect(result.rdpPassword).toBe('secret-pw');
-    expect(result.wsUrl).toMatch(/^wss:\/\/labs-console\.test\/\?token=/);
-    expect(labsClient.registerConsoleToken).toHaveBeenCalledWith('ws_1', expect.any(String), 300);
-    expect(labsClient.getCredentials).toHaveBeenCalledWith('ws_1');
+    expect(result).toEqual({
+      labId: 'ws_1',
+      state: 'ready',
+      data: 'encrypted-ticket',
+      expiresAt: '2026-08-24T00:05:00.000Z',
+      guacamoleBaseUrl: 'https://labs-console.test/guacamole/',
+    });
+    expect(labsClient.createBrowserSession).toHaveBeenCalledWith('ws_1', 'user_1');
     expect(audit.record).toHaveBeenCalledWith(
       expect.objectContaining({ action: 'workspace.console-session', success: true, targetId: 'ws_1' }),
     );
