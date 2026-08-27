@@ -14,11 +14,17 @@ const EnvSchema = z.object({
   // LabsClient 时报错，不在进程启动时让整个 server 起不来。
   LABS_VM_BASE_URL: z.url().optional(),
   AIVIRTEACH_API_TOKEN: z.string().min(1).optional(),
+  // Labs 的 POST /v1/vms/{lab_id}/browser-sessions 用这个鉴权，是跟 AIVIRTEACH_API_TOKEN
+  // 不同的静态密钥；两者是否配置了且不相同的校验在 LabsClient.createBrowserSession() 里做，
+  // 不在这里（延续本文件其余 Labs 变量"缺配置不让整个 server 起不来"的约定）。
+  AIVIRTEACH_SESSION_TOKEN: z.string().min(1).optional(),
   CF_ACCESS_CLIENT_ID: z.string().min(1).optional(),
   CF_ACCESS_CLIENT_SECRET: z.string().min(1).optional(),
-  // websockify 对外的 wss:// 基础地址，给浏览器建 RDP WebSocket 连接用；
-  // 跟 LABS_VM_BASE_URL（VM 生命周期 HTTP API）是两个不同用途的地址。
-  LABS_CONSOLE_WS_URL: z.url().optional(),
+  // Guacamole 真实地址（含路径前缀，如 https://xxx.trycloudflare.com/guacamole/），只在
+  // server 端使用，不进浏览器 bundle。server 用它转发 POST /api/tokens 换 authToken——
+  // Guacamole 默认不带 CORS 响应头，浏览器没法直接跨域 fetch 这一步；WebSocket tunnel 本身
+  // 不受 CORS 限制，浏览器换到 authToken 后直接跨域连真实地址开 WS，不需要同源反代。
+  LABS_GUACAMOLE_BASE_URL: z.url().optional(),
 });
 
 export type Env = z.infer<typeof EnvSchema>;

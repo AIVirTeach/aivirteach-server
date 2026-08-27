@@ -37,9 +37,9 @@ describe('WorkspaceController', () => {
   it('POST :enrollmentId/console-session 用认证用户的 userId 调用 service.createConsoleSession', async () => {
     const service = {
       createConsoleSession: jest.fn().mockResolvedValue({
-        wsUrl: 'wss://labs-console.test/?token=abc',
-        rdpUsername: 'learner',
-        rdpPassword: 'secret',
+        labId: 'ws_1',
+        state: 'ready',
+        data: 'encrypted-ticket',
         expiresAt: '2026-08-24T00:05:00.000Z',
       }),
     };
@@ -51,7 +51,30 @@ describe('WorkspaceController', () => {
 
     const result = await controller.createConsoleSession('enr_1', AUTH_REQUEST as any);
 
-    expect(result.wsUrl).toBe('wss://labs-console.test/?token=abc');
+    expect(result.state).toBe('ready');
+    expect(result.data).toBe('encrypted-ticket');
     expect(service.createConsoleSession).toHaveBeenCalledWith('user_1', 'enr_1');
+  });
+
+  it('POST :enrollmentId/console-session/token 用认证用户的 userId 和 body.data 调用 service.exchangeConsoleToken', async () => {
+    const service = {
+      exchangeConsoleToken: jest.fn().mockResolvedValue({
+        authToken: 'real-auth-token',
+        websocketUrl: 'wss://tunnel.trycloudflare.com/guacamole/websocket-tunnel',
+      }),
+    };
+    const moduleRef = await Test.createTestingModule({
+      controllers: [WorkspaceController],
+      providers: [{ provide: WorkspaceService, useValue: service }, JWT_AUTH_GUARD_STUB],
+    }).compile();
+    const controller = moduleRef.get(WorkspaceController);
+
+    const result = await controller.exchangeConsoleToken('enr_1', { data: 'encrypted-ticket' }, AUTH_REQUEST as any);
+
+    expect(result).toEqual({
+      authToken: 'real-auth-token',
+      websocketUrl: 'wss://tunnel.trycloudflare.com/guacamole/websocket-tunnel',
+    });
+    expect(service.exchangeConsoleToken).toHaveBeenCalledWith('user_1', 'enr_1', 'encrypted-ticket');
   });
 });

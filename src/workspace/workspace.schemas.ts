@@ -5,3 +5,9 @@ export const CreateWorkspaceSchema = z.object({
 });
 
 export type CreateWorkspaceInput = z.infer<typeof CreateWorkspaceSchema>;
+
+export const ExchangeConsoleTokenSchema = z.object({
+  data: z.string().min(1),
+});
+
+export type ExchangeConsoleTokenInput = z.infer<typeof ExchangeConsoleTokenSchema>;

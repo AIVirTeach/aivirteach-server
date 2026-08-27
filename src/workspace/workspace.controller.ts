@@ -3,8 +3,9 @@ import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import type { Workspace } from '@prisma/client';
 import { JwtAuthGuard, type AuthenticatedRequest } from '../auth/jwt-auth.guard';
 import { ZodValidationPipe } from '../common/zod-validation.pipe';
-import { CreateWorkspaceSchema, type CreateWorkspaceInput } from './workspace.schemas';
+import { CreateWorkspaceSchema, ExchangeConsoleTokenSchema, type CreateWorkspaceInput, type ExchangeConsoleTokenInput } from './workspace.schemas';
 import { WorkspaceService, type ConsoleSessionResult } from './workspace.service';
+import type { GuacamoleToken } from './labs-client';
 
 @ApiTags('Workspace')
 @ApiBearerAuth()
@@ -31,5 +32,15 @@ export class WorkspaceController {
     @Req() request: AuthenticatedRequest,
   ): Promise<ConsoleSessionResult> {
     return this.workspaceService.createConsoleSession(request.auth!.userId, enrollmentId);
+  }
+
+  @Post(':enrollmentId/console-session/token')
+  @UsePipes(new ZodValidationPipe(ExchangeConsoleTokenSchema))
+  exchangeConsoleToken(
+    @Param('enrollmentId') enrollmentId: string,
+    @Body() body: ExchangeConsoleTokenInput,
+    @Req() request: AuthenticatedRequest,
+  ): Promise<GuacamoleToken> {
+    return this.workspaceService.exchangeConsoleToken(request.auth!.userId, enrollmentId, body.data);
   }
 }
