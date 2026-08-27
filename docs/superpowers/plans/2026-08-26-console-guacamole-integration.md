@@ -4,7 +4,7 @@
 
 **Goal:** 把 `aivirteach-server`/`aivirteach-client` 里"学员点一下按钮，浏览器里看到、操作 Labs VM 真实桌面"这条链路，从已实现的 IronRDP+websockify 换成对接 Labs 同事已经部署的 Apache Guacamole（`vm_agent_local` 分支）。
 
-**Architecture:** server 新增 `LabsClient.createBrowserSession()` 转发 Labs 的 `POST /v1/vms/{lab_id}/browser-sessions`（拿到一个加密的 Guacamole JSON-auth 票据），`WorkspaceController`/`WorkspaceService` 原样透传给浏览器；浏览器用 `guacamole-common-js` 拿票据换 Guacamole `authToken`、开 WebSocket tunnel、直连 `guacd` 渲染桌面——这条数据流完全不经过我们的服务端。详见[设计文档](../specs/2026-08-26-console-guacamole-integration-design.md)。
+**Architecture:** server 新增 `LabsClient.createBrowserSession()` 转发 Labs 的 `POST /v1/vms/{lab_id}/browser-sessions`（拿到一个加密的 Guacamole JSON-auth 票据），`WorkspaceController`/`WorkspaceService` 原样透传给浏览器；浏览器用 `guacamole-common-js` 拿票据换 Guacamole `authToken`、开 WebSocket tunnel 渲染桌面——这条数据流完全不经过我们的服务端。**浏览器只能同源访问 `/guacamole/*`（不是直连 Labs 域名），详见下面「架构变更记录」和[设计文档](../specs/2026-08-26-console-guacamole-integration-design.md)。**
 
 **Tech Stack:** NestJS/Prisma（server）、Next.js (RSC, `vinext`/Cloudflare Workers) + `guacamole-common-js` + `@types/guacamole-common-js`（client）。
 
@@ -20,6 +20,18 @@
 - **两个仓库分支前提**：
   - `aivirteach-server`：当前仓库，当前分支 `docs/console-rdp-access-spec`（PR #9），原地继续改，不切新分支。
   - `aivirteach-client`：`/Users/owenlee/Desktop/2025年/项目/aivirteach-client`，分支 `feat/workspace-vm-orchestration`（PR #3），原地继续改，不切新分支。
+
+---
+
+## 架构变更记录（2026-08-27）
+
+Task 1-6 最初是按"浏览器跨域直连 Labs 的 Guacamole 域名 + CORS"设计并实现的（`guacamoleBaseUrl` 是绝对 URL，`console-viewer.tsx` 直接 `fetch` 跨源地址）。这个设计在 `aivirteach-labs` PR #5（给 Guacamole 加 Nginx CORS 代理）验证阶段被推翻，原因和后续经过：
+
+1. **同事 `vm_agent_local` 分支的权威架构不是跨域直连，是同源反代**：README 明确写了"当前架构决定"——浏览器只通过同源的 `/guacamole/` 路径访问 Guacamole，前面必须有一层边缘路由（Labs 的网关/Cloudflare Tunnel）做同源反代，不需要也不应该给 Guacamole 加 CORS。据此关闭了 `aivirteach-labs` PR #5，把 server（`env.ts`/`workspace.service.ts`）和 client（`console-viewer.tsx`/`api.ts`/`page.tsx`）的契约都改成同源相对路径，去掉了 `guacamoleBaseUrl`/`LABS_GUACAMOLE_BASE_URL` 这些绝对 URL 字段。
+2. **本地曾经尝试用 `next.config.ts` 的 `rewrites()` 在本地开发环境模拟这层同源反代，已被证明不可行并移除**：实测 `rewrites()` 能正常代理 `POST /guacamole/api/tokens`（HTTP），但代理不了 `/guacamole/websocket-tunnel` 的 WebSocket upgrade（连接立刻 `1006` 异常关闭，直连 Guacamole 则正常）。这跟 Vercel 生产环境下 Next.js rewrites 代理 WebSocket 不可靠的已知问题一致。**结论：同源反代这层不能由 `aivirteach-client` 自己的 Next.js/Vercel 配置实现，必须是部署层独立的边缘路由（nginx/Caddy/Cloudflare Tunnel ingress 之类，真正支持 WS upgrade 的反代）**，目前两边仓库都还没有这层的实现代码。
+3. **核心链路已经用同事提供的真实 Labs 环境（真实 `AIVIRTEACH_SESSION_TOKEN` + 真实 `lab-001` VM + trycloudflare quick tunnel）端到端验证过一遍，全部走通**：`POST /v1/vms/lab-001/browser-sessions`（拉起 VM、拿到真实加密票据）→ 真实 Guacamole `/guacamole/api/tokens` 换 `authToken` → 真实 WebSocket tunnel 收到 Guacamole 协议握手数据。这次是跨域直连 tunnel URL 测的（不经过任何同源代理），所以验证的是"票据格式 + Guacamole 握手协议 + WS tunnel 机制"这部分，不是"同源路由"那部分——两者是独立问题。
+
+**当前唯一未解决的技术缺口**：生产环境（以及本地开发）下 `/guacamole/*` 的同源边缘路由还没有实现，且不确定该由 `aivirteach-client` 这边搭，还是由 Labs 那边的 Cloudflare Tunnel 直接接管 client 域名。这条已经问同事，答复前 Task 7 无法完整推进。
 
 ---
 
@@ -1258,26 +1270,32 @@ git commit -m "feat: poll console-session until ready, wire ConsoleViewer to Gua
 
 ---
 
-### Task 7: 端到端手工验证 + 更新部署清单
+### Task 7: 端到端验证 + 更新部署清单
 
-**先决条件**：这个任务需要真实 Labs 主机上的 Guacamole（`vm_agent_local` 分支）已经在跑，以及同事提供的实际服务端口/Tunnel 域名信息——这部分不是这份计划能控制的，需要人类伙伴协调。
+**先决条件**：同源边缘路由（见上面「架构变更记录」）由谁搭、部署在哪，需要同事确认——这部分不是这份计划能控制的，需要人类伙伴协调。已发问，答复前本任务无法完整推进。
 
 **Files:**
 - Modify: `aivirteach-server/docs/deployment/labs-cloudflare-tunnel.md`
 
-- [ ] **Step 1：确认 Labs 主机上 Guacamole 服务状态**
+- [x] **Step 0（2026-08-27 已完成）：用同事提供的真实 Labs 环境做核心链路端到端验证**
 
-跟同事核对：`vm_agent_local` 分支的 Docker Compose（`guacd` + `guacamole`）在 Labs 主机上是不是长期运行的服务（而不是同事本地临时起的），Guacamole webapp 实际对外端口是多少（Docker Compose 里默认映射是 `8080`，但同事之前发的 Quick Tunnel 信息里 `guacamole: 8090`，两者不一致，需要问清楚哪个是准的）。
+用同事发的真实 `AIVIRTEACH_SESSION_TOKEN`/`AIVIRTEACH_API_TOKEN` + 真实 tunnel URL（VM Manager 8760、Guacamole 8090，均为 `trycloudflare.com` quick tunnel），跨域直连（不经过任何同源代理）测了一遍：`POST /v1/vms/lab-001/browser-sessions`（VM 从 `shut off` 被拉起，轮询 `state: starting → ready`）→ 真实票据换 `authToken`（`/guacamole/api/tokens`，200）→ 真实 WebSocket tunnel（`/guacamole/websocket-tunnel`，升级成功，收到 Guacamole 协议握手数据）。全部通过，验证完毕后已用 `POST /v1/vms/lab-001/actions/stop` 把测试用的 VM 关掉。
 
-顺带确认一件事（读过 `vm_agent_local` 分支 `vm-manager/service.py` 的 `create_browser_session` 源码发现的）：这个接口每次被调用都会现查一次 VM 状态，如果状态是 `shut off` 就调用 `VM_CONTROL_SCRIPT start` 然后立刻返回 `state="starting"`，不等它真的起来。我们这边客户端每 2.5 秒轮询一次这同一个接口——如果 VM 从关机到 libvirt 报告状态变化中间隔了不止一个轮询周期（很可能），`VM_CONTROL_SCRIPT start` 会在同一台 VM 还没起来的时候被连续调用好几次。需要问同事：这个脚本对着一台已经在启动中的 VM 重复调用 `start` 是不是安全的（幂等/直接忽略），还是会报错——如果会报错，`create_browser_session` 会把这个错误原样抛出来，我们这边 `console-session` 就会在某次轮询里突然变成 502，即使 VM 其实正在正常启动。这不是我们这边能改的（`aivirteach-labs` 不碰），但如果同事确认会报错，需要回来一起讨论要不要把轮询间隔拉长，或者请同事那边加一个"已经在 starting 就直接跳过 start 调用"的短路判断。
+顺带确认了一件之前记录为待办的事（读 `vm-manager/service.py` 源码 + 这次真实调用都确认）：`create_browser_session` 内部有按 `lab_id` 的 `asyncio.Lock`，且只有确认 VM 处于 `shut off` 才会调用 `VM_CONTROL_SCRIPT start`——客户端轮询期间重复调用这个接口是安全的，不会重复触发 start。**这条不需要再问同事，已经从待办里去掉。**
 
-- [ ] **Step 2：Cloudflare Tunnel 路由确认**
+这次验证跨域直连，测的是"票据格式 + Guacamole 握手协议 + WS tunnel 机制"，不是"同源路由"——后者仍然是本任务剩下的核心缺口，见下面 Step 1。
 
-`labs-vm.<domain>`（8760，挂 Access）需要多路由一条 `browser-sessions`——实际上不需要新配置，FastAPI 路由本来就跟其它 `/v1/vms/*` 在同一个 app/端口下。`labs-console.<domain>`（不挂 Access）需要指向 Guacamole webapp 的实际端口（Step 1 核对的值），不是 Task 1 spike 里用的 `websockify` 6080。
+- [ ] **Step 1：同源边缘路由定案**
 
-- [ ] **Step 3：Server 侧配置真实环境变量**（Vercel Preview 环境）
+跟同事确认（已发问，见会话记录）：这层路由部署在哪、谁来搭（Labs 的 Cloudflare Tunnel 直接接管 client 域名分流，还是我们在 Vercel 前面自己加一层）；client 生产域名及其 DNS/Cloudflare 账号归属；Guacamole 公网入口是否会换成持久化命名的 Cloudflare Tunnel（当前的 `trycloudflare.com` quick tunnel 每次重启域名都变，无法写进任何固定配置）。
 
-`AIVIRTEACH_SESSION_TOKEN`（跟 Labs 主机 `config/api.env` 或 Compose 里同名变量的值完全一致，且确认它跟 `AIVIRTEACH_API_TOKEN` 不是同一个值）、`LABS_GUACAMOLE_BASE_URL`（指向 `https://labs-console.<domain>/guacamole/`）。
+- [ ] **Step 2：按 Step 1 的结论重新验证一遍，这次要经过同源路由**
+
+Step 0 是跨域直连测的，没有验证同源路由本身。Step 1 定案后，要把 Step 0 的流程重新跑一遍，但这次浏览器/`ConsoleViewer` 走 `/guacamole/*` 相对路径、经过实际的边缘路由，而不是绝对 URL 直连。
+
+- [ ] **Step 3：Server 侧配置真实生产环境变量**（Vercel）
+
+`AIVIRTEACH_SESSION_TOKEN`（跟 Labs 主机上同名变量的值完全一致，且确认它跟 `AIVIRTEACH_API_TOKEN` 不是同一个值）——这是账号设置改动，需要真实值和用户明确授权，不是能自动化的一步。`LABS_GUACAMOLE_BASE_URL` 这类绝对 URL 配置已经随同源改造被移除，不再需要。
 
 - [ ] **Step 4：完整走一遍学员视角流程**
 
@@ -1285,7 +1303,7 @@ git commit -m "feat: poll console-session until ready, wire ConsoleViewer to Gua
 
 - [ ] **Step 5：更新部署清单**
 
-按设计文档"部署清单更新"一节列的几点，更新 [`docs/deployment/labs-cloudflare-tunnel.md`](../../deployment/labs-cloudflare-tunnel.md)：删掉 `websockify` 部署那节、换成指向 Labs 自己文档的核对清单；`labs-console.<domain>` 的目标端口改成 Step 1 核对出的真实值；环境变量清单换成 `AIVIRTEACH_SESSION_TOKEN`/`LABS_GUACAMOLE_BASE_URL`；连通性验证排障指引改成 Guacamole 相关的失败模式。
+按设计文档"部署清单更新"一节列的几点，更新 [`docs/deployment/labs-cloudflare-tunnel.md`](../../deployment/labs-cloudflare-tunnel.md)：删掉 `websockify` 部署那节；换成 Step 1 定案的同源边缘路由清单；环境变量清单换成 `AIVIRTEACH_SESSION_TOKEN`；连通性验证排障指引改成 Guacamole 相关的失败模式。
 
 - [ ] **Step 6：Commit**
 
