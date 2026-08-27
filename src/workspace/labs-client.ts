@@ -14,12 +14,18 @@ type CreateVmResponseBody = {
   rdp_port: number;
 };
 
-export type VmCredentials = {
-  password: string;
+export type BrowserSession = {
+  labId: string;
+  state: string;
+  data?: string;
+  expiresAt?: string;
 };
 
-type CredentialsResponseBody = {
-  password: string;
+type BrowserSessionResponseBody = {
+  lab_id: string;
+  state: string;
+  data?: string;
+  expires_at?: number;
 };
 
 // Labs 的 POST /v1/vms 最长阻塞 180 秒（CREATE_TIMEOUT_SECONDS），留够余量。
@@ -62,53 +68,42 @@ export class LabsClient {
     return { labId: body.lab_id, username: body.username, rdpPort: body.rdp_port };
   }
 
-  async getCredentials(labId: string): Promise<VmCredentials> {
-    const { LABS_VM_BASE_URL, AIVIRTEACH_API_TOKEN, CF_ACCESS_CLIENT_ID, CF_ACCESS_CLIENT_SECRET } = this.env;
-    if (!LABS_VM_BASE_URL || !AIVIRTEACH_API_TOKEN) {
-      throw new ServiceUnavailableException('Labs 集成未配置：缺少 LABS_VM_BASE_URL 或 AIVIRTEACH_API_TOKEN');
+  async createBrowserSession(labId: string, subject: string): Promise<BrowserSession> {
+    const { LABS_VM_BASE_URL, AIVIRTEACH_SESSION_TOKEN, AIVIRTEACH_API_TOKEN, CF_ACCESS_CLIENT_ID, CF_ACCESS_CLIENT_SECRET } =
+      this.env;
+    if (!LABS_VM_BASE_URL || !AIVIRTEACH_SESSION_TOKEN) {
+      throw new ServiceUnavailableException('Labs 集成未配置：缺少 LABS_VM_BASE_URL 或 AIVIRTEACH_SESSION_TOKEN');
     }
-
-    const headers: Record<string, string> = { Authorization: `Bearer ${AIVIRTEACH_API_TOKEN}` };
-    if (CF_ACCESS_CLIENT_ID && CF_ACCESS_CLIENT_SECRET) {
-      headers['CF-Access-Client-Id'] = CF_ACCESS_CLIENT_ID;
-      headers['CF-Access-Client-Secret'] = CF_ACCESS_CLIENT_SECRET;
-    }
-
-    const response = await fetch(`${LABS_VM_BASE_URL}/v1/vms/${labId}/credentials`, { headers });
-
-    if (!response.ok) {
-      const detail = await response.text().catch(() => '');
-      throw new Error(`Labs 获取凭据失败（${response.status}）：${detail || response.statusText}`);
-    }
-
-    const body = (await response.json()) as CredentialsResponseBody;
-    return { password: body.password };
-  }
-
-  async registerConsoleToken(labId: string, token: string, ttlSeconds: number): Promise<void> {
-    const { LABS_VM_BASE_URL, AIVIRTEACH_API_TOKEN, CF_ACCESS_CLIENT_ID, CF_ACCESS_CLIENT_SECRET } = this.env;
-    if (!LABS_VM_BASE_URL || !AIVIRTEACH_API_TOKEN) {
-      throw new ServiceUnavailableException('Labs 集成未配置：缺少 LABS_VM_BASE_URL 或 AIVIRTEACH_API_TOKEN');
+    if (AIVIRTEACH_API_TOKEN && AIVIRTEACH_SESSION_TOKEN === AIVIRTEACH_API_TOKEN) {
+      throw new ServiceUnavailableException('AIVIRTEACH_SESSION_TOKEN 不能和 AIVIRTEACH_API_TOKEN 配置成相同的值');
     }
 
     const headers: Record<string, string> = {
       'Content-Type': 'application/json',
-      Authorization: `Bearer ${AIVIRTEACH_API_TOKEN}`,
+      Authorization: `Bearer ${AIVIRTEACH_SESSION_TOKEN}`,
     };
     if (CF_ACCESS_CLIENT_ID && CF_ACCESS_CLIENT_SECRET) {
       headers['CF-Access-Client-Id'] = CF_ACCESS_CLIENT_ID;
       headers['CF-Access-Client-Secret'] = CF_ACCESS_CLIENT_SECRET;
     }
 
-    const response = await fetch(`${LABS_VM_BASE_URL}/v1/vms/${labId}/console-token`, {
+    const response = await fetch(`${LABS_VM_BASE_URL}/v1/vms/${labId}/browser-sessions`, {
       method: 'POST',
       headers,
-      body: JSON.stringify({ token, ttl_seconds: ttlSeconds }),
+      body: JSON.stringify({ subject }),
     });
 
     if (!response.ok) {
       const detail = await response.text().catch(() => '');
-      throw new Error(`Labs 登记 console token 失败（${response.status}）：${detail || response.statusText}`);
+      throw new Error(`Labs 创建浏览器会话失败（${response.status}）：${detail || response.statusText}`);
     }
+
+    const body = (await response.json()) as BrowserSessionResponseBody;
+    return {
+      labId: body.lab_id,
+      state: body.state,
+      data: body.data,
+      expiresAt: body.expires_at !== undefined ? new Date(body.expires_at).toISOString() : undefined,
+    };
   }
 }
