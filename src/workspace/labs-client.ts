@@ -28,6 +28,15 @@ type BrowserSessionResponseBody = {
   expires_at?: number;
 };
 
+export type GuacamoleToken = {
+  authToken: string;
+  websocketUrl: string;
+};
+
+type GuacamoleTokenResponseBody = {
+  authToken: string;
+};
+
 // Labs 的 POST /v1/vms 最长阻塞 180 秒（CREATE_TIMEOUT_SECONDS），留够余量。
 const CREATE_VM_TIMEOUT_MS = 200_000;
 
@@ -105,5 +114,34 @@ export class LabsClient {
       data: body.data,
       expiresAt: body.expires_at !== undefined ? new Date(body.expires_at).toISOString() : undefined,
     };
+  }
+
+  // 浏览器直接 fetch Guacamole 的 /api/tokens 会被 CORS 挡住（Guacamole 默认不带
+  // Access-Control-Allow-Origin），这里改成 server 对 server 转发一次，规避这个限制，
+  // 不需要同源反代也不需要 Guacamole 那边加 CORS 头。WebSocket tunnel 本身不受 CORS
+  // 限制，浏览器拿到 authToken 后直接跨域连 websocketUrl。
+  async exchangeGuacamoleToken(data: string): Promise<GuacamoleToken> {
+    const { LABS_GUACAMOLE_BASE_URL } = this.env;
+    if (!LABS_GUACAMOLE_BASE_URL) {
+      throw new ServiceUnavailableException('Labs 集成未配置：缺少 LABS_GUACAMOLE_BASE_URL');
+    }
+    const base = LABS_GUACAMOLE_BASE_URL.endsWith('/') ? LABS_GUACAMOLE_BASE_URL : `${LABS_GUACAMOLE_BASE_URL}/`;
+
+    const response = await fetch(new URL('api/tokens', base).toString(), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({ data }),
+    });
+
+    if (!response.ok) {
+      const detail = await response.text().catch(() => '');
+      throw new Error(`Guacamole 换取 authToken 失败（${response.status}）：${detail || response.statusText}`);
+    }
+
+    const body = (await response.json()) as GuacamoleTokenResponseBody;
+    const websocketUrl = new URL('websocket-tunnel', base);
+    websocketUrl.protocol = websocketUrl.protocol === 'https:' ? 'wss:' : 'ws:';
+
+    return { authToken: body.authToken, websocketUrl: websocketUrl.toString() };
   }
 }

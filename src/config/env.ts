@@ -20,6 +20,11 @@ const EnvSchema = z.object({
   AIVIRTEACH_SESSION_TOKEN: z.string().min(1).optional(),
   CF_ACCESS_CLIENT_ID: z.string().min(1).optional(),
   CF_ACCESS_CLIENT_SECRET: z.string().min(1).optional(),
+  // Guacamole 真实地址（含路径前缀，如 https://xxx.trycloudflare.com/guacamole/），只在
+  // server 端使用，不进浏览器 bundle。server 用它转发 POST /api/tokens 换 authToken——
+  // Guacamole 默认不带 CORS 响应头，浏览器没法直接跨域 fetch 这一步；WebSocket tunnel 本身
+  // 不受 CORS 限制，浏览器换到 authToken 后直接跨域连真实地址开 WS，不需要同源反代。
+  LABS_GUACAMOLE_BASE_URL: z.url().optional(),
 });
 
 export type Env = z.infer<typeof EnvSchema>;

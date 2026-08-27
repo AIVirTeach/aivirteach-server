@@ -276,3 +276,50 @@ describe('WorkspaceService.createConsoleSession', () => {
     );
   });
 });
+
+describe('WorkspaceService.exchangeConsoleToken', () => {
+  function buildLabsClient() {
+    return {
+      createVm: jest.fn(),
+      exchangeGuacamoleToken: jest.fn().mockResolvedValue({
+        authToken: 'real-auth-token',
+        websocketUrl: 'wss://tunnel.trycloudflare.com/guacamole/websocket-tunnel',
+      }),
+    };
+  }
+
+  it('enrollment 不属于当前用户时拒绝', async () => {
+    const { service, prisma } = await buildService({ labsClient: buildLabsClient() });
+    prisma.enrollment.findUnique.mockResolvedValue({ ...ENROLLMENT, userId: 'someone_else' });
+    await expect(service.exchangeConsoleToken('user_1', 'enr_1', 'encrypted-ticket')).rejects.toBeInstanceOf(
+      ForbiddenException,
+    );
+  });
+
+  it('转发票据给 LabsClient，原样返回 authToken/websocketUrl', async () => {
+    const labsClient = buildLabsClient();
+    const { service, prisma } = await buildService({ labsClient });
+    prisma.enrollment.findUnique.mockResolvedValue(ENROLLMENT);
+
+    const result = await service.exchangeConsoleToken('user_1', 'enr_1', 'encrypted-ticket');
+
+    expect(result).toEqual({
+      authToken: 'real-auth-token',
+      websocketUrl: 'wss://tunnel.trycloudflare.com/guacamole/websocket-tunnel',
+    });
+    expect(labsClient.exchangeGuacamoleToken).toHaveBeenCalledWith('encrypted-ticket');
+  });
+
+  it('LabsClient 失败时抛出 BadGatewayException', async () => {
+    const labsClient = buildLabsClient();
+    labsClient.exchangeGuacamoleToken.mockRejectedValue(
+      new Error('Guacamole 换取 authToken 失败（403）：Permission Denied.'),
+    );
+    const { service, prisma } = await buildService({ labsClient });
+    prisma.enrollment.findUnique.mockResolvedValue(ENROLLMENT);
+
+    await expect(service.exchangeConsoleToken('user_1', 'enr_1', 'bad-ticket')).rejects.toBeInstanceOf(
+      BadGatewayException,
+    );
+  });
+});

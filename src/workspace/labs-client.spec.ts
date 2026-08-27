@@ -205,3 +205,79 @@ describe('LabsClient.createBrowserSession', () => {
     );
   });
 });
+
+describe('LabsClient.exchangeGuacamoleToken', () => {
+  const originalFetch = global.fetch;
+  afterEach(() => {
+    global.fetch = originalFetch;
+    jest.restoreAllMocks();
+  });
+
+  it('缺少 LABS_GUACAMOLE_BASE_URL 时抛出 ServiceUnavailableException', async () => {
+    const client = await buildClient({});
+    await expect(client.exchangeGuacamoleToken('ticket')).rejects.toBeInstanceOf(ServiceUnavailableException);
+  });
+
+  it('POST {base}api/tokens，表单编码 data，返回 authToken 和 websocketUrl（http 转 ws）', async () => {
+    const fetchMock = jest.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ authToken: 'real-auth-token' }),
+    });
+    global.fetch = fetchMock as unknown as typeof fetch;
+
+    const client = await buildClient({ LABS_GUACAMOLE_BASE_URL: 'http://localhost:8080/guacamole/' });
+
+    const result = await client.exchangeGuacamoleToken('encrypted-ticket');
+
+    expect(result).toEqual({
+      authToken: 'real-auth-token',
+      websocketUrl: 'ws://localhost:8080/guacamole/websocket-tunnel',
+    });
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(url).toBe('http://localhost:8080/guacamole/api/tokens');
+    expect(init).toMatchObject({ method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' } });
+    expect(String(init.body)).toBe('data=encrypted-ticket');
+  });
+
+  it('https 基址转成 wss', async () => {
+    global.fetch = jest.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ authToken: 'token' }),
+    }) as unknown as typeof fetch;
+
+    const client = await buildClient({ LABS_GUACAMOLE_BASE_URL: 'https://tunnel.trycloudflare.com/guacamole/' });
+
+    const result = await client.exchangeGuacamoleToken('ticket');
+
+    expect(result.websocketUrl).toBe('wss://tunnel.trycloudflare.com/guacamole/websocket-tunnel');
+  });
+
+  it('基址缺结尾斜杠也能正确拼接，不丢最后一段路径', async () => {
+    const fetchMock = jest.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ authToken: 'token' }),
+    });
+    global.fetch = fetchMock as unknown as typeof fetch;
+
+    const client = await buildClient({ LABS_GUACAMOLE_BASE_URL: 'https://tunnel.trycloudflare.com/guacamole' });
+
+    await client.exchangeGuacamoleToken('ticket');
+
+    expect(fetchMock.mock.calls[0][0]).toBe('https://tunnel.trycloudflare.com/guacamole/api/tokens');
+  });
+
+  it('Guacamole 返回非 2xx 时抛出带状态码和详情的错误', async () => {
+    global.fetch = jest.fn().mockResolvedValue({
+      ok: false,
+      status: 403,
+      statusText: 'Forbidden',
+      text: async () => 'Permission Denied.',
+    }) as unknown as typeof fetch;
+
+    const client = await buildClient({ LABS_GUACAMOLE_BASE_URL: 'http://localhost:8080/guacamole/' });
+
+    await expect(client.exchangeGuacamoleToken('bad-ticket')).rejects.toThrow(
+      'Guacamole 换取 authToken 失败（403）：Permission Denied.',
+    );
+  });
+});

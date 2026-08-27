@@ -3,7 +3,7 @@ import { AuditActorType, WorkspaceStatus, type Workspace } from '@prisma/client'
 import { waitUntil } from '@vercel/functions';
 import { PrismaService } from '../prisma/prisma.service';
 import { AuditService } from '../audit/audit.service';
-import { LabsClient, type BrowserSession } from './labs-client';
+import { LabsClient, type BrowserSession, type GuacamoleToken } from './labs-client';
 import { WorkspaceGateway } from './workspace.gateway';
 
 const STALE_CREATING_MS = 5 * 60 * 1000;
@@ -69,6 +69,18 @@ export class WorkspaceService {
     }
 
     return session;
+  }
+
+  // 浏览器不能直接跨域 fetch Guacamole 的 /api/tokens（CORS），这里由 server 转发一次；
+  // enrollment 归属校验跟其它接口一致，票据本身的有效性交给 Guacamole/Labs 判断。
+  async exchangeConsoleToken(userId: string, enrollmentId: string, data: string): Promise<GuacamoleToken> {
+    await this.requireOwnedEnrollment(userId, enrollmentId);
+    try {
+      return await this.labsClient.exchangeGuacamoleToken(data);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : '未知错误';
+      throw new BadGatewayException(`无法建立远程桌面会话：${message}`);
+    }
   }
 
   async create(userId: string, enrollmentId: string): Promise<Workspace> {
