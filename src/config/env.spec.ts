@@ -29,15 +29,21 @@ describe('loadEnv', () => {
     expect(env.REFRESH_TOKEN_TTL_DAYS).toBe(7);
   });
 
-  it('LABS_CONSOLE_WS_URL 未配置时为 undefined，不影响其余必填校验', () => {
+  it('LABS_GUACAMOLE_BASE_URL 未配置时为 undefined，不影响其余必填校验', () => {
     const env = loadEnv(validSource);
-    expect(env.LABS_CONSOLE_WS_URL).toBeUndefined();
+    expect(env.LABS_GUACAMOLE_BASE_URL).toBeUndefined();
   });
 
-  it('LABS_CONSOLE_WS_URL 配置了但不是合法 URL 时抛错', () => {
+  it('LABS_GUACAMOLE_BASE_URL 配置了但不是合法 URL 时抛错', () => {
     expect(() =>
-      loadEnv({ ...validSource, LABS_CONSOLE_WS_URL: 'not-a-url' }),
-    ).toThrow(/LABS_CONSOLE_WS_URL/);
+      loadEnv({ ...validSource, LABS_GUACAMOLE_BASE_URL: 'not-a-url' }),
+    ).toThrow(/LABS_GUACAMOLE_BASE_URL/);
+  });
+
+  it('LABS_GUACAMOLE_BASE_URL 配置了但不以 / 结尾时抛错', () => {
+    expect(() =>
+      loadEnv({ ...validSource, LABS_GUACAMOLE_BASE_URL: 'https://labs-console.test' }),
+    ).toThrow(/LABS_GUACAMOLE_BASE_URL/);
   });
 
   it('JWT_SECRET 太短时抛错并指名字段', () => {

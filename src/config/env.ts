@@ -14,11 +14,21 @@ const EnvSchema = z.object({
   // LabsClient 时报错，不在进程启动时让整个 server 起不来。
   LABS_VM_BASE_URL: z.url().optional(),
   AIVIRTEACH_API_TOKEN: z.string().min(1).optional(),
+  // Labs 的 POST /v1/vms/{lab_id}/browser-sessions 用这个鉴权，是跟 AIVIRTEACH_API_TOKEN
+  // 不同的静态密钥；两者是否配置了且不相同的校验在 LabsClient.createBrowserSession() 里做，
+  // 不在这里（延续本文件其余 Labs 变量"缺配置不让整个 server 起不来"的约定）。
+  AIVIRTEACH_SESSION_TOKEN: z.string().min(1).optional(),
   CF_ACCESS_CLIENT_ID: z.string().min(1).optional(),
   CF_ACCESS_CLIENT_SECRET: z.string().min(1).optional(),
-  // websockify 对外的 wss:// 基础地址，给浏览器建 RDP WebSocket 连接用；
+  // Guacamole webapp 的 https:// 根路径，给浏览器建 Guacamole 会话用；
   // 跟 LABS_VM_BASE_URL（VM 生命周期 HTTP API）是两个不同用途的地址。
-  LABS_CONSOLE_WS_URL: z.url().optional(),
+  // 必须以 / 结尾——client 侧 `console-viewer.tsx` 直接字符串拼接
+  // `${guacamoleBaseUrl}api/tokens`/`${wsBase}websocket-tunnel`，不在这里强制的话，
+  // 少了结尾斜杠会拼出一个语法正确但指向错误主机的 URL，报错会很难查。
+  LABS_GUACAMOLE_BASE_URL: z
+    .url()
+    .refine((value) => value.endsWith('/'), 'LABS_GUACAMOLE_BASE_URL 必须以 / 结尾（Guacamole webapp 根路径）')
+    .optional(),
 });
 
 export type Env = z.infer<typeof EnvSchema>;
