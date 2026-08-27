@@ -29,7 +29,7 @@
 
 **环境**：全程本地 Docker，不依赖 Labs 主机、不需要 SSH 访问权限。
 
-- [ ] **Step 1：本地起一份跟 Labs 同版本的 Guacamole（1.6.0）+ 一个测试 RDP 目标**
+- [x] **Step 1：本地起一份跟 Labs 同版本的 Guacamole（1.6.0）+ 一个测试 RDP 目标**
 
 在临时目录（不是 `aivirteach-server`/`aivirteach-client` 仓库里）新建 `docker-compose.yml`：
 
@@ -61,7 +61,7 @@ docker compose logs -f guacamole   # 等到看见 Tomcat 启动完成、没有�
 
 验证 Guacamole 起来了：浏览器打开 `http://localhost:8080/guacamole/`，能看到登录页（不用登录，后面走 JSON auth）。
 
-- [ ] **Step 2：写一个 Node 脚本，按 Labs `_encrypt_guacamole_payload` 同样的算法构造票据**
+- [x] **Step 2：写一个 Node 脚本，按 Labs `_encrypt_guacamole_payload` 同样的算法构造票据**
 
 这个算法来自 `aivirteach-labs` 的 `vm_agent_local` 分支 `vm-manager/service.py`（只读参考，不修改那个仓库）：HMAC-SHA256 签名 + 明文拼接，PKCS7 padding，AES-128-CBC **零 IV** 加密，base64 编码。
 
@@ -114,7 +114,7 @@ curl -s -X POST http://localhost:8080/guacamole/api/tokens \
 
 期待：返回 JSON，里面有 `authToken` 字段（形如 `{"authToken":"...","username":"spike-user",...}`）。如果返回 400/401，先检查 `JSON_SECRET_KEY`（Guacamole 侧）跟脚本里 `SECRET_HEX` 是不是完全一致的 32 位十六进制字符串——这是最常见的失败原因。
 
-- [ ] **Step 3：起一个最小 Vite 项目，验证 `guacamole-common-js` 的正确 import 方式**
+- [x] **Step 3：起一个最小 Vite 项目，验证 `guacamole-common-js` 的正确 import 方式**
 
 ```bash
 npm create vite@latest guac-spike -- --template vanilla-ts
@@ -145,7 +145,7 @@ npm run dev
 
 把最终确认可行的 import 写法记下来，供 Task 6 使用。
 
-- [ ] **Step 4：完整走一遍"票据 → authToken → WebSocket tunnel → 看到桌面"，且必须用浏览器自己的 `fetch()` 换 `authToken`（不能手工粘贴）**
+- [x] **Step 4：完整走一遍"票据 → authToken → WebSocket tunnel → 看到桌面"，且必须用浏览器自己的 `fetch()` 换 `authToken`（不能手工粘贴）**
 
 **为什么不能像 Step 2 那样用 curl 拿 `authToken` 再手工粘贴过来**：Task 5 的 `console-viewer.tsx` 在真实生产环境里是浏览器 JS 直接 `fetch()` 跨源调用 `${guacamoleBaseUrl}api/tokens`（`aivirteach-client` 的域名 vs. `labs-console.<domain>`，两个不同源）。curl 没有浏览器的同源策略，验证不出 Guacamole 的 Tomcat 部署到底有没有对这个跨源 `fetch()` 返回 `Access-Control-Allow-Origin` 响应头——Apache Guacamole 默认不带 CORS 响应头，如果生产环境也没加，`console-viewer.tsx` 的 `fetch()` 会直接报 CORS 错误，界面上只会看到一个含糊的网络错误。这一步必须让浏览器自己发这个请求，才能在合并任何周边代码之前发现这个问题。Vite dev server（默认 `http://localhost:5173`）和 Guacamole（`http://localhost:8080`）本来就是不同 origin，足够模拟这个场景。
 
@@ -200,7 +200,7 @@ connect().catch((error) => console.error("connect() failed:", error));
 - 页面上出现 `rdp-target` 容器里 xrdp 桌面的真实画面（不是空白/错误）。
 - `client.onerror`/`tunnel.onerror` 没有触发。
 
-- [ ] **Step 5：记录发现，做 go/no-go 判断**
+- [x] **Step 5：记录发现，做 go/no-go 判断**
 
 在这次会话里（不需要建文件）跟人类伙伴同步：
 
@@ -228,7 +228,7 @@ docker compose down -v   # 清理本地测试环境，这些容器不需要保�
 **Interfaces:**
 - Produces：`Env.AIVIRTEACH_SESSION_TOKEN: string | undefined`、`Env.LABS_GUACAMOLE_BASE_URL: string | undefined`（替代原来的 `LABS_CONSOLE_WS_URL`）。Task 3 的 `LabsClient.createBrowserSession()` 用前者，Task 4 的 `WorkspaceService.createConsoleSession()` 用后者。
 
-- [ ] **Step 1：改测试——把 `LABS_CONSOLE_WS_URL` 的两个用例改名成 `LABS_GUACAMOLE_BASE_URL`**
+- [x] **Step 1：改测试——把 `LABS_CONSOLE_WS_URL` 的两个用例改名成 `LABS_GUACAMOLE_BASE_URL`**
 
 在 `src/config/env.spec.ts` 里，找到这两个用例：
 
@@ -270,14 +270,14 @@ docker compose down -v   # 清理本地测试环境，这些容器不需要保�
   });
 ```
 
-- [ ] **Step 2：跑测试确认失败**
+- [x] **Step 2：跑测试确认失败**
 
 ```bash
 npm test -- src/config/env.spec.ts
 ```
 Expected: 这三个用例 FAIL（`LABS_GUACAMOLE_BASE_URL` 字段还不存在于 schema 里，`loadEnv(validSource)` 返回的对象里没有这个 key，`toBeUndefined()` 断言本身会通过，但后两个用例期待抛错、实际不会抛——因为未知字段会被 Zod 直接忽略，不校验）。
 
-- [ ] **Step 3：改 `EnvSchema`**
+- [x] **Step 3：改 `EnvSchema`**
 
 在 `src/config/env.ts` 里，把：
 
@@ -309,14 +309,14 @@ Expected: 这三个用例 FAIL（`LABS_GUACAMOLE_BASE_URL` 字段还不存在于
     .optional(),
 ```
 
-- [ ] **Step 4：跑测试确认通过**
+- [x] **Step 4：跑测试确认通过**
 
 ```bash
 npm test -- src/config/env.spec.ts
 ```
 Expected: PASS。
 
-- [ ] **Step 5：`.env.example` 更新**
+- [x] **Step 5：`.env.example` 更新**
 
 把：
 
@@ -336,7 +336,7 @@ AIVIRTEACH_SESSION_TOKEN=
 LABS_GUACAMOLE_BASE_URL=
 ```
 
-- [ ] **Step 6：Commit**
+- [x] **Step 6：Commit**
 
 ```bash
 git add src/config/env.ts src/config/env.spec.ts .env.example
@@ -356,7 +356,7 @@ git commit -m "feat: add AIVIRTEACH_SESSION_TOKEN, rename LABS_CONSOLE_WS_URL to
 - Produces：`createBrowserSession(labId: string, subject: string): Promise<BrowserSession>`，`BrowserSession = { labId: string; state: string; data?: string; expiresAt?: string }`。Task 4 直接调这个方法。
 - 移除：`getCredentials()`、`registerConsoleToken()`、导出类型 `VmCredentials`（已用 `grep` 核实只被 `workspace.service.ts` 一处调用，删除不影响其它路径）。
 
-- [ ] **Step 1：删掉旧方法的测试，写新方法的失败测试**
+- [x] **Step 1：删掉旧方法的测试，写新方法的失败测试**
 
 在 `src/workspace/labs-client.spec.ts` 里，把整个 `describe('LabsClient.getCredentials', ...)` 和 `describe('LabsClient.registerConsoleToken', ...)` 两个块（从 `describe('LabsClient.getCredentials'` 开始到文件末尾）删掉，换成：
 
@@ -484,14 +484,14 @@ describe('LabsClient.createBrowserSession', () => {
 });
 ```
 
-- [ ] **Step 2：跑测试确认失败**
+- [x] **Step 2：跑测试确认失败**
 
 ```bash
 npm test -- src/workspace/labs-client.spec.ts
 ```
 Expected: 新增用例全部 FAIL（`createBrowserSession` 方法不存在）；旧的 `getCredentials`/`registerConsoleToken` 测试已经删掉，不会再跑。
 
-- [ ] **Step 3：删掉旧方法，实现新方法**
+- [x] **Step 3：删掉旧方法，实现新方法**
 
 在 `src/workspace/labs-client.ts` 里，删掉整个 `getCredentials` 方法（含它上面的 `VmCredentials`/`CredentialsResponseBody` 类型定义）和整个 `registerConsoleToken` 方法。在 `createVm` 方法后面加：
 
@@ -550,14 +550,14 @@ async createBrowserSession(labId: string, subject: string): Promise<BrowserSessi
 }
 ```
 
-- [ ] **Step 4：跑测试确认通过**
+- [x] **Step 4：跑测试确认通过**
 
 ```bash
 npm test -- src/workspace/labs-client.spec.ts
 ```
 Expected: 全部 PASS。
 
-- [ ] **Step 5：Commit**
+- [x] **Step 5：Commit**
 
 ```bash
 git add src/workspace/labs-client.ts src/workspace/labs-client.spec.ts
@@ -579,7 +579,7 @@ git commit -m "feat: replace LabsClient console-token/credentials methods with c
 
 `src/workspace/workspace.controller.ts` **本身不需要改动**——路由方法 `createConsoleSession` 已经是 `return this.workspaceService.createConsoleSession(...)`，类型名 `ConsoleSessionResult` 保持不变，只是它在 `workspace.service.ts` 里的字段形状变了。
 
-- [ ] **Step 1：改 service 层测试**
+- [x] **Step 1：改 service 层测试**
 
 在 `src/workspace/workspace.service.spec.ts` 里，把整个 `describe('WorkspaceService.createConsoleSession', ...)` 块替换成：
 
@@ -718,14 +718,14 @@ describe('WorkspaceService.createConsoleSession', () => {
       { provide: ENV, useValue: { LABS_GUACAMOLE_BASE_URL: 'https://labs-console.test/guacamole/', ...overrides.env } },
 ```
 
-- [ ] **Step 2：跑测试确认失败**
+- [x] **Step 2：跑测试确认失败**
 
 ```bash
 npm test -- src/workspace/workspace.service.spec.ts
 ```
 Expected: 新用例 FAIL（`createConsoleSession` 还是旧实现，返回形状对不上、也没有 `createBrowserSession` 这个方法名可调）。
 
-- [ ] **Step 3：重写 `WorkspaceService.createConsoleSession`**
+- [x] **Step 3：重写 `WorkspaceService.createConsoleSession`**
 
 在 `src/workspace/workspace.service.ts` 里，把整个 `createConsoleSession` 方法替换成：
 
@@ -805,14 +805,14 @@ export type ConsoleSessionResult = {
 
 （`CONSOLE_TOKEN_TTL_SECONDS` 常量整个删掉，不再需要——票据的过期时间由 Labs 决定，不是我们这边生成的。）
 
-- [ ] **Step 4：跑测试确认通过**
+- [x] **Step 4：跑测试确认通过**
 
 ```bash
 npm test -- src/workspace/workspace.service.spec.ts
 ```
 Expected: 全部 PASS。
 
-- [ ] **Step 5：改 controller 层测试**
+- [x] **Step 5：改 controller 层测试**
 
 `workspace.controller.ts` 源码不用改，但它的测试 mock 了 `createConsoleSession` 的返回值，形状要跟着换。在 `src/workspace/workspace.controller.spec.ts` 里，把：
 
@@ -866,21 +866,21 @@ Expected: 全部 PASS。
   });
 ```
 
-- [ ] **Step 6：跑测试确认通过**
+- [x] **Step 6：跑测试确认通过**
 
 ```bash
 npm test -- src/workspace/workspace.controller.spec.ts
 ```
 Expected: PASS。
 
-- [ ] **Step 7：跑全量测试确认没有破坏其它模块**
+- [x] **Step 7：跑全量测试确认没有破坏其它模块**
 
 ```bash
 npm test
 ```
 Expected: 全部 PASS（`workspace.gateway.spec.ts` 不受影响，因为源码没动）。
 
-- [ ] **Step 8：Commit**
+- [x] **Step 8：Commit**
 
 ```bash
 git add src/workspace/workspace.service.ts src/workspace/workspace.service.spec.ts src/workspace/workspace.controller.spec.ts
@@ -905,7 +905,7 @@ git status   # 确认在 feat/workspace-vm-orchestration 分支且工作区干�
 **Interfaces:**
 - Produces：React 组件 `<ConsoleViewer data={string} guacamoleBaseUrl={string} onError={(message: string) => void} />`，Task 6 在 `/workspace` 页面里用它替换掉现在接 IronRDP 的调用方式。
 
-- [ ] **Step 1：卸载 IronRDP 依赖，安装 Guacamole 依赖**
+- [x] **Step 1：卸载 IronRDP 依赖，安装 Guacamole 依赖**
 
 ```bash
 npm uninstall @devolutions/iron-remote-desktop @devolutions/iron-remote-desktop-rdp
@@ -913,7 +913,7 @@ npm install guacamole-common-js@1.5.0
 npm install --save-dev @types/guacamole-common-js@1.5.5
 ```
 
-- [ ] **Step 2：整个重写 `console-viewer.tsx`**
+- [x] **Step 2：整个重写 `console-viewer.tsx`**
 
 用 Task 1 spike 实测确认的 `import` 写法（下面按 spike 最可能的结果 `import * as Guacamole` 写，如果 spike 结果是默认导入，把顶部这一行换成 `import Guacamole from "guacamole-common-js";`）：
 
@@ -1017,7 +1017,7 @@ export function ConsoleViewer({ data, guacamoleBaseUrl, onError }: ConsoleViewer
 }
 ```
 
-- [ ] **Step 3：`npm run lint` 确认没有新增 lint 错误**
+- [x] **Step 3：`npm run lint` 确认没有新增 lint 错误**
 
 ```bash
 npm run lint
@@ -1028,7 +1028,7 @@ Expected: 无新增错误。如果 `import * as Guacamole from "guacamole-common
 
 把这个组件临时塞进任意页面（或者直接跳到 Task 6 做完页面接入后一起验证），用 Task 1 Step 2 脚本手工构造的 `data` 传进 `ConsoleViewer`，`guacamoleBaseUrl` 填 `http://localhost:8080/guacamole/`：确认能连上、渲染出真实桌面、键鼠有效。这一步没有自动化测试可写（WASM/WebSocket 实时连接没法很好 mock），手工验证过一遍即可继续。
 
-- [ ] **Step 5：Commit**
+- [x] **Step 5：Commit**
 
 ```bash
 git add package.json package-lock.json app/workspace/console-viewer.tsx
@@ -1046,7 +1046,7 @@ git commit -m "feat: rewrite ConsoleViewer to use guacamole-common-js instead of
 **Interfaces:**
 - Consumes：Server 的 `POST /workspaces/:enrollmentId/console-session`（Task 4）、`ConsoleViewer` 组件（Task 5）。
 
-- [ ] **Step 1：`api.ts` 换类型**
+- [x] **Step 1：`api.ts` 换类型**
 
 把：
 
@@ -1073,7 +1073,7 @@ export type ApiConsoleSession = {
 
 `api.consoleSession` 方法本身不用改（路径、method 都没变）。
 
-- [ ] **Step 2：`page.tsx` 加轮询状态和逻辑**
+- [x] **Step 2：`page.tsx` 加轮询状态和逻辑**
 
 顶部 import 改：
 
@@ -1187,7 +1187,7 @@ import { ConsoleViewer } from "./console-viewer";
   }, []);
 ```
 
-- [ ] **Step 3：更新渲染逻辑**
+- [x] **Step 3：更新渲染逻辑**
 
 把现有：
 
@@ -1234,7 +1234,7 @@ import { ConsoleViewer } from "./console-viewer";
 
 `handleConsoleError` 不用改（已经是 `setConsoleError` + `setConsoleSession(null)`）。
 
-- [ ] **Step 4：跑现有测试确认没破坏**
+- [x] **Step 4：跑现有测试确认没破坏**
 
 ```bash
 npm test
@@ -1249,7 +1249,7 @@ Expected: `tests/rendered-html.test.mjs` 全部 PASS（这个测试只检查"未
   - [ ] Guacamole 服务没起/票据无效 → 展示明确的错误信息，不是卡死转圈
   - [ ] 关闭/离开页面 → 浏览器原生关闭 WebSocket 连接
 
-- [ ] **Step 6：Commit**
+- [x] **Step 6：Commit**
 
 ```bash
 git add app/lib/api.ts app/workspace/page.tsx
