@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Param, Post, Req, UseGuards } from '@nestjs/common';
+import { Body, Controller, Get, HttpCode, Param, Post, Req, UseGuards } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { JwtAuthGuard, type AuthenticatedRequest } from '../auth/jwt-auth.guard';
 import { ZodValidationPipe } from '../common/zod-validation.pipe';
@@ -21,6 +21,7 @@ export class ChatController {
   }
 
   @Post(':enrollmentId/chat/messages')
+  @HttpCode(200)
   sendMessage(
     @Param('enrollmentId') enrollmentId: string,
     @Body(new ZodValidationPipe(SendChatMessageSchema)) body: SendChatMessageInput,
