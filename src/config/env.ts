@@ -25,6 +25,14 @@ const EnvSchema = z.object({
   // Guacamole 默认不带 CORS 响应头，浏览器没法直接跨域 fetch 这一步；WebSocket tunnel 本身
   // 不受 CORS 限制，浏览器换到 authToken 后直接跨域连真实地址开 WS，不需要同源反代。
   LABS_GUACAMOLE_BASE_URL: z.url().optional(),
+  // aivirteach-labs 的诊断 Agent（POST /v1/agent/diagnose）；本地/CI 不配也要能跑，
+  // 缺配置只在真正调用 AgentClient 时报错，不在进程启动时让整个 server 起不来
+  // （跟本文件其余 Labs 变量的约定一致）。
+  LABS_AGENT_BASE_URL: z.url().optional(),
+  // server-to-Agent 共享密钥，必须跟 Labs 那边 agent-service/config/agent.env 里的
+  // AIVIRTEACH_AGENT_TOKEN 是同一个值（模式跟 AIVIRTEACH_API_TOKEN 一致：两边变量名
+  // 相同、值抄一份，不是同一套密钥体系）。
+  AIVIRTEACH_AGENT_TOKEN: z.string().min(1).optional(),
 });
 
 export type Env = z.infer<typeof EnvSchema>;
