@@ -132,4 +132,41 @@ describe('AgentClient.diagnose', () => {
       'Agent 诊断失败（401）：Invalid or missing bearer token.',
     );
   });
+
+  it('Agent 返回 2xx 但响应体缺少必填字段（如 answer）时抛出错误，不会返回半成品对象', async () => {
+    global.fetch = jest.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        request_id: PAYLOAD.request_id,
+        status: 'completed',
+        diagnosis: {},
+        course_alignment: {},
+        evidence: [],
+        suggested_actions: [],
+        limitations: [],
+        tool_trace: [],
+      }),
+    }) as unknown as typeof fetch;
+
+    const client = await buildClient({
+      LABS_AGENT_BASE_URL: 'https://labs-agent.example.com',
+      AIVIRTEACH_AGENT_TOKEN: 'agent-token',
+    });
+
+    await expect(client.diagnose(PAYLOAD)).rejects.toThrow('Agent 响应格式不符合预期');
+  });
+
+  it('Agent 返回 2xx 但 body 不是对象（如 null）时抛出错误', async () => {
+    global.fetch = jest.fn().mockResolvedValue({
+      ok: true,
+      json: async () => null,
+    }) as unknown as typeof fetch;
+
+    const client = await buildClient({
+      LABS_AGENT_BASE_URL: 'https://labs-agent.example.com',
+      AIVIRTEACH_AGENT_TOKEN: 'agent-token',
+    });
+
+    await expect(client.diagnose(PAYLOAD)).rejects.toThrow('Agent 响应格式不符合预期');
+  });
 });
