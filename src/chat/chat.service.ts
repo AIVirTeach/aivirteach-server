@@ -111,6 +111,11 @@ export class ChatService {
 
     const flattened = lesson.module.courseVersion.modules.flatMap((courseModule) => courseModule.lessons);
     const sequence = flattened.findIndex((entry) => entry.id === lesson.id) + 1;
+    if (sequence === 0) {
+      // 理论上不该发生：lesson 本该出现在自己 module 的 lessons 列表里。真出现说明数据有不一致，
+      // 跟 Agent 调用失败区分开单独记一条，不然只看兜底消息看不出是这个原因。
+      this.logger.warn(`courseLessonId=${lesson.id} 在自己所属 module 的 lessons 列表里找不到自己（数据不一致）`);
+    }
     const assessment = lesson.assessments[0] ?? null;
 
     return {

@@ -282,4 +282,41 @@ describe('ChatService.sendMessage — 调用 Agent', () => {
     expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining('enr_1'), expect.stringContaining('fetch failed: ECONNREFUSED'));
     errorSpy.mockRestore();
   });
+
+  it('当前课时在自己所属模块的课时列表里找不到自己时（数据不一致），记一条警告日志', async () => {
+    const warnSpy = jest.spyOn(Logger.prototype, 'warn').mockImplementation(() => undefined);
+    const { service, prisma, agentClient } = await buildService();
+    setupReadyWorkspace(prisma);
+    prisma.courseLesson.findUnique.mockResolvedValue({
+      ...LESSON,
+      module: {
+        ...LESSON.module,
+        courseVersion: {
+          ...LESSON.module.courseVersion,
+          modules: [{ position: 1, lessons: [{ id: 'lesson_0', position: 1 }] }],
+        },
+      },
+    });
+    prisma.conversation.create.mockResolvedValueOnce(conversationRow({ id: 'student_1', content: '？' }));
+    agentClient.diagnose.mockResolvedValue({
+      request_id: 'req_3',
+      status: 'completed',
+      answer: '...',
+      diagnosis: {},
+      course_alignment: {},
+      evidence: [],
+      suggested_actions: [],
+      limitations: [],
+      tool_trace: [],
+    });
+    prisma.conversation.create.mockResolvedValueOnce(conversationRow({ id: 'tutor_1', role: ConversationRole.ASSISTANT, content: '...' }));
+
+    await service.sendMessage('user_1', 'enr_1', '？');
+
+    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('lesson_1'));
+    expect(agentClient.diagnose).toHaveBeenCalledWith(
+      expect.objectContaining({ current_step: expect.objectContaining({ sequence: 0 }) }),
+    );
+    warnSpy.mockRestore();
+  });
 });
