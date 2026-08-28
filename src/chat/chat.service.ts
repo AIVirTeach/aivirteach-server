@@ -1,4 +1,4 @@
-import { ForbiddenException, Injectable } from '@nestjs/common';
+import { ForbiddenException, Injectable, Logger } from '@nestjs/common';
 import { ConversationRole, WorkspaceStatus, type Conversation, type Prisma } from '@prisma/client';
 import { randomUUID } from 'node:crypto';
 import { PrismaService } from '../prisma/prisma.service';
@@ -15,6 +15,8 @@ export type ChatMessage = {
 
 @Injectable()
 export class ChatService {
+  private readonly logger = new Logger(ChatService.name);
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly agentClient: AgentClient,
@@ -64,7 +66,9 @@ export class ChatService {
         course: context.course,
         current_step: context.currentStep,
       });
-    } catch {
+    } catch (error) {
+      const message = error instanceof Error ? error.message : '未知错误';
+      this.logger.error(`enrollmentId=${enrollment.id} Agent 诊断调用失败`, message);
       return this.respondWithFallback(userId, enrollment.id, studentRow, '助教暂时不可用，请稍后再试。');
     }
 

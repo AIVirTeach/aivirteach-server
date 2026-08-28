@@ -1,4 +1,4 @@
-import { ForbiddenException } from '@nestjs/common';
+import { ForbiddenException, Logger } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
 import { ConversationRole } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
@@ -265,5 +265,21 @@ describe('ChatService.sendMessage — 调用 Agent', () => {
     const result = await service.sendMessage('user_1', 'enr_1', '？');
 
     expect(result.tutorMessage.text).toBe('助教暂时不可用，请稍后再试。');
+  });
+
+  it('Agent 调用失败时把详细错误记到 server 日志，不能只落一条兜底消息就悄悄吞掉', async () => {
+    const errorSpy = jest.spyOn(Logger.prototype, 'error').mockImplementation(() => undefined);
+    const { service, prisma, agentClient } = await buildService();
+    setupReadyWorkspace(prisma);
+    prisma.conversation.create.mockResolvedValueOnce(conversationRow({ id: 'student_1', content: '？' }));
+    agentClient.diagnose.mockRejectedValue(new Error('fetch failed: ECONNREFUSED'));
+    prisma.conversation.create.mockResolvedValueOnce(
+      conversationRow({ id: 'tutor_1', role: ConversationRole.ASSISTANT, content: '助教暂时不可用，请稍后再试。' }),
+    );
+
+    await service.sendMessage('user_1', 'enr_1', '？');
+
+    expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining('enr_1'), expect.stringContaining('fetch failed: ECONNREFUSED'));
+    errorSpy.mockRestore();
   });
 });
