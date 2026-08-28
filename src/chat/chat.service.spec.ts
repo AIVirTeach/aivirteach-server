@@ -138,3 +138,132 @@ describe('ChatService.sendMessage — 兜底路径（不调用 Agent）', () => 
     expect(agentClient.diagnose).not.toHaveBeenCalled();
   });
 });
+
+const LESSON = {
+  id: 'lesson_1',
+  contentId: 'verify-virtual-machine',
+  title: '验证虚拟机',
+  activityPrompt: '打开终端\n运行 docker --version\n确认版本号打印出来',
+  assessments: [
+    { expectedResult: '看到 docker 版本号', successCriteria: ['命令成功执行'], commonFailures: ['docker 服务未启动'] },
+  ],
+  module: {
+    id: 'module_1',
+    courseVersion: {
+      version: 1,
+      course: { slug: 'linux-basics', title: 'Linux 基础', description: '入门课程' },
+      modules: [
+        { position: 1, lessons: [{ id: 'lesson_0', position: 1 }, { id: 'lesson_1', position: 2 }] },
+      ],
+    },
+  },
+};
+
+describe('ChatService.sendMessage — 调用 Agent', () => {
+  function setupReadyWorkspace(prisma: ReturnType<typeof buildPrisma>) {
+    prisma.enrollment.findUnique.mockResolvedValue(ENROLLMENT);
+    prisma.workspace.findUnique.mockResolvedValue({ labId: 'lab_1', status: WorkspaceStatus.RUNNING });
+    prisma.progress.findUnique.mockResolvedValue({ currentLessonId: 'lesson_1' });
+    prisma.courseLesson.findUnique.mockResolvedValue(LESSON);
+  }
+
+  it('成功响应：落 ASSISTANT 消息，content=answer，contextRef=完整响应，payload 字段映射正确', async () => {
+    const { service, prisma, agentClient } = await buildService();
+    setupReadyWorkspace(prisma);
+    prisma.conversation.create.mockResolvedValueOnce(conversationRow({ id: 'student_1', content: 'docker 装不上' }));
+    const diagnoseResponse = {
+      request_id: 'req_1',
+      status: 'completed',
+      answer: '试试重启 docker 服务',
+      diagnosis: {},
+      course_alignment: {},
+      evidence: [],
+      suggested_actions: [],
+      limitations: [],
+      tool_trace: [],
+    };
+    agentClient.diagnose.mockResolvedValue(diagnoseResponse);
+    prisma.conversation.create.mockResolvedValueOnce(
+      conversationRow({
+        id: 'tutor_1',
+        role: ConversationRole.ASSISTANT,
+        content: diagnoseResponse.answer,
+        contextRef: diagnoseResponse,
+      }),
+    );
+
+    const result = await service.sendMessage('user_1', 'enr_1', 'docker 装不上');
+
+    expect(result.tutorMessage.text).toBe('试试重启 docker 服务');
+    expect(agentClient.diagnose).toHaveBeenCalledWith(
+      expect.objectContaining({
+        lab_id: 'lab_1',
+        question: 'docker 装不上',
+        course: { course_id: 'linux-basics', version: 1, title: 'Linux 基础', summary: '入门课程' },
+        current_step: {
+          module_id: 'module_1',
+          lesson_id: 'verify-virtual-machine',
+          sequence: 2,
+          title: '验证虚拟机',
+          instructions: ['打开终端', '运行 docker --version', '确认版本号打印出来'],
+          expected_result: '看到 docker 版本号',
+          success_criteria: ['命令成功执行'],
+          common_failures: [{ code: 'docker 服务未启动', symptoms: [] }],
+        },
+      }),
+    );
+    expect(prisma.conversation.create).toHaveBeenLastCalledWith({
+      data: {
+        enrollmentId: 'enr_1',
+        threadId: 'enr_1',
+        role: ConversationRole.ASSISTANT,
+        content: '试试重启 docker 服务',
+        contextRef: diagnoseResponse,
+      },
+    });
+  });
+
+  it('status: "partial" 也走成功路径，不当错误处理', async () => {
+    const { service, prisma, agentClient } = await buildService();
+    setupReadyWorkspace(prisma);
+    prisma.conversation.create.mockResolvedValueOnce(conversationRow({ id: 'student_1', content: '？' }));
+    const diagnoseResponse = {
+      request_id: 'req_2',
+      status: 'partial',
+      answer: '工具调用失败，但根据已知信息：...',
+      diagnosis: {},
+      course_alignment: {},
+      evidence: [],
+      suggested_actions: [],
+      limitations: ['GATEWAY_UNAVAILABLE'],
+      tool_trace: [],
+    };
+    agentClient.diagnose.mockResolvedValue(diagnoseResponse);
+    prisma.conversation.create.mockResolvedValueOnce(
+      conversationRow({
+        id: 'tutor_1',
+        role: ConversationRole.ASSISTANT,
+        content: diagnoseResponse.answer,
+        contextRef: diagnoseResponse,
+      }),
+    );
+
+    const result = await service.sendMessage('user_1', 'enr_1', '？');
+
+    expect(result.tutorMessage.text).toBe(diagnoseResponse.answer);
+  });
+
+  it('Agent 调用失败时落兜底消息，不抛错', async () => {
+    const { service, prisma, agentClient } = await buildService();
+    setupReadyWorkspace(prisma);
+    prisma.conversation.create.mockResolvedValueOnce(conversationRow({ id: 'student_1', content: '？' }));
+    agentClient.diagnose.mockRejectedValue(new Error('fetch failed'));
+    prisma.conversation.create.mockResolvedValueOnce(
+      conversationRow({ id: 'tutor_1', role: ConversationRole.ASSISTANT, content: '助教暂时不可用，请稍后再试。' }),
+    );
+
+    const result = await service.sendMessage('user_1', 'enr_1', '？');
+
+    expect(result.tutorMessage.text).toBe('助教暂时不可用，请稍后再试。');
+  });
+});
