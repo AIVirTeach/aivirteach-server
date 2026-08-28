@@ -12,7 +12,7 @@
 
 - `prisma/schema.prisma` 里已经有一张没被任何代码用过的 `Conversation` 表（`enrollmentId` / `threadId` / `role: USER|ASSISTANT|SYSTEM` / `content` / `contextRef: Json?`），字段注释原话是"拼给 Labs /v1/agent/diagnose 的素材（当前步骤、截图、评测结果等）"——这次的集成方向在 schema 设计阶段（`docs/superpowers/specs/2026-08-20-database-schema-design.md`）就已经被预见到了，只是从未落地成 controller/service。
 - `LessonAssessment` 表的 `expectedResult`/`successCriteria`/`commonFailures` 字段注释同样明确："client 只拿 clientCriteria 那部分；expectedResult/successCriteria/commonFailures 拼进发给 Labs /v1/agent/diagnose 的 LessonContext，绝不吐给 client"——这条"别把标准答案泄露给学生"的安全约束是已有设计决策，这次直接继承，不重新讨论。
-- `agent-service` 的 `POST /v1/agent/diagnose`（`aivirteach_agent/models.py`）要求请求体带 `request_id`（UUID）、`lab_id`、`question`、`course`（`CourseContext`: course_id/version/title/summary/relevant_excerpts）、`current_step`（`LessonContext`: module_id/lesson_id/sequence/title/instructions/expected_result/success_criteria/common_failures），`diagnostic_scope`/`history` 可选。这是个 `extra="forbid"` 的严格 Pydantic 模型，字段名、长度、pattern 都有硬校验，不能随便拼。
+- `agent-service` 的 `POST /v1/agent/diagnose`（`aivirteach_agent/models.py`）要求请求体带 `request_id`（UUID）、`lab_id`、`question`、`course`（`CourseContext`: course_id/version/title/summary/relevant_excerpts）、`current_step`（`LessonContext`: module_id/lesson_id/sequence/title/summary/instructions/expected_result/success_criteria/common_failures），`diagnostic_scope`/`history` 可选；另外还有 `response_language`（默认 `"zh-CN"`）、`learner_state`（默认空 dict）两个有默认值的可选字段，这次不主动填。这是个 `extra="forbid"` 的严格 Pydantic 模型，字段名、长度、pattern 都有硬校验，不能随便拼——尤其是 `LessonContext.common_failures`，类型是 `list[CommonFailure]`（`{code: str, symptoms: list[str]}` 对象数组，`code` 非空必填），跟 Prisma `LessonAssessment.commonFailures: String[]`（纯字符串数组）不是同一个形状，不能直接透传，转换方式见下方"组件设计"。
 - server 现有课程数据链路 `Course → CourseVersion → CourseModule → CourseLesson → LessonAssessment` 的字段基本能拼出 `CourseContext`/`LessonContext`；"当前步骤"应该读 `Progress.currentLessonId`（`enrollments.service.ts` 里完成课时会更新它），**不是** `Enrollment.currentModuleId`——后者只在重开课程时被置 `null`，之后从未被其他代码更新过，是个死字段。
 - `courses.service.ts` 里有条注释确认：`LessonAssessment` 行要等 Labs 的 `assessments.json` 落地才会存在，这轮之前固定返回 `null`。也就是说 `expected_result`/`success_criteria`/`common_failures` 这部分 grounding 数据目前基本是空的，是上游数据缺口，不是这次设计要解决的问题。
 - 实测 `agent-service` 的 `/ready` 返回 `"processed_courses":0`——课程内容还没跑 `process_course.py` 摄取管线，Agent 侧目前没有额外的课程 grounding 数据可用，纯靠请求体里传的 `CourseContext`/`LessonContext` + 通用推理 + 实时 VM 工具查证。
@@ -79,7 +79,9 @@
 **`src/chat/chat.service.ts`**：
 - `getMessages`：确认 `enrollment.userId === userId`（否则抛 `ForbiddenException('无权访问这个 enrollment')`，跟 `WorkspaceService` 里 `requireOwnedEnrollment` 的既有写法一致），查 `Conversation` 表。
 - `sendMessage`：按"设计原则"里描述的步骤①-⑦执行；VM 未就绪、Agent 未配置、Agent 调用失败这三种情况都落在"持久化一条兜底 ASSISTANT 消息 + 正常返回"这条路径上，不让 HTTP 层抛 500——聊天场景下，把错误当成一条对话回复处理，比让整个请求失败更符合 client 现有的 UI 预期。
-- 内部拆出 `buildDiagnoseContext(enrollment)` 之类的小函数专门负责查 `Progress`/`CourseLesson`/`LessonAssessment` 并组装 `CourseContext`/`LessonContext`，不要全塞进一个大方法里（对应 coding-style 的"函数 <50 行"）。
+- 内部拆出 `buildDiagnoseContext(enrollment)` 之类的小函数专门负责查 `Progress`/`CourseLesson`/`LessonAssessment` 并组装 `CourseContext`/`LessonContext`，不要全塞进一个大方法里（对应 coding-style 的"函数 <50 行"）。两个字段的形状跟 Prisma 不直接对应，需要显式转换：
+  - `LessonContext.instructions`（`list[str]`）没有直接对应的 Prisma 字段，从 `CourseLesson.activityPrompt` 按换行拆分成多条（`activityPrompt.split(/\n+/).filter(Boolean)`）；没有换行就是单元素列表。
+  - `LessonContext.common_failures`（`list[{code, symptoms}]`）跟 `LessonAssessment.commonFailures: String[]` 不是同一形状，需要把每条字符串包成 `{ code: <该字符串>, symptoms: [] }` 再传，不能原样透传数组。
 
 **`src/chat/agent-client.ts`**（仿照 `src/workspace/labs-client.ts` 的写法）：
 - 读 `LABS_AGENT_BASE_URL`（新增到 `src/config/env.ts`，`z.url().optional()`，注释沿用现有 Labs 变量"缺配置不让整个 server 起不来"的约定）+ 复用 `AIVIRTEACH_AGENT_TOKEN`（同样标 `optional()`）。
@@ -92,7 +94,9 @@
 ### Client：`aivirteach-client`
 
 - `app/lib/api.ts`：`chatMessages`/`sendChatMessage` 的 URL 从 `/chat/threads/:threadId/messages` 改成 `/workspaces/:enrollmentId/chat/messages`（方法签名的参数名从 `threadId` 改成 `enrollmentId`，语义更准确）。
-- `app/workspace/page.tsx`：`sendMessage`/`refreshTutor` 里构造的 `` `course-${course?.id ?? "learning-lab"}` `` 改成 `enrollment.id`（`enrollment` 已经是页面现有的状态变量，不需要额外请求）。
+- `app/workspace/page.tsx` 有三处调用点都要改，不只是 `sendMessage`/`refreshTutor`：
+  - `sendMessage`（约 268 行）、`refreshTutor`（约 334 行）里构造的 `` `course-${course?.id ?? "learning-lab"}` `` 改成 `enrollment.id`（`enrollment` 已经是页面现有的状态变量，不需要额外请求）。
+  - 挂载时加载历史消息的 `useEffect`（约 162-166 行，现状是硬编码 `api.chatMessages("learning-lab")`、依赖数组是 `[]`）也要改：依赖数组换成 `[enrollment]`，并在 `enrollment` 还没加载出来时直接 `return`（不发请求）——否则会在页面刚挂载、`enrollment` 还是 `null` 的那一刻，用一个不存在的 enrollmentId 打一次注定 403 的请求。
 - 其余聊天 UI（消息列表渲染、输入框、`initialMessages` 兜底）不需要改，因为响应形状 `{studentMessage, tutorMessage}` 保持不变。
 
 ### Labs：`aivirteach-labs`
@@ -104,7 +108,7 @@
 1. 学员在聊天框输入问题，点击发送 → client `POST /workspaces/:enrollmentId/chat/messages {text}`。
 2. `ChatController` 走 `JwtAuthGuard` + `ZodValidationPipe`（参数级绑定在 `@Body()` 上）。
 3. `ChatService.sendMessage`：确认 enrollment 属于当前用户（不属于则 403） → 落一条 `USER` `Conversation` 行。
-4. 查 `Workspace`：`labId` 为空或 `status !== RUNNING` → 落一条固定兜底 `ASSISTANT` 行（"请先启动虚拟机"）→ 直接返回，不调用 Agent。
+4. 查 `Workspace`（可能为 `null`，enrollment 还没建过工作区）：不存在 / `labId` 为空 / `status !== RUNNING` → 落一条固定兜底 `ASSISTANT` 行（"请先启动虚拟机"）→ 直接返回，不调用 Agent。
 5. 否则：查 `Progress.currentLessonId → CourseLesson → CourseModule → CourseVersion → Course`，以及对应 `LessonAssessment`（可能为空），拼出 `CourseContext`/`LessonContext`。
 6. `AgentClient.diagnose()` 调 Labs 的 `POST /v1/agent/diagnose`。
 7. 成功（含 `status: "partial"`）：落一条 `ASSISTANT` 行，`content = response.answer`，`contextRef = JSON.stringify(response)`。
