@@ -70,7 +70,7 @@
 
 ### Server：`aivirteach-server`
 
-**`src/chat/chat.module.ts`**：注册 `ChatController`、`ChatService`、`AgentClient`，导入 `PrismaModule`（沿用现有模式）。
+**`src/chat/chat.module.ts`**：注册 `ChatController`、`ChatService`、`AgentClient`，导入 `AuthModule`（`PrismaModule` 是 `@Global()`，不需要显式导入——`WorkspaceModule` 也是这个模式，不是这次新引入的）。
 
 **`src/chat/chat.controller.ts`**（挂在 `@UseGuards(JwtAuthGuard)` 下，参考 `WorkspaceController`）：
 - `GET /workspaces/:enrollmentId/chat/messages` → `ChatService.getMessages(userId, enrollmentId)`，返回按 `createdAt` 排序的消息列表，形状匹配 client 现有的 `ApiChatMessage[]`。
