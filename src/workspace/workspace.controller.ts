@@ -35,10 +35,9 @@ export class WorkspaceController {
   }
 
   @Post(':enrollmentId/console-session/token')
-  @UsePipes(new ZodValidationPipe(ExchangeConsoleTokenSchema))
   exchangeConsoleToken(
     @Param('enrollmentId') enrollmentId: string,
-    @Body() body: ExchangeConsoleTokenInput,
+    @Body(new ZodValidationPipe(ExchangeConsoleTokenSchema)) body: ExchangeConsoleTokenInput,
     @Req() request: AuthenticatedRequest,
   ): Promise<GuacamoleToken> {
     return this.workspaceService.exchangeConsoleToken(request.auth!.userId, enrollmentId, body.data);
