@@ -1,12 +1,16 @@
 import { Test } from '@nestjs/testing';
 import { AdminService } from '../admin.service';
-import { CourseCreateCommand, CoursePublishCommand } from './course.command';
+import {
+  CourseCreateCommand,
+  CoursePublishCommand,
+  CourseSetCoverCommand,
+} from './course.command';
 
 const OPERATOR = 'ops@example.com';
 const REASON = '开课准备';
 
 const buildCommand = async <
-  T extends CourseCreateCommand | CoursePublishCommand,
+  T extends CourseCreateCommand | CoursePublishCommand | CourseSetCoverCommand,
 >(
   CommandClass: new (...args: never[]) => T,
   admin: Partial<AdminService> = {},
@@ -170,5 +174,91 @@ describe('CoursePublishCommand', () => {
       command.run(['n8n'], { operator: 'nope', reason: REASON }),
     ).rejects.toThrow('operator 必须是合法邮箱');
     expect(publishCourse).not.toHaveBeenCalled();
+  });
+});
+
+describe('CourseSetCoverCommand', () => {
+  let logSpy: jest.SpyInstance;
+
+  beforeEach(() => {
+    logSpy = jest.spyOn(console, 'log').mockImplementation();
+  });
+
+  afterEach(() => {
+    logSpy.mockRestore();
+  });
+
+  it('dry-run 不调用 AdminService', async () => {
+    const setCourseCover = jest.fn();
+    const command = await buildCommand(CourseSetCoverCommand, {
+      setCourseCover,
+    });
+
+    await command.run(['n8n', '/tmp/cover.png'], {
+      operator: OPERATOR,
+      reason: REASON,
+    });
+
+    expect(setCourseCover).not.toHaveBeenCalled();
+    expect(logSpy).toHaveBeenCalledWith(
+      JSON.stringify({
+        command: 'course:set-cover',
+        dryRun: true,
+        operator: OPERATOR,
+        reason: REASON,
+        slug: 'n8n',
+        filePath: '/tmp/cover.png',
+        note: '加 --execute 才会真正写库',
+      }),
+    );
+  });
+
+  it('--execute 会调用 AdminService 并打印结果', async () => {
+    const setCourseCover = jest.fn().mockResolvedValue({
+      id: 'asset_1',
+      objectKey: 'https://blob.vercel-storage.com/courses/n8n/cover.png',
+    });
+    const command = await buildCommand(CourseSetCoverCommand, {
+      setCourseCover,
+    });
+
+    await command.run(['n8n', '/tmp/cover.png'], {
+      operator: OPERATOR,
+      reason: REASON,
+      execute: true,
+    });
+
+    expect(setCourseCover).toHaveBeenCalledWith(
+      'n8n',
+      '/tmp/cover.png',
+      OPERATOR,
+      REASON,
+    );
+    expect(logSpy).toHaveBeenCalledWith(
+      JSON.stringify({
+        command: 'course:set-cover',
+        dryRun: false,
+        operator: OPERATOR,
+        reason: REASON,
+        slug: 'n8n',
+        assetId: 'asset_1',
+        objectKey: 'https://blob.vercel-storage.com/courses/n8n/cover.png',
+      }),
+    );
+  });
+
+  it('reason 为空时拒绝，不调用 AdminService', async () => {
+    const setCourseCover = jest.fn();
+    const command = await buildCommand(CourseSetCoverCommand, {
+      setCourseCover,
+    });
+
+    await expect(
+      command.run(['n8n', '/tmp/cover.png'], {
+        operator: OPERATOR,
+        reason: '',
+      }),
+    ).rejects.toThrow('reason 不能为空');
+    expect(setCourseCover).not.toHaveBeenCalled();
   });
 });

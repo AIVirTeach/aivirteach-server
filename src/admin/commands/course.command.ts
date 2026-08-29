@@ -170,3 +170,86 @@ export class CoursePublishCommand extends CommandRunner {
     return true;
   }
 }
+
+interface CourseSetCoverOptions {
+  operator: string;
+  reason: string;
+  execute?: boolean;
+}
+
+@Command({
+  name: 'course:set-cover',
+  arguments: '<slug> <filePath>',
+  description: '给课程设置封面图（上传到 Blob 并回填 coverAssetId）',
+})
+export class CourseSetCoverCommand extends CommandRunner {
+  constructor(private readonly admin: AdminService) {
+    super();
+  }
+
+  async run(inputs: string[], options: CourseSetCoverOptions): Promise<void> {
+    const operator = OperatorSchema.parse(options.operator);
+    const reason = ReasonSchema.parse(options.reason);
+    const [slug, filePath] = inputs;
+
+    if (!options.execute) {
+      console.log(
+        JSON.stringify({
+          command: 'course:set-cover',
+          dryRun: true,
+          operator,
+          reason,
+          slug,
+          filePath,
+          note: '加 --execute 才会真正写库',
+        }),
+      );
+      return;
+    }
+
+    const asset = await this.admin.setCourseCover(
+      slug,
+      filePath,
+      operator,
+      reason,
+    );
+
+    console.log(
+      JSON.stringify({
+        command: 'course:set-cover',
+        dryRun: false,
+        operator,
+        reason,
+        slug,
+        assetId: asset.id,
+        objectKey: asset.objectKey,
+      }),
+    );
+  }
+
+  @Option({
+    flags: '-o, --operator <operator>',
+    description: '执行本次操作的人（邮箱）',
+    required: true,
+  })
+  parseOperator(val: string): string {
+    return val;
+  }
+
+  @Option({
+    flags: '-r, --reason <reason>',
+    description: '本次操作的原因',
+    required: true,
+  })
+  parseReason(val: string): string {
+    return val;
+  }
+
+  @Option({
+    flags: '-e, --execute',
+    description: '真正执行写库；不加这个参数只打印将要发生的变更（dry-run）',
+  })
+  parseExecute(): boolean {
+    return true;
+  }
+}

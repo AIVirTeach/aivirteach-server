@@ -1,12 +1,20 @@
-import { NotFoundException } from '@nestjs/common';
+import { join } from 'node:path';
+import { BadRequestException, NotFoundException } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
 import { AuditActorType } from '@prisma/client';
 import { ENV } from '../config/env';
 import { PrismaService } from '../prisma/prisma.service';
 import { AuditService } from '../audit/audit.service';
 import { hashOpaqueToken } from '../auth/tokens';
+import { CourseAssetStorageService } from '../courses/course-asset-storage.service';
 import { CourseIngestionService } from '../courses/course-ingestion.service';
 import { AdminService } from './admin.service';
+
+const VALID_IMAGE_FIXTURE = join(
+  __dirname,
+  '../courses/__fixtures__/sample-course/cover.png',
+);
+const NOT_AN_IMAGE_FIXTURE = join(__dirname, '__fixtures__/not-an-image.txt');
 
 const ENV_STUB = {
   DATABASE_URL: 'postgresql://unused',
@@ -26,6 +34,7 @@ const buildPrisma = () => ({
     findFirst: jest.fn(),
     update: jest.fn(),
   },
+  courseAsset: { create: jest.fn() },
   enrollment: { create: jest.fn() },
   quotaLedger: { create: jest.fn() },
 });
@@ -34,10 +43,19 @@ const buildCourseIngestion = () => ({
   ingestFromDirectory: jest.fn(),
 });
 
+const buildCourseAssetStorage = () => ({
+  upload: jest
+    .fn()
+    .mockResolvedValue(
+      'https://blob.vercel-storage.com/courses/sample/cover.png',
+    ),
+});
+
 const buildService = async (
   prisma: ReturnType<typeof buildPrisma>,
   audit = { record: jest.fn() },
   courseIngestion = buildCourseIngestion(),
+  courseAssetStorage = buildCourseAssetStorage(),
 ) => {
   const moduleRef = await Test.createTestingModule({
     providers: [
@@ -46,9 +64,10 @@ const buildService = async (
       { provide: ENV, useValue: ENV_STUB },
       { provide: AuditService, useValue: audit },
       { provide: CourseIngestionService, useValue: courseIngestion },
+      { provide: CourseAssetStorageService, useValue: courseAssetStorage },
     ],
   }).compile();
-  return { service: moduleRef.get(AdminService), audit };
+  return { service: moduleRef.get(AdminService), audit, courseAssetStorage };
 };
 
 const OPERATOR = 'ops@example.com';
@@ -116,14 +135,29 @@ describe('AdminService.createCourse', () => {
       title: 'n8n 自动化工作流',
       versions: [{ version: 1 }],
     });
-    const { service, audit } = await buildService(prisma, undefined, courseIngestion);
+    const { service, audit } = await buildService(
+      prisma,
+      undefined,
+      courseIngestion,
+    );
 
-    const course = await service.createCourse('/content/n8n', OPERATOR, REASON, 'sha256:abc');
+    const course = await service.createCourse(
+      '/content/n8n',
+      OPERATOR,
+      REASON,
+      'sha256:abc',
+    );
 
-    expect(courseIngestion.ingestFromDirectory).toHaveBeenCalledWith('/content/n8n', 'sha256:abc');
+    expect(courseIngestion.ingestFromDirectory).toHaveBeenCalledWith(
+      '/content/n8n',
+      'sha256:abc',
+    );
     expect(course.slug).toBe('n8n');
     expect(audit.record).toHaveBeenCalledWith(
-      expect.objectContaining({ action: 'admin.createCourse', targetId: 'course_1' }),
+      expect.objectContaining({
+        action: 'admin.createCourse',
+        targetId: 'course_1',
+      }),
     );
   });
 });
@@ -131,9 +165,21 @@ describe('AdminService.createCourse', () => {
 describe('AdminService.publishCourse', () => {
   it('发布未发布过的版本时，同时把 Course.published 置为 true', async () => {
     const prisma = buildPrisma();
-    prisma.course.findUnique.mockResolvedValue({ id: 'course_1', slug: 'n8n', published: false });
-    prisma.courseVersion.findFirst.mockResolvedValue({ id: 'version_1', version: 1, publishedAt: null });
-    prisma.courseVersion.update.mockResolvedValue({ id: 'version_1', version: 1, publishedAt: new Date() });
+    prisma.course.findUnique.mockResolvedValue({
+      id: 'course_1',
+      slug: 'n8n',
+      published: false,
+    });
+    prisma.courseVersion.findFirst.mockResolvedValue({
+      id: 'version_1',
+      version: 1,
+      publishedAt: null,
+    });
+    prisma.courseVersion.update.mockResolvedValue({
+      id: 'version_1',
+      version: 1,
+      publishedAt: new Date(),
+    });
     const { service } = await buildService(prisma);
 
     await service.publishCourse('n8n', OPERATOR, REASON);
@@ -146,8 +192,16 @@ describe('AdminService.publishCourse', () => {
 
   it('课程已经 published 时不重复调用 course.update', async () => {
     const prisma = buildPrisma();
-    prisma.course.findUnique.mockResolvedValue({ id: 'course_1', slug: 'n8n', published: true });
-    prisma.courseVersion.findFirst.mockResolvedValue({ id: 'version_1', version: 1, publishedAt: new Date() });
+    prisma.course.findUnique.mockResolvedValue({
+      id: 'course_1',
+      slug: 'n8n',
+      published: true,
+    });
+    prisma.courseVersion.findFirst.mockResolvedValue({
+      id: 'version_1',
+      version: 1,
+      publishedAt: new Date(),
+    });
     const { service } = await buildService(prisma);
 
     await service.publishCourse('n8n', OPERATOR, REASON);
@@ -157,7 +211,11 @@ describe('AdminService.publishCourse', () => {
 
   it('发布课程时给最新版本写 publishedAt', async () => {
     const prisma = buildPrisma();
-    prisma.course.findUnique.mockResolvedValue({ id: 'course_1', slug: 'n8n', published: false });
+    prisma.course.findUnique.mockResolvedValue({
+      id: 'course_1',
+      slug: 'n8n',
+      published: false,
+    });
     prisma.courseVersion.findFirst.mockResolvedValue({
       id: 'cv_1',
       courseId: 'course_1',
@@ -195,7 +253,11 @@ describe('AdminService.publishCourse', () => {
       version: 1,
       publishedAt: new Date(),
     };
-    prisma.course.findUnique.mockResolvedValue({ id: 'course_1', slug: 'n8n', published: true });
+    prisma.course.findUnique.mockResolvedValue({
+      id: 'course_1',
+      slug: 'n8n',
+      published: true,
+    });
     prisma.courseVersion.findFirst.mockResolvedValue(already);
     const { service } = await buildService(prisma);
 
@@ -207,7 +269,11 @@ describe('AdminService.publishCourse', () => {
 
   it('课程没有任何版本时发布抛 NotFoundException', async () => {
     const prisma = buildPrisma();
-    prisma.course.findUnique.mockResolvedValue({ id: 'course_1', slug: 'n8n', published: false });
+    prisma.course.findUnique.mockResolvedValue({
+      id: 'course_1',
+      slug: 'n8n',
+      published: false,
+    });
     prisma.courseVersion.findFirst.mockResolvedValue(null);
     const { service } = await buildService(prisma);
 
@@ -268,5 +334,110 @@ describe('AdminService 其余运营操作', () => {
         targetId: 'ledger_1',
       }),
     );
+  });
+});
+
+describe('AdminService.setCourseCover', () => {
+  it('课程不存在时抛 NotFoundException，不会去读文件或上传', async () => {
+    const prisma = buildPrisma();
+    prisma.course.findUnique.mockResolvedValue(null);
+    const courseAssetStorage = buildCourseAssetStorage();
+    const { service } = await buildService(
+      prisma,
+      undefined,
+      undefined,
+      courseAssetStorage,
+    );
+
+    await expect(
+      service.setCourseCover(
+        'no-such-course',
+        VALID_IMAGE_FIXTURE,
+        OPERATOR,
+        REASON,
+      ),
+    ).rejects.toBeInstanceOf(NotFoundException);
+    expect(courseAssetStorage.upload).not.toHaveBeenCalled();
+  });
+
+  it('文件不是受支持的图片格式时抛 BadRequestException，不会上传也不会写库', async () => {
+    const prisma = buildPrisma();
+    prisma.course.findUnique.mockResolvedValue({
+      id: 'course_1',
+      slug: 'sample',
+      title: 'Sample',
+    });
+    const courseAssetStorage = buildCourseAssetStorage();
+    const { service } = await buildService(
+      prisma,
+      undefined,
+      undefined,
+      courseAssetStorage,
+    );
+
+    await expect(
+      service.setCourseCover('sample', NOT_AN_IMAGE_FIXTURE, OPERATOR, REASON),
+    ).rejects.toBeInstanceOf(BadRequestException);
+    expect(courseAssetStorage.upload).not.toHaveBeenCalled();
+    expect(prisma.courseAsset.create).not.toHaveBeenCalled();
+  });
+
+  it('上传真实图片：建 CourseAsset、回填 Course.coverAssetId、写审计', async () => {
+    const prisma = buildPrisma();
+    prisma.course.findUnique.mockResolvedValue({
+      id: 'course_1',
+      slug: 'sample',
+      title: 'Sample Course',
+    });
+    prisma.courseAsset.create.mockResolvedValue({
+      id: 'asset_1',
+      courseId: 'course_1',
+      type: 'cover',
+      objectKey: 'https://blob.vercel-storage.com/courses/sample/cover.png',
+      altText: 'Sample Course 封面',
+    });
+    const courseAssetStorage = buildCourseAssetStorage();
+    const { service, audit } = await buildService(
+      prisma,
+      undefined,
+      undefined,
+      courseAssetStorage,
+    );
+
+    const asset = await service.setCourseCover(
+      'sample',
+      VALID_IMAGE_FIXTURE,
+      OPERATOR,
+      REASON,
+    );
+
+    expect(courseAssetStorage.upload).toHaveBeenCalledWith(
+      'courses/sample/cover.png',
+      VALID_IMAGE_FIXTURE,
+    );
+    expect(prisma.courseAsset.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          courseId: 'course_1',
+          type: 'cover',
+          objectKey: 'https://blob.vercel-storage.com/courses/sample/cover.png',
+        }),
+      }),
+    );
+    expect(prisma.course.update).toHaveBeenCalledWith({
+      where: { id: 'course_1' },
+      data: { coverAssetId: 'asset_1' },
+    });
+    expect(audit.record).toHaveBeenCalledWith(
+      expect.objectContaining({
+        actor: { type: AuditActorType.OPERATOR, id: OPERATOR },
+        action: 'admin.setCourseCover',
+        success: true,
+        targetType: 'CourseAsset',
+        targetId: 'asset_1',
+        reason: REASON,
+      }),
+    );
+    expect(asset.id).toBe('asset_1');
   });
 });

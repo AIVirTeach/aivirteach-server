@@ -157,18 +157,26 @@ export class CoursesService {
     const flattened = version.modules.flatMap((courseModule) =>
       courseModule.lessons.map((lesson) => ({ courseModule, lesson })),
     );
-    const index = flattened.findIndex((entry) => entry.lesson.contentId === lessonId);
+    const index = flattened.findIndex(
+      (entry) => entry.lesson.contentId === lessonId,
+    );
     if (index === -1) {
       throw new NotFoundException(`课程 ${slug} 里找不到课时：${lessonId}`);
     }
 
     const { courseModule, lesson } = flattened[index];
     const range = lesson.sourceRange as { startLine: number; endLine: number };
-    const markdown = sourceLines.slice(range.startLine - 1, range.endLine).join('\n');
+    const markdown = sourceLines
+      .slice(range.startLine - 1, range.endLine)
+      .join('\n');
 
     return {
       courseId: course.slug,
-      module: { id: courseModule.id, title: courseModule.title, position: courseModule.position },
+      module: {
+        id: courseModule.id,
+        title: courseModule.title,
+        position: courseModule.position,
+      },
       lesson: {
         id: lesson.contentId,
         position: lesson.position,
@@ -191,6 +199,22 @@ export class CoursesService {
         total: flattened.length,
       },
     };
+  }
+
+  async getAssetUrl(slug: string, assetId: string): Promise<string> {
+    const course = await this.prisma.course.findUnique({ where: { slug } });
+    if (!course || !course.published) {
+      throw new NotFoundException(`找不到课程：${slug}`);
+    }
+
+    const asset = await this.prisma.courseAsset.findUnique({
+      where: { id: assetId },
+    });
+    if (!asset || asset.courseId !== course.id) {
+      throw new NotFoundException(`课程 ${slug} 里找不到资源：${assetId}`);
+    }
+
+    return asset.objectKey;
   }
 
   async requirePublishedCourseWithLatestVersion(slug: string) {
