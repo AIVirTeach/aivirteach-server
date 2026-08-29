@@ -11,6 +11,7 @@ import { CoursesModule } from './courses/courses.module';
 import { EnrollmentsModule } from './enrollments/enrollments.module';
 import { DashboardModule } from './dashboard/dashboard.module';
 import { WorkspaceModule } from './workspace/workspace.module';
+import { ChatModule } from './chat/chat.module';
 
 @Module({
   imports: [
@@ -24,6 +25,7 @@ import { WorkspaceModule } from './workspace/workspace.module';
     EnrollmentsModule,
     DashboardModule,
     WorkspaceModule,
+    ChatModule,
   ],
   controllers: [AppController],
   providers: [AppService],
