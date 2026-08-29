@@ -5,6 +5,7 @@ import { CoursesService } from './courses.service';
 
 const buildPrisma = () => ({
   course: { findMany: jest.fn(), findUnique: jest.fn() },
+  courseAsset: { findUnique: jest.fn() },
 });
 
 const buildService = async (prisma: ReturnType<typeof buildPrisma>) => {
@@ -53,7 +54,9 @@ describe('CoursesService.getDetail', () => {
     prisma.course.findUnique.mockResolvedValue(null);
     const service = await buildService(prisma);
 
-    await expect(service.getDetail('missing')).rejects.toThrow(NotFoundException);
+    await expect(service.getDetail('missing')).rejects.toThrow(
+      NotFoundException,
+    );
   });
 
   it('返回完整 detail，modules/lessons 按 position 排序拼好', async () => {
@@ -113,7 +116,11 @@ describe('CoursesService.getDetail', () => {
     expect(detail.modules[0].lessons[0]).toEqual(
       expect.objectContaining({
         id: 'verify-virtual-machine',
-        activity: { type: 'guided-lab', prompt: 'prompt', completionType: 'learner-confirmation' },
+        activity: {
+          type: 'guided-lab',
+          prompt: 'prompt',
+          completionType: 'learner-confirmation',
+        },
       }),
     );
   });
@@ -130,7 +137,9 @@ describe('CoursesService.getWelcome', () => {
     });
     const service = await buildService(prisma);
 
-    await expect(service.getWelcome('ai-daily-briefing')).rejects.toThrow(NotFoundException);
+    await expect(service.getWelcome('ai-daily-briefing')).rejects.toThrow(
+      NotFoundException,
+    );
   });
 });
 
@@ -188,7 +197,11 @@ describe('CoursesService.getLesson', () => {
 
     expect(lesson.markdown).toBe('line1\nline2');
     expect(lesson.lesson.id).toBe('verify-virtual-machine');
-    expect(lesson.module).toEqual({ id: 'module_1', title: 'Module One', position: 1 });
+    expect(lesson.module).toEqual({
+      id: 'module_1',
+      title: 'Module One',
+      position: 1,
+    });
     expect(lesson.navigation).toEqual({
       previousLessonId: null,
       nextLessonId: 'verify-network',
@@ -229,7 +242,9 @@ describe('CoursesService.getLesson', () => {
     });
     const service = await buildService(prisma);
 
-    await expect(service.getLesson('sample', 'nope')).rejects.toThrow(NotFoundException);
+    await expect(service.getLesson('sample', 'nope')).rejects.toThrow(
+      NotFoundException,
+    );
   });
 
   it('用内部 cuid（而不是 content id）查询时抛 NotFoundException——路由参数不能是内部 id', async () => {
@@ -242,6 +257,91 @@ describe('CoursesService.getLesson', () => {
     });
     const service = await buildService(prisma);
 
-    await expect(service.getLesson('sample', 'lesson_cuid_1')).rejects.toThrow(NotFoundException);
+    await expect(service.getLesson('sample', 'lesson_cuid_1')).rejects.toThrow(
+      NotFoundException,
+    );
+  });
+});
+
+describe('CoursesService.getAssetUrl', () => {
+  it('课程不存在时抛 NotFoundException', async () => {
+    const prisma = buildPrisma();
+    prisma.course.findUnique.mockResolvedValue(null);
+    const service = await buildService(prisma);
+
+    await expect(service.getAssetUrl('missing', 'asset_1')).rejects.toThrow(
+      NotFoundException,
+    );
+    expect(prisma.courseAsset.findUnique).not.toHaveBeenCalled();
+  });
+
+  it('课程未发布时抛 NotFoundException，不暴露未发布课程的素材', async () => {
+    const prisma = buildPrisma();
+    prisma.course.findUnique.mockResolvedValue({
+      id: 'course_1',
+      slug: 'sample',
+      published: false,
+    });
+    const service = await buildService(prisma);
+
+    await expect(service.getAssetUrl('sample', 'asset_1')).rejects.toThrow(
+      NotFoundException,
+    );
+    expect(prisma.courseAsset.findUnique).not.toHaveBeenCalled();
+  });
+
+  it('assetId 不存在时抛 NotFoundException', async () => {
+    const prisma = buildPrisma();
+    prisma.course.findUnique.mockResolvedValue({
+      id: 'course_1',
+      slug: 'sample',
+      published: true,
+    });
+    prisma.courseAsset.findUnique.mockResolvedValue(null);
+    const service = await buildService(prisma);
+
+    await expect(service.getAssetUrl('sample', 'asset_1')).rejects.toThrow(
+      NotFoundException,
+    );
+  });
+
+  it('assetId 属于另一门课程时抛 NotFoundException——不能跨课程用别人的 assetId', async () => {
+    const prisma = buildPrisma();
+    prisma.course.findUnique.mockResolvedValue({
+      id: 'course_1',
+      slug: 'sample',
+      published: true,
+    });
+    prisma.courseAsset.findUnique.mockResolvedValue({
+      id: 'asset_1',
+      courseId: 'course_OTHER',
+      objectKey: 'https://blob.vercel-storage.com/courses/other/cover.png',
+    });
+    const service = await buildService(prisma);
+
+    await expect(service.getAssetUrl('sample', 'asset_1')).rejects.toThrow(
+      NotFoundException,
+    );
+  });
+
+  it('返回 asset 的 objectKey（Blob 公开 URL）', async () => {
+    const prisma = buildPrisma();
+    prisma.course.findUnique.mockResolvedValue({
+      id: 'course_1',
+      slug: 'sample',
+      published: true,
+    });
+    prisma.courseAsset.findUnique.mockResolvedValue({
+      id: 'asset_1',
+      courseId: 'course_1',
+      objectKey: 'https://blob.vercel-storage.com/courses/sample/cover.png',
+    });
+    const service = await buildService(prisma);
+
+    const url = await service.getAssetUrl('sample', 'asset_1');
+
+    expect(url).toBe(
+      'https://blob.vercel-storage.com/courses/sample/cover.png',
+    );
   });
 });

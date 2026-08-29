@@ -1,6 +1,13 @@
-import { Inject, Injectable, NotFoundException } from '@nestjs/common';
+import { readFile } from 'node:fs/promises';
+import {
+  BadRequestException,
+  Inject,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
 import type {
   Course,
+  CourseAsset,
   CourseVersion,
   Enrollment,
   QuotaLedger,
@@ -10,7 +17,12 @@ import { AuditService } from '../audit/audit.service';
 import { generateOpaqueToken, hashOpaqueToken } from '../auth/tokens';
 import { ENV, type Env } from '../config/env';
 import { PrismaService } from '../prisma/prisma.service';
+import { CourseAssetStorageService } from '../courses/course-asset-storage.service';
 import { CourseIngestionService } from '../courses/course-ingestion.service';
+import {
+  detectImageExtension,
+  MAX_COVER_IMAGE_BYTES,
+} from './course-cover-image';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -31,6 +43,7 @@ export class AdminService {
     @Inject(ENV) private readonly env: Env,
     private readonly audit: AuditService,
     private readonly courseIngestion: CourseIngestionService,
+    private readonly courseAssetStorage: CourseAssetStorageService,
   ) {}
 
   async inviteUser(
@@ -91,6 +104,58 @@ export class AdminService {
     });
 
     return course;
+  }
+
+  async setCourseCover(
+    slug: string,
+    filePath: string,
+    operator: string,
+    reason: string,
+  ): Promise<CourseAsset> {
+    const course = await this.requireCourse(slug);
+
+    const buffer = await readFile(filePath);
+    if (buffer.length > MAX_COVER_IMAGE_BYTES) {
+      throw new BadRequestException(
+        `封面图片超过大小上限（${MAX_COVER_IMAGE_BYTES / (1024 * 1024)}MB）：${filePath}`,
+      );
+    }
+    const extension = detectImageExtension(buffer);
+    if (!extension) {
+      throw new BadRequestException(
+        `文件不是受支持的图片格式（PNG/JPEG/GIF/WEBP）：${filePath}`,
+      );
+    }
+
+    const objectKey = await this.courseAssetStorage.upload(
+      `courses/${slug}/cover${extension}`,
+      filePath,
+    );
+
+    const asset = await this.prisma.courseAsset.create({
+      data: {
+        courseId: course.id,
+        type: 'cover',
+        objectKey,
+        altText: `${course.title} 封面`,
+      },
+    });
+
+    await this.prisma.course.update({
+      where: { id: course.id },
+      data: { coverAssetId: asset.id },
+    });
+
+    await this.audit.record({
+      actor: { type: AuditActorType.OPERATOR, id: operator },
+      action: 'admin.setCourseCover',
+      success: true,
+      targetType: 'CourseAsset',
+      targetId: asset.id,
+      reason,
+    });
+
+    return asset;
   }
 
   async publishCourse(
