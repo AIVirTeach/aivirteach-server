@@ -75,6 +75,11 @@ export class EnrollmentsService {
         create: { enrollmentId: upserted.id },
       });
 
+      // 全新 restart：清空聊天记录和 Learning Lab，让用户像第一次报名一样重新走一遍。
+      // 保留 Attempt/EnrollmentCompletion（评测与结课审计记录），不清空。
+      await tx.conversation.deleteMany({ where: { enrollmentId: upserted.id } });
+      await tx.workspace.deleteMany({ where: { enrollmentId: upserted.id } });
+
       return upserted;
     });
 

@@ -15,6 +15,8 @@ const buildPrisma = () => {
     },
     progress: { upsert: jest.fn() },
     activity: { create: jest.fn() },
+    conversation: { deleteMany: jest.fn().mockResolvedValue({ count: 0 }) },
+    workspace: { deleteMany: jest.fn().mockResolvedValue({ count: 0 }) },
     $transaction: jest.fn(),
   };
   // enroll/restart 用 interactive transaction；测试里直接把同一个 prisma 当 tx 传回调用方，
