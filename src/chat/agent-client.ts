@@ -28,7 +28,7 @@ export type DiagnoseRequestBody = {
 // Labs 是外部服务，quick tunnel 地址还会变——2xx 不代表 body 形状可信，运行时必须校验
 // （不能只靠 TypeScript 的编译期类型断言），否则 answer 缺失会导致 ChatService 写 Conversation
 // 时因 content 非空约束抛出未捕获异常，变成 500，违反"聊天接口不返回 5xx"的设计约束。
-const DiagnoseResponseSchema = z.object({
+export const DiagnoseResponseSchema = z.object({
   request_id: z.string(),
   status: z.enum(['completed', 'partial']),
   answer: z.string().min(1),
