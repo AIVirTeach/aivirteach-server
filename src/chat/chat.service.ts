@@ -126,22 +126,39 @@ export class ChatService {
     }
 
     if (!response) {
-      yield {
-        type: 'complete',
-        ...(await this.respondWithFallback(userId, enrollment.id, studentRow, '助教暂时不可用，请稍后再试。')),
-      };
+      // 走到这里之前很可能已经转发过 progress 帧（headers 已提交），落兜底消息这个写入
+      // 本身再失败就没有更兜底的兜底了——只能记日志后让 generator 正常 return，把 SSE
+      // 连接干净收尾，不能让异常直接炸穿到 controller 层。
+      try {
+        yield {
+          type: 'complete',
+          ...(await this.respondWithFallback(userId, enrollment.id, studentRow, '助教暂时不可用，请稍后再试。')),
+        };
+      } catch (error) {
+        const message = error instanceof Error ? error.message : '未知错误';
+        this.logger.error(`enrollmentId=${enrollment.id} 落兜底消息失败`, message);
+      }
       return;
     }
 
-    const tutorRow = await this.prisma.conversation.create({
-      data: {
-        enrollmentId: enrollment.id,
-        threadId: enrollment.id,
-        role: ConversationRole.ASSISTANT,
-        content: response.answer,
-        contextRef: response as unknown as Prisma.InputJsonValue,
-      },
-    });
+    let tutorRow: Conversation;
+    try {
+      tutorRow = await this.prisma.conversation.create({
+        data: {
+          enrollmentId: enrollment.id,
+          threadId: enrollment.id,
+          role: ConversationRole.ASSISTANT,
+          content: response.answer,
+          contextRef: response as unknown as Prisma.InputJsonValue,
+        },
+      });
+    } catch (error) {
+      // 同上：此时已经转发过 progress 帧，headers 已提交，不能再让这个写入失败以
+      // 异常形式冒泡出去——记日志后干净结束这次流。
+      const message = error instanceof Error ? error.message : '未知错误';
+      this.logger.error(`enrollmentId=${enrollment.id} 落 Assistant 消息失败`, message);
+      return;
+    }
 
     yield {
       type: 'complete',

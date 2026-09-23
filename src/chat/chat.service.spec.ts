@@ -498,4 +498,41 @@ describe('ChatService.streamMessage — 调用 Agent', () => {
       },
     ]);
   });
+
+  it('result 落库（Assistant 消息）失败时，流干净结束而不是把异常炸穿到 SSE 连接上', async () => {
+    const errorSpy = jest.spyOn(Logger.prototype, 'error').mockImplementation(() => undefined);
+    const { service, prisma, agentClient } = await buildService();
+    setupReadyWorkspace(prisma);
+    prisma.conversation.create.mockResolvedValueOnce(conversationRow({ id: 'student_1', content: 'docker 装不上' }));
+    agentClient.diagnoseStream.mockReturnValue(
+      framesFrom([
+        { event: 'reasoning_started', data: { turn: 1 } },
+        { event: 'result', data: { response: DIAGNOSE_RESPONSE } },
+      ]),
+    );
+    prisma.conversation.create.mockRejectedValueOnce(new Error('write failed: ECONNRESET'));
+
+    const events = await collect(service.streamMessage('user_1', 'enr_1', 'docker 装不上'));
+
+    expect(events).toEqual([{ type: 'progress', event: 'reasoning_started', data: { turn: 1 } }]);
+    expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining('enr_1'), expect.stringContaining('write failed: ECONNRESET'));
+    errorSpy.mockRestore();
+  });
+
+  it('已经转发过 progress 帧之后，兜底 complete 事件本身落库失败时，流干净结束而不是抛出未捕获异常', async () => {
+    const errorSpy = jest.spyOn(Logger.prototype, 'error').mockImplementation(() => undefined);
+    const { service, prisma, agentClient } = await buildService();
+    setupReadyWorkspace(prisma);
+    prisma.conversation.create.mockResolvedValueOnce(conversationRow({ id: 'student_1', content: '？' }));
+    agentClient.diagnoseStream.mockReturnValue(
+      framesFrom([{ event: 'context_ready', data: { course_id: 'linux-basics' } }]),
+    );
+    prisma.conversation.create.mockRejectedValueOnce(new Error('write failed: ECONNRESET'));
+
+    const events = await collect(service.streamMessage('user_1', 'enr_1', '？'));
+
+    expect(events).toEqual([{ type: 'progress', event: 'context_ready', data: { course_id: 'linux-basics' } }]);
+    expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining('enr_1'), expect.stringContaining('write failed: ECONNRESET'));
+    errorSpy.mockRestore();
+  });
 });
