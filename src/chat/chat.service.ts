@@ -47,6 +47,11 @@ export class ChatService {
       return this.respondWithFallback(userId, enrollment.id, studentRow, '请先启动虚拟机后再提问。');
     }
 
+    // 聊天本身就是"学生还在用这个 workspace"的活跃信号，顺手刷新 lastSeenAt——不能只靠
+    // 客户端独立的 60 秒心跳定时器，否则一次长对话中如果心跳断了，idle-sweep 可能会在
+    // 对话中途把 VM 收掉。
+    await this.prisma.workspace.update({ where: { enrollmentId: enrollment.id }, data: { lastSeenAt: new Date() } });
+
     const progress = await this.prisma.progress.findUnique({ where: { enrollmentId: enrollment.id } });
     if (!progress?.currentLessonId) {
       return this.respondWithFallback(userId, enrollment.id, studentRow, '还没有开始学习课程内容，请先进入第一课时。');
