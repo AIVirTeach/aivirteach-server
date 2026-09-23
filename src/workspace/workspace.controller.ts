@@ -1,6 +1,7 @@
 import { Body, Controller, Get, HttpCode, Param, Post, Req, UseGuards, UsePipes } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import type { Workspace } from '@prisma/client';
+import { AllowQueryToken } from '../auth/allow-query-token.decorator';
 import { JwtAuthGuard, type AuthenticatedRequest } from '../auth/jwt-auth.guard';
 import { ZodValidationPipe } from '../common/zod-validation.pipe';
 import {
@@ -54,6 +55,7 @@ export class WorkspaceController {
   // token 回退）；reason=manual 是"关闭学习环境"按钮打的。两条路径落到同一个 service.stop。
   @Post(':enrollmentId/stop')
   @HttpCode(200)
+  @AllowQueryToken()
   stop(
     @Param('enrollmentId') enrollmentId: string,
     @Body(new ZodValidationPipe(StopWorkspaceSchema)) body: StopWorkspaceInput,
