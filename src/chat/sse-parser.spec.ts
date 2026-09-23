@@ -49,4 +49,12 @@ describe('parseSseStream', () => {
     const stream = streamFromChunks(['event: ping\n\nevent: done\ndata: {}\n\n']);
     await expect(collect(stream)).resolves.toEqual([{ event: 'done', data: '{}' }]);
   });
+
+  it('CRLF（\\r\\n）换行的帧也能正确切分', async () => {
+    const stream = streamFromChunks(['event: a\r\ndata: {"n":1}\r\n\r\nevent: b\r\ndata: {"n":2}\r\n\r\n']);
+    await expect(collect(stream)).resolves.toEqual([
+      { event: 'a', data: '{"n":1}' },
+      { event: 'b', data: '{"n":2}' },
+    ]);
+  });
 });

@@ -25,7 +25,9 @@ export async function* parseSseStream(stream: ReadableStream<Uint8Array>): Async
     while (true) {
       const { done, value } = await reader.read();
       if (done) break;
-      buffer += decoder.decode(value, { stream: true });
+      // 规范里帧内换行允许 \r\n；统一转成 \n 再找 \n\n 边界，否则 CRLF 流永远匹配不到边界。
+      // 在整个 buffer（而不是单个 chunk）上 replace，避免 \r\n 被拆到两个 chunk 里漏转换。
+      buffer = (buffer + decoder.decode(value, { stream: true })).replace(/\r\n/g, '\n');
 
       let boundary = buffer.indexOf('\n\n');
       while (boundary !== -1) {
