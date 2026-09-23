@@ -244,6 +244,17 @@ describe('LabsClient.createBrowserSession', () => {
 
     await expect(client.createBrowserSession('workspace_1', 'user_1')).rejects.toThrow('远程桌面暂时无法使用，请联系客服。');
   });
+
+  it('网络层失败（fetch 本身 reject）时提示重试', async () => {
+    global.fetch = jest.fn().mockRejectedValue(new DOMException('The operation was aborted.', 'AbortError'));
+
+    const client = await buildClient({
+      LABS_VM_BASE_URL: 'https://labs-vm.example.com',
+      AIVIRTEACH_SESSION_TOKEN: 'session-token',
+    });
+
+    await expect(client.createBrowserSession('workspace_1', 'user_1')).rejects.toThrow('远程桌面连接失败，请稍后重试。');
+  });
 });
 
 describe('LabsClient.stopVm', () => {
@@ -318,6 +329,17 @@ describe('LabsClient.stopVm', () => {
 
     await expect(client.stopVm('workspace_1')).rejects.toThrow('学习环境暂时无法使用，请稍后再试或联系客服。');
   });
+
+  it('网络层失败（fetch 本身 reject）时提示重试', async () => {
+    global.fetch = jest.fn().mockRejectedValue(new DOMException('The operation was aborted.', 'AbortError'));
+
+    const client = await buildClient({
+      LABS_VM_BASE_URL: 'https://labs-vm.example.com',
+      AIVIRTEACH_API_TOKEN: 'labs-token',
+    });
+
+    await expect(client.stopVm('workspace_1')).rejects.toThrow('学习环境暂时连接不上，请稍后重试。');
+  });
 });
 
 describe('LabsClient.startVm', () => {
@@ -362,6 +384,33 @@ describe('LabsClient.startVm', () => {
       statusText: 'Gateway Timeout',
       text: async () => 'Command timed out after 180 seconds.',
     }) as unknown as typeof fetch;
+
+    const client = await buildClient({
+      LABS_VM_BASE_URL: 'https://labs-vm.example.com',
+      AIVIRTEACH_API_TOKEN: 'labs-token',
+    });
+
+    await expect(client.startVm('workspace_1')).rejects.toThrow('学习环境暂时连接不上，请稍后重试。');
+  });
+
+  it('Labs 返回 403（权限/配置问题）时提示联系客服', async () => {
+    global.fetch = jest.fn().mockResolvedValue({
+      ok: false,
+      status: 403,
+      statusText: 'Forbidden',
+      text: async () => 'forbidden',
+    }) as unknown as typeof fetch;
+
+    const client = await buildClient({
+      LABS_VM_BASE_URL: 'https://labs-vm.example.com',
+      AIVIRTEACH_API_TOKEN: 'labs-token',
+    });
+
+    await expect(client.startVm('workspace_1')).rejects.toThrow('学习环境暂时无法使用，请稍后再试或联系客服。');
+  });
+
+  it('网络层失败（fetch 本身 reject）时提示重试', async () => {
+    global.fetch = jest.fn().mockRejectedValue(new DOMException('The operation was aborted.', 'AbortError'));
 
     const client = await buildClient({
       LABS_VM_BASE_URL: 'https://labs-vm.example.com',
@@ -452,6 +501,14 @@ describe('LabsClient.exchangeGuacamoleToken', () => {
       statusText: 'Service Unavailable',
       text: async () => 'unavailable',
     }) as unknown as typeof fetch;
+
+    const client = await buildClient({ LABS_GUACAMOLE_BASE_URL: 'http://localhost:8080/guacamole/' });
+
+    await expect(client.exchangeGuacamoleToken('ticket')).rejects.toThrow('远程桌面连接失败，请稍后重试。');
+  });
+
+  it('网络层失败（fetch 本身 reject）时提示重试', async () => {
+    global.fetch = jest.fn().mockRejectedValue(new DOMException('The operation was aborted.', 'AbortError'));
 
     const client = await buildClient({ LABS_GUACAMOLE_BASE_URL: 'http://localhost:8080/guacamole/' });
 
