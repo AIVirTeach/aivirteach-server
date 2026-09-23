@@ -1,8 +1,9 @@
 import { ForbiddenException, Injectable, Logger } from '@nestjs/common';
 import { ConversationRole, WorkspaceStatus, type Conversation, type Prisma } from '@prisma/client';
 import { randomUUID } from 'node:crypto';
+import { z } from 'zod';
 import { PrismaService } from '../prisma/prisma.service';
-import { AgentClient, type DiagnoseRequestBody } from './agent-client';
+import { AgentClient, DiagnoseResponseSchema, type DiagnoseRequestBody } from './agent-client';
 
 export type ChatMessage = {
   id: string;
@@ -12,6 +13,15 @@ export type ChatMessage = {
   text: string;
   createdAt: string;
 };
+
+export type ChatStreamEvent =
+  | { type: 'progress'; event: string; data: Record<string, unknown> }
+  | { type: 'complete'; studentMessage: ChatMessage; tutorMessage: ChatMessage };
+
+const ResultFrameSchema = z.object({ response: DiagnoseResponseSchema });
+
+type DiagnoseInputs = Pick<DiagnoseRequestBody, 'lab_id' | 'course' | 'current_step'>;
+type ResolvedDiagnoseRequest = { ok: true; inputs: DiagnoseInputs } | { ok: false; fallbackMessage: string };
 
 @Injectable()
 export class ChatService {
@@ -42,34 +52,17 @@ export class ChatService {
       data: { enrollmentId: enrollment.id, threadId: enrollment.id, role: ConversationRole.USER, content: text },
     });
 
-    const workspace = await this.prisma.workspace.findUnique({ where: { enrollmentId: enrollment.id } });
-    if (!workspace?.labId || workspace.status !== WorkspaceStatus.RUNNING) {
-      return this.respondWithFallback(userId, enrollment.id, studentRow, '请先启动虚拟机后再提问。');
-    }
-
-    // 聊天本身就是"学生还在用这个 workspace"的活跃信号，顺手刷新 lastSeenAt——不能只靠
-    // 客户端独立的 60 秒心跳定时器，否则一次长对话中如果心跳断了，idle-sweep 可能会在
-    // 对话中途把 VM 收掉。
-    await this.prisma.workspace.update({ where: { enrollmentId: enrollment.id }, data: { lastSeenAt: new Date() } });
-
-    const progress = await this.prisma.progress.findUnique({ where: { enrollmentId: enrollment.id } });
-    if (!progress?.currentLessonId) {
-      return this.respondWithFallback(userId, enrollment.id, studentRow, '还没有开始学习课程内容，请先进入第一课时。');
-    }
-
-    const context = await this.buildDiagnoseContext(progress.currentLessonId);
-    if (!context) {
-      return this.respondWithFallback(userId, enrollment.id, studentRow, '还没有开始学习课程内容，请先进入第一课时。');
+    const resolved = await this.resolveDiagnoseRequest(enrollment.id);
+    if (!resolved.ok) {
+      return this.respondWithFallback(userId, enrollment.id, studentRow, resolved.fallbackMessage);
     }
 
     let response: Awaited<ReturnType<AgentClient['diagnose']>>;
     try {
       response = await this.agentClient.diagnose({
         request_id: randomUUID(),
-        lab_id: workspace.labId,
         question: text,
-        course: context.course,
-        current_step: context.currentStep,
+        ...resolved.inputs,
       });
     } catch (error) {
       const message = error instanceof Error ? error.message : '未知错误';
@@ -91,6 +84,94 @@ export class ChatService {
       studentMessage: this.toChatMessage(userId, studentRow),
       tutorMessage: this.toChatMessage(userId, tutorRow),
     };
+  }
+
+  async *streamMessage(userId: string, enrollmentId: string, text: string): AsyncGenerator<ChatStreamEvent> {
+    const enrollment = await this.requireOwnedEnrollment(userId, enrollmentId);
+
+    const studentRow = await this.prisma.conversation.create({
+      data: { enrollmentId: enrollment.id, threadId: enrollment.id, role: ConversationRole.USER, content: text },
+    });
+
+    const resolved = await this.resolveDiagnoseRequest(enrollment.id);
+    if (!resolved.ok) {
+      yield {
+        type: 'complete',
+        ...(await this.respondWithFallback(userId, enrollment.id, studentRow, resolved.fallbackMessage)),
+      };
+      return;
+    }
+
+    // result 帧落库前只转发 progress——result 本身不当 progress 转发，落库成功后
+    // 才发一个 complete 事件；一个 JSON.parse/schema 校验失败就直接走下面的兜底，
+    // 不把半成品结果透传给 client（跟 sendMessage() 的"聊天接口不返回 5xx"约束一致）。
+    let response: z.infer<typeof DiagnoseResponseSchema> | null = null;
+    try {
+      for await (const frame of this.agentClient.diagnoseStream({
+        request_id: randomUUID(),
+        question: text,
+        ...resolved.inputs,
+      })) {
+        const data = JSON.parse(frame.data) as Record<string, unknown>;
+        if (frame.event === 'result') {
+          const parsed = ResultFrameSchema.safeParse(data);
+          if (parsed.success) response = parsed.data.response;
+          continue;
+        }
+        yield { type: 'progress', event: frame.event, data };
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : '未知错误';
+      this.logger.error(`enrollmentId=${enrollment.id} Agent 诊断流调用失败`, message);
+    }
+
+    if (!response) {
+      yield {
+        type: 'complete',
+        ...(await this.respondWithFallback(userId, enrollment.id, studentRow, '助教暂时不可用，请稍后再试。')),
+      };
+      return;
+    }
+
+    const tutorRow = await this.prisma.conversation.create({
+      data: {
+        enrollmentId: enrollment.id,
+        threadId: enrollment.id,
+        role: ConversationRole.ASSISTANT,
+        content: response.answer,
+        contextRef: response as unknown as Prisma.InputJsonValue,
+      },
+    });
+
+    yield {
+      type: 'complete',
+      studentMessage: this.toChatMessage(userId, studentRow),
+      tutorMessage: this.toChatMessage(userId, tutorRow),
+    };
+  }
+
+  private async resolveDiagnoseRequest(enrollmentId: string): Promise<ResolvedDiagnoseRequest> {
+    const workspace = await this.prisma.workspace.findUnique({ where: { enrollmentId } });
+    if (!workspace?.labId || workspace.status !== WorkspaceStatus.RUNNING) {
+      return { ok: false, fallbackMessage: '请先启动虚拟机后再提问。' };
+    }
+
+    // 聊天本身就是"学生还在用这个 workspace"的活跃信号，顺手刷新 lastSeenAt——不能只靠
+    // 客户端独立的 60 秒心跳定时器，否则一次长对话中如果心跳断了，idle-sweep 可能会在
+    // 对话中途把 VM 收掉。sendMessage/streamMessage 都走这里，改一处即可覆盖两条路径。
+    await this.prisma.workspace.update({ where: { enrollmentId }, data: { lastSeenAt: new Date() } });
+
+    const progress = await this.prisma.progress.findUnique({ where: { enrollmentId } });
+    if (!progress?.currentLessonId) {
+      return { ok: false, fallbackMessage: '还没有开始学习课程内容，请先进入第一课时。' };
+    }
+
+    const context = await this.buildDiagnoseContext(progress.currentLessonId);
+    if (!context) {
+      return { ok: false, fallbackMessage: '还没有开始学习课程内容，请先进入第一课时。' };
+    }
+
+    return { ok: true, inputs: { lab_id: workspace.labId, course: context.course, current_step: context.currentStep } };
   }
 
   private async buildDiagnoseContext(
