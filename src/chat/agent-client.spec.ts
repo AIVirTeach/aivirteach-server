@@ -116,7 +116,7 @@ describe('AgentClient.diagnose', () => {
     expect(result.limitations).toEqual(['GATEWAY_UNAVAILABLE']);
   });
 
-  it('Agent 返回非 2xx 时抛出带状态码和详情的错误', async () => {
+  it('Agent 返回 401（权限/配置问题）时提示联系客服，不透出原始响应内容', async () => {
     global.fetch = jest.fn().mockResolvedValue({
       ok: false,
       status: 401,
@@ -129,9 +129,34 @@ describe('AgentClient.diagnose', () => {
       AIVIRTEACH_AGENT_TOKEN: 'wrong-token',
     });
 
-    await expect(client.diagnose(PAYLOAD)).rejects.toThrow(
-      'Agent 诊断失败（401）：Invalid or missing bearer token.',
-    );
+    await expect(client.diagnose(PAYLOAD)).rejects.toThrow('助教服务暂时不可用，请联系客服。');
+  });
+
+  it('Agent 返回 5xx（瞬时性问题）时提示重试', async () => {
+    global.fetch = jest.fn().mockResolvedValue({
+      ok: false,
+      status: 503,
+      statusText: 'Service Unavailable',
+      text: async () => 'Agent dependencies are not configured.',
+    }) as unknown as typeof fetch;
+
+    const client = await buildClient({
+      LABS_AGENT_BASE_URL: 'https://labs-agent.example.com',
+      AIVIRTEACH_AGENT_TOKEN: 'agent-token',
+    });
+
+    await expect(client.diagnose(PAYLOAD)).rejects.toThrow('助教暂时没有回应，请重试一次。');
+  });
+
+  it('网络层失败（fetch 本身 reject）时提示重试', async () => {
+    global.fetch = jest.fn().mockRejectedValue(new DOMException('The operation was aborted.', 'AbortError'));
+
+    const client = await buildClient({
+      LABS_AGENT_BASE_URL: 'https://labs-agent.example.com',
+      AIVIRTEACH_AGENT_TOKEN: 'agent-token',
+    });
+
+    await expect(client.diagnose(PAYLOAD)).rejects.toThrow('助教暂时没有回应，请重试一次。');
   });
 
   it('Agent 返回 2xx 但响应体缺少必填字段（如 answer）时抛出错误，不会返回半成品对象', async () => {
@@ -231,7 +256,7 @@ describe('AgentClient.diagnoseStream', () => {
     );
   });
 
-  it('Agent 返回非 2xx 时抛出带状态码的错误', async () => {
+  it('Agent 返回 5xx（瞬时性问题）时提示重试', async () => {
     global.fetch = jest.fn().mockResolvedValue({
       ok: false,
       status: 503,
@@ -244,9 +269,34 @@ describe('AgentClient.diagnoseStream', () => {
       AIVIRTEACH_AGENT_TOKEN: 'agent-token',
     });
 
-    await expect(collect(client.diagnoseStream(PAYLOAD))).rejects.toThrow(
-      'Agent 诊断流失败（503）：Agent dependencies are not configured.',
-    );
+    await expect(collect(client.diagnoseStream(PAYLOAD))).rejects.toThrow('助教暂时没有回应，请重试一次。');
+  });
+
+  it('Agent 返回 401（权限/配置问题）时提示联系客服', async () => {
+    global.fetch = jest.fn().mockResolvedValue({
+      ok: false,
+      status: 401,
+      statusText: 'Unauthorized',
+      text: async () => 'Invalid or missing bearer token.',
+    }) as unknown as typeof fetch;
+
+    const client = await buildClient({
+      LABS_AGENT_BASE_URL: 'https://labs-agent.example.com',
+      AIVIRTEACH_AGENT_TOKEN: 'wrong-token',
+    });
+
+    await expect(collect(client.diagnoseStream(PAYLOAD))).rejects.toThrow('助教服务暂时不可用，请联系客服。');
+  });
+
+  it('网络层失败（fetch 本身 reject）时提示重试', async () => {
+    global.fetch = jest.fn().mockRejectedValue(new DOMException('The operation was aborted.', 'AbortError'));
+
+    const client = await buildClient({
+      LABS_AGENT_BASE_URL: 'https://labs-agent.example.com',
+      AIVIRTEACH_AGENT_TOKEN: 'agent-token',
+    });
+
+    await expect(collect(client.diagnoseStream(PAYLOAD))).rejects.toThrow('助教暂时没有回应，请重试一次。');
   });
 
   it('Agent 返回 2xx 但没有 body 时抛出错误', async () => {

@@ -57,7 +57,7 @@ export class WorkspaceService {
         targetType: 'Workspace',
         targetId: workspace.id,
       });
-      throw new BadGatewayException(`无法连接远程桌面服务：${message}`);
+      throw new BadGatewayException(message);
     }
 
     // 只在真正建立会话（state === "ready"）时写审计；客户端每 2-3 秒轮询一次这个接口，
@@ -83,7 +83,7 @@ export class WorkspaceService {
       return await this.labsClient.exchangeGuacamoleToken(data);
     } catch (error) {
       const message = error instanceof Error ? error.message : '未知错误';
-      throw new BadGatewayException(`无法建立远程桌面会话：${message}`);
+      throw new BadGatewayException(message);
     }
   }
 
@@ -174,7 +174,7 @@ export class WorkspaceService {
         targetType: 'Workspace',
         targetId: workspace.id,
       });
-      throw new BadGatewayException(`无法启动远程桌面：${message}`);
+      throw new BadGatewayException(message);
     }
 
     const updated = await this.prisma.workspace.update({
@@ -240,7 +240,7 @@ export class WorkspaceService {
         targetId: workspace.id,
         reason,
       });
-      throw new BadGatewayException(`无法停止远程桌面：${message}`);
+      throw new BadGatewayException(message);
     }
 
     const updated = await this.prisma.workspace.update({

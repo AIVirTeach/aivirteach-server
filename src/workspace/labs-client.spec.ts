@@ -66,7 +66,7 @@ describe('LabsClient.createVm', () => {
     );
   });
 
-  it('Labs 返回非 2xx 时抛出带状态码和详情的错误', async () => {
+  it('Labs 返回 5xx（瞬时性问题）时提示重试，不透出原始响应内容', async () => {
     global.fetch = jest.fn().mockResolvedValue({
       ok: false,
       status: 504,
@@ -79,9 +79,34 @@ describe('LabsClient.createVm', () => {
       AIVIRTEACH_API_TOKEN: 'labs-token',
     });
 
-    await expect(client.createVm('workspace_1')).rejects.toThrow(
-      'Labs 创建 VM 失败（504）：Command timed out after 180 seconds.',
-    );
+    await expect(client.createVm('workspace_1')).rejects.toThrow('学习环境暂时连接不上，请稍后重试。');
+  });
+
+  it('Labs 返回 403（权限/配置问题）时提示联系客服，不透出原始响应内容', async () => {
+    global.fetch = jest.fn().mockResolvedValue({
+      ok: false,
+      status: 403,
+      statusText: 'Forbidden',
+      text: async () => '<!doctype html><html><body>DNS points to prohibited IP</body></html>',
+    }) as unknown as typeof fetch;
+
+    const client = await buildClient({
+      LABS_VM_BASE_URL: 'https://labs-vm.example.com',
+      AIVIRTEACH_API_TOKEN: 'labs-token',
+    });
+
+    await expect(client.createVm('workspace_1')).rejects.toThrow('学习环境暂时无法使用，请稍后再试或联系客服。');
+  });
+
+  it('网络层失败（fetch 本身 reject，比如超时/DNS 失败）时提示重试', async () => {
+    global.fetch = jest.fn().mockRejectedValue(new DOMException('The operation was aborted.', 'AbortError'));
+
+    const client = await buildClient({
+      LABS_VM_BASE_URL: 'https://labs-vm.example.com',
+      AIVIRTEACH_API_TOKEN: 'labs-token',
+    });
+
+    await expect(client.createVm('workspace_1')).rejects.toThrow('学习环境暂时连接不上，请稍后重试。');
   });
 });
 
@@ -188,7 +213,7 @@ describe('LabsClient.createBrowserSession', () => {
     expect(result).toEqual({ labId: 'workspace_1', state: 'starting', data: undefined, expiresAt: undefined });
   });
 
-  it('Labs 返回非 2xx 时抛出带状态码和详情的错误', async () => {
+  it('Labs 返回 5xx（瞬时性问题）时提示重试', async () => {
     global.fetch = jest.fn().mockResolvedValue({
       ok: false,
       status: 502,
@@ -201,9 +226,23 @@ describe('LabsClient.createBrowserSession', () => {
       AIVIRTEACH_SESSION_TOKEN: 'session-token',
     });
 
-    await expect(client.createBrowserSession('workspace_1', 'user_1')).rejects.toThrow(
-      'Labs 创建浏览器会话失败（502）：Command exited with 1.',
-    );
+    await expect(client.createBrowserSession('workspace_1', 'user_1')).rejects.toThrow('远程桌面连接失败，请稍后重试。');
+  });
+
+  it('Labs 返回 404（权限/配置问题）时提示联系客服', async () => {
+    global.fetch = jest.fn().mockResolvedValue({
+      ok: false,
+      status: 404,
+      statusText: 'Not Found',
+      text: async () => 'no such lab',
+    }) as unknown as typeof fetch;
+
+    const client = await buildClient({
+      LABS_VM_BASE_URL: 'https://labs-vm.example.com',
+      AIVIRTEACH_SESSION_TOKEN: 'session-token',
+    });
+
+    await expect(client.createBrowserSession('workspace_1', 'user_1')).rejects.toThrow('远程桌面暂时无法使用，请联系客服。');
   });
 });
 
@@ -248,7 +287,7 @@ describe('LabsClient.stopVm', () => {
     );
   });
 
-  it('Labs 返回非 2xx 时抛出带状态码和详情的错误', async () => {
+  it('Labs 返回 5xx（瞬时性问题）时提示重试', async () => {
     global.fetch = jest.fn().mockResolvedValue({
       ok: false,
       status: 502,
@@ -261,9 +300,23 @@ describe('LabsClient.stopVm', () => {
       AIVIRTEACH_API_TOKEN: 'labs-token',
     });
 
-    await expect(client.stopVm('workspace_1')).rejects.toThrow(
-      'Labs 停止 VM 失败（502）：Command exited with 1.',
-    );
+    await expect(client.stopVm('workspace_1')).rejects.toThrow('学习环境暂时连接不上，请稍后重试。');
+  });
+
+  it('Labs 返回 403（权限/配置问题）时提示联系客服', async () => {
+    global.fetch = jest.fn().mockResolvedValue({
+      ok: false,
+      status: 403,
+      statusText: 'Forbidden',
+      text: async () => 'forbidden',
+    }) as unknown as typeof fetch;
+
+    const client = await buildClient({
+      LABS_VM_BASE_URL: 'https://labs-vm.example.com',
+      AIVIRTEACH_API_TOKEN: 'labs-token',
+    });
+
+    await expect(client.stopVm('workspace_1')).rejects.toThrow('学习环境暂时无法使用，请稍后再试或联系客服。');
   });
 });
 
@@ -302,7 +355,7 @@ describe('LabsClient.startVm', () => {
     );
   });
 
-  it('Labs 返回非 2xx 时抛出带状态码和详情的错误', async () => {
+  it('Labs 返回 5xx（瞬时性问题）时提示重试', async () => {
     global.fetch = jest.fn().mockResolvedValue({
       ok: false,
       status: 504,
@@ -315,9 +368,7 @@ describe('LabsClient.startVm', () => {
       AIVIRTEACH_API_TOKEN: 'labs-token',
     });
 
-    await expect(client.startVm('workspace_1')).rejects.toThrow(
-      'Labs 启动 VM 失败（504）：Command timed out after 180 seconds.',
-    );
+    await expect(client.startVm('workspace_1')).rejects.toThrow('学习环境暂时连接不上，请稍后重试。');
   });
 });
 
@@ -381,7 +432,7 @@ describe('LabsClient.exchangeGuacamoleToken', () => {
     expect(fetchMock.mock.calls[0][0]).toBe('https://tunnel.trycloudflare.com/guacamole/api/tokens');
   });
 
-  it('Guacamole 返回非 2xx 时抛出带状态码和详情的错误', async () => {
+  it('Guacamole 返回 403（权限/配置问题）时提示联系客服', async () => {
     global.fetch = jest.fn().mockResolvedValue({
       ok: false,
       status: 403,
@@ -391,8 +442,19 @@ describe('LabsClient.exchangeGuacamoleToken', () => {
 
     const client = await buildClient({ LABS_GUACAMOLE_BASE_URL: 'http://localhost:8080/guacamole/' });
 
-    await expect(client.exchangeGuacamoleToken('bad-ticket')).rejects.toThrow(
-      'Guacamole 换取 authToken 失败（403）：Permission Denied.',
-    );
+    await expect(client.exchangeGuacamoleToken('bad-ticket')).rejects.toThrow('远程桌面暂时无法使用，请联系客服。');
+  });
+
+  it('Guacamole 返回 5xx（瞬时性问题）时提示重试', async () => {
+    global.fetch = jest.fn().mockResolvedValue({
+      ok: false,
+      status: 503,
+      statusText: 'Service Unavailable',
+      text: async () => 'unavailable',
+    }) as unknown as typeof fetch;
+
+    const client = await buildClient({ LABS_GUACAMOLE_BASE_URL: 'http://localhost:8080/guacamole/' });
+
+    await expect(client.exchangeGuacamoleToken('ticket')).rejects.toThrow('远程桌面连接失败，请稍后重试。');
   });
 });
