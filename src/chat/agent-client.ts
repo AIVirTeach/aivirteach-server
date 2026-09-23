@@ -1,6 +1,7 @@
 import { Inject, Injectable, ServiceUnavailableException } from '@nestjs/common';
 import { z } from 'zod';
 import { ENV, type Env } from '../config/env';
+import { parseSseStream, type SseFrame } from './sse-parser';
 
 export type DiagnoseRequestBody = {
   request_id: string;
@@ -74,5 +75,33 @@ export class AgentClient {
       throw new Error(`Agent 响应格式不符合预期：${parsed.error.message}`);
     }
     return parsed.data;
+  }
+
+  // 不设超时：labs 的 SSE_HEARTBEAT_SECONDS 心跳负责保活，orchestrator 自己的
+  // total_timeout_seconds 负责兜底——套用 diagnose() 那个 60s 上限会掐断本该更长的合法诊断流。
+  async *diagnoseStream(payload: DiagnoseRequestBody): AsyncGenerator<SseFrame> {
+    const { LABS_AGENT_BASE_URL, AIVIRTEACH_AGENT_TOKEN } = this.env;
+    if (!LABS_AGENT_BASE_URL || !AIVIRTEACH_AGENT_TOKEN) {
+      throw new ServiceUnavailableException('Agent 集成未配置：缺少 LABS_AGENT_BASE_URL 或 AIVIRTEACH_AGENT_TOKEN');
+    }
+
+    const response = await fetch(`${LABS_AGENT_BASE_URL}/v1/agent/diagnose/stream`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${AIVIRTEACH_AGENT_TOKEN}`,
+      },
+      body: JSON.stringify(payload),
+    });
+
+    if (!response.ok) {
+      const detail = await response.text().catch(() => '');
+      throw new Error(`Agent 诊断流失败（${response.status}）：${detail || response.statusText}`);
+    }
+    if (!response.body) {
+      throw new Error('Agent 响应没有 body，无法读取 SSE 流');
+    }
+
+    yield* parseSseStream(response.body);
   }
 }

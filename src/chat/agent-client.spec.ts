@@ -170,3 +170,92 @@ describe('AgentClient.diagnose', () => {
     await expect(client.diagnose(PAYLOAD)).rejects.toThrow('Agent 响应格式不符合预期');
   });
 });
+
+function streamFromText(text: string): ReadableStream<Uint8Array> {
+  const encoder = new TextEncoder();
+  return new ReadableStream({
+    start(controller) {
+      controller.enqueue(encoder.encode(text));
+      controller.close();
+    },
+  });
+}
+
+async function collect<T>(generator: AsyncGenerator<T>): Promise<T[]> {
+  const items: T[] = [];
+  for await (const item of generator) items.push(item);
+  return items;
+}
+
+describe('AgentClient.diagnoseStream', () => {
+  const originalFetch = global.fetch;
+  afterEach(() => {
+    global.fetch = originalFetch;
+    jest.restoreAllMocks();
+  });
+
+  it('缺少 LABS_AGENT_BASE_URL 或 AIVIRTEACH_AGENT_TOKEN 时抛出 ServiceUnavailableException', async () => {
+    const client = await buildClient({});
+    await expect(collect(client.diagnoseStream(PAYLOAD))).rejects.toBeInstanceOf(ServiceUnavailableException);
+  });
+
+  it('POST /v1/agent/diagnose/stream，带 bearer token，原样透传 payload，逐帧解析 SSE body', async () => {
+    const fetchMock = jest.fn().mockResolvedValue({
+      ok: true,
+      body: streamFromText('event: reasoning_started\ndata: {"turn":1}\n\nevent: result\ndata: {"response":{}}\n\n'),
+    });
+    global.fetch = fetchMock as unknown as typeof fetch;
+
+    const client = await buildClient({
+      LABS_AGENT_BASE_URL: 'https://labs-agent.example.com',
+      AIVIRTEACH_AGENT_TOKEN: 'agent-token',
+    });
+
+    const frames = await collect(client.diagnoseStream(PAYLOAD));
+
+    expect(frames).toEqual([
+      { event: 'reasoning_started', data: '{"turn":1}' },
+      { event: 'result', data: '{"response":{}}' },
+    ]);
+    expect(fetchMock).toHaveBeenCalledWith(
+      'https://labs-agent.example.com/v1/agent/diagnose/stream',
+      expect.objectContaining({
+        method: 'POST',
+        headers: expect.objectContaining({
+          Authorization: 'Bearer agent-token',
+          'Content-Type': 'application/json',
+        }),
+        body: JSON.stringify(PAYLOAD),
+      }),
+    );
+  });
+
+  it('Agent 返回非 2xx 时抛出带状态码的错误', async () => {
+    global.fetch = jest.fn().mockResolvedValue({
+      ok: false,
+      status: 503,
+      statusText: 'Service Unavailable',
+      text: async () => 'Agent dependencies are not configured.',
+    }) as unknown as typeof fetch;
+
+    const client = await buildClient({
+      LABS_AGENT_BASE_URL: 'https://labs-agent.example.com',
+      AIVIRTEACH_AGENT_TOKEN: 'agent-token',
+    });
+
+    await expect(collect(client.diagnoseStream(PAYLOAD))).rejects.toThrow(
+      'Agent 诊断流失败（503）：Agent dependencies are not configured.',
+    );
+  });
+
+  it('Agent 返回 2xx 但没有 body 时抛出错误', async () => {
+    global.fetch = jest.fn().mockResolvedValue({ ok: true, body: null }) as unknown as typeof fetch;
+
+    const client = await buildClient({
+      LABS_AGENT_BASE_URL: 'https://labs-agent.example.com',
+      AIVIRTEACH_AGENT_TOKEN: 'agent-token',
+    });
+
+    await expect(collect(client.diagnoseStream(PAYLOAD))).rejects.toThrow('Agent 响应没有 body');
+  });
+});
