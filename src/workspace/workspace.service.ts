@@ -11,6 +11,7 @@ const STALE_CREATING_MS = 5 * 60 * 1000;
 
 export type ConsoleSessionResult = BrowserSession;
 export type StopReason = 'manual' | 'beacon';
+type InternalStopReason = StopReason | 'idle';
 
 @Injectable()
 export class WorkspaceService {
@@ -210,8 +211,11 @@ export class WorkspaceService {
   // ——免费版 Cron 一天只能跑一次，覆盖不了分钟级的空闲检测。单个 workspace 停止失败不阻塞其它的。
   async sweepIdle(): Promise<void> {
     const threshold = new Date(Date.now() - this.env.WORKSPACE_IDLE_TIMEOUT_MINUTES * 60 * 1000);
+    // lastSeenAt 是加 lastSeenAt 迁移时补的 nullable 列，没有 backfill——SQL 里 `NULL < threshold`
+    // 恒为 NULL 不是 true，光用 lt 查询会让迁移前就是 RUNNING、之后从未 start/heartbeat 过的
+    // workspace 永远扫不到、永远不会被停掉，需要显式 OR lastSeenAt IS NULL 补上。
     const idleWorkspaces = await this.prisma.workspace.findMany({
-      where: { status: WorkspaceStatus.RUNNING, lastSeenAt: { lt: threshold } },
+      where: { status: WorkspaceStatus.RUNNING, OR: [{ lastSeenAt: null }, { lastSeenAt: { lt: threshold } }] },
     });
 
     for (const workspace of idleWorkspaces) {
@@ -223,7 +227,7 @@ export class WorkspaceService {
     }
   }
 
-  private async stopWorkspace(workspace: Workspace, actor: AuditActor, reason: string): Promise<Workspace> {
+  private async stopWorkspace(workspace: Workspace, actor: AuditActor, reason: InternalStopReason): Promise<Workspace> {
     try {
       await this.labsClient.stopVm(workspace.labId!);
     } catch (error) {

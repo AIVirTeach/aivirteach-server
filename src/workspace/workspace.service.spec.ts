@@ -517,9 +517,25 @@ describe('WorkspaceService.sweepIdle', () => {
     expect(prisma.workspace.findMany).toHaveBeenCalledTimes(1);
     const call = prisma.workspace.findMany.mock.calls[0][0];
     expect(call.where.status).toBe(WorkspaceStatus.RUNNING);
-    const threshold = call.where.lastSeenAt.lt as Date;
+    const [nullBranch, thresholdBranch] = call.where.OR as Array<Record<string, unknown>>;
+    expect(nullBranch).toEqual({ lastSeenAt: null });
+    const threshold = (thresholdBranch.lastSeenAt as { lt: Date }).lt;
     expect(threshold.getTime()).toBeGreaterThanOrEqual(before - 15 * 60 * 1000 - 1000);
     expect(threshold.getTime()).toBeLessThanOrEqual(after - 15 * 60 * 1000 + 1000);
+  });
+
+  it('lastSeenAt 为 NULL（迁移前就存在的 workspace，从未写过心跳）的也当作空闲处理', async () => {
+    // NULL < threshold 在 SQL 里恒为 NULL 不是 true，光用 lt 查询会让这些 workspace 永远扫不到、
+    // 永远不会被停掉——用显式的 OR lastSeenAt IS NULL 补上这个缺口。
+    const { service, prisma, labsClient } = await buildService();
+    const neverHeartbeated = { id: 'ws_1', enrollmentId: 'enr_1', status: WorkspaceStatus.RUNNING, labId: 'lab_1', lastSeenAt: null };
+    prisma.workspace.findMany.mockResolvedValue([neverHeartbeated]);
+    labsClient.stopVm.mockResolvedValue(undefined);
+    prisma.workspace.update.mockResolvedValue({ ...neverHeartbeated, status: WorkspaceStatus.STOPPED });
+
+    await service.sweepIdle();
+
+    expect(labsClient.stopVm).toHaveBeenCalledWith('lab_1');
   });
 
   it('命中的每个 workspace 都调用 Labs 停止、落库 STOPPED、写系统审计（reason=idle）、广播', async () => {
