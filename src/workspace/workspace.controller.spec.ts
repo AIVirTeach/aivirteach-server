@@ -77,4 +77,59 @@ describe('WorkspaceController', () => {
     });
     expect(service.exchangeConsoleToken).toHaveBeenCalledWith('user_1', 'enr_1', 'encrypted-ticket');
   });
+
+  it('POST :enrollmentId/stop 透传 body.reason=manual 给 service.stop', async () => {
+    const service = { stop: jest.fn().mockResolvedValue({ id: 'ws_1', status: 'STOPPED' }) };
+    const moduleRef = await Test.createTestingModule({
+      controllers: [WorkspaceController],
+      providers: [{ provide: WorkspaceService, useValue: service }, JWT_AUTH_GUARD_STUB],
+    }).compile();
+    const controller = moduleRef.get(WorkspaceController);
+
+    const result = await controller.stop('enr_1', { reason: 'manual' }, AUTH_REQUEST as any);
+
+    expect(result).toEqual({ id: 'ws_1', status: 'STOPPED' });
+    expect(service.stop).toHaveBeenCalledWith('user_1', 'enr_1', 'manual');
+  });
+
+  it('POST :enrollmentId/stop 透传 body.reason=beacon 给 service.stop', async () => {
+    const service = { stop: jest.fn().mockResolvedValue({ id: 'ws_1', status: 'STOPPED' }) };
+    const moduleRef = await Test.createTestingModule({
+      controllers: [WorkspaceController],
+      providers: [{ provide: WorkspaceService, useValue: service }, JWT_AUTH_GUARD_STUB],
+    }).compile();
+    const controller = moduleRef.get(WorkspaceController);
+
+    await controller.stop('enr_1', { reason: 'beacon' }, AUTH_REQUEST as any);
+
+    expect(service.stop).toHaveBeenCalledWith('user_1', 'enr_1', 'beacon');
+  });
+
+  it('POST :enrollmentId/start 用认证用户的 userId 调用 service.start', async () => {
+    const service = { start: jest.fn().mockResolvedValue({ id: 'ws_1', status: 'RUNNING' }) };
+    const moduleRef = await Test.createTestingModule({
+      controllers: [WorkspaceController],
+      providers: [{ provide: WorkspaceService, useValue: service }, JWT_AUTH_GUARD_STUB],
+    }).compile();
+    const controller = moduleRef.get(WorkspaceController);
+
+    const result = await controller.start('enr_1', AUTH_REQUEST as any);
+
+    expect(result).toEqual({ id: 'ws_1', status: 'RUNNING' });
+    expect(service.start).toHaveBeenCalledWith('user_1', 'enr_1');
+  });
+
+  it('POST :enrollmentId/heartbeat 用认证用户的 userId 调用 service.heartbeat', async () => {
+    const service = { heartbeat: jest.fn().mockResolvedValue({ id: 'ws_1', status: 'RUNNING' }) };
+    const moduleRef = await Test.createTestingModule({
+      controllers: [WorkspaceController],
+      providers: [{ provide: WorkspaceService, useValue: service }, JWT_AUTH_GUARD_STUB],
+    }).compile();
+    const controller = moduleRef.get(WorkspaceController);
+
+    const result = await controller.heartbeat('enr_1', AUTH_REQUEST as any);
+
+    expect(result).toEqual({ id: 'ws_1', status: 'RUNNING' });
+    expect(service.heartbeat).toHaveBeenCalledWith('user_1', 'enr_1');
+  });
 });

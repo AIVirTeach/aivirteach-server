@@ -15,6 +15,7 @@ describe('loadEnv', () => {
       INVITATION_TTL_DAYS: 7,
       PORT: 4000,
       CORS_ORIGINS: 'tauri://localhost',
+      WORKSPACE_IDLE_TIMEOUT_MINUTES: 15,
     });
   });
 

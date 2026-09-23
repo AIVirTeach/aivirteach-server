@@ -116,6 +116,40 @@ export class LabsClient {
     };
   }
 
+  async stopVm(labId: string): Promise<void> {
+    await this.runVmAction(labId, 'stop', 'Labs 停止 VM 失败');
+  }
+
+  async startVm(labId: string): Promise<void> {
+    await this.runVmAction(labId, 'start', 'Labs 启动 VM 失败');
+  }
+
+  private async runVmAction(labId: string, action: 'stop' | 'start', errorPrefix: string): Promise<void> {
+    const { LABS_VM_BASE_URL, AIVIRTEACH_API_TOKEN, CF_ACCESS_CLIENT_ID, CF_ACCESS_CLIENT_SECRET } = this.env;
+    if (!LABS_VM_BASE_URL || !AIVIRTEACH_API_TOKEN) {
+      throw new ServiceUnavailableException('Labs 集成未配置：缺少 LABS_VM_BASE_URL 或 AIVIRTEACH_API_TOKEN');
+    }
+
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${AIVIRTEACH_API_TOKEN}`,
+    };
+    if (CF_ACCESS_CLIENT_ID && CF_ACCESS_CLIENT_SECRET) {
+      headers['CF-Access-Client-Id'] = CF_ACCESS_CLIENT_ID;
+      headers['CF-Access-Client-Secret'] = CF_ACCESS_CLIENT_SECRET;
+    }
+
+    const response = await fetch(`${LABS_VM_BASE_URL}/v1/vms/${labId}/actions/${action}`, {
+      method: 'POST',
+      headers,
+    });
+
+    if (!response.ok) {
+      const detail = await response.text().catch(() => '');
+      throw new Error(`${errorPrefix}（${response.status}）：${detail || response.statusText}`);
+    }
+  }
+
   // 浏览器直接 fetch Guacamole 的 /api/tokens 会被 CORS 挡住（Guacamole 默认不带
   // Access-Control-Allow-Origin），这里改成 server 对 server 转发一次，规避这个限制，
   // 不需要同源反代也不需要 Guacamole 那边加 CORS 头。WebSocket tunnel 本身不受 CORS
