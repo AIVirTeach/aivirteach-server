@@ -11,6 +11,7 @@ const BASE_ENV: Env = {
   INVITATION_TTL_DAYS: 7,
   PORT: 4000,
   CORS_ORIGINS: 'http://localhost:3001',
+  WORKSPACE_IDLE_TIMEOUT_MINUTES: 15,
 };
 
 async function buildClient(envOverrides: Partial<Env>) {
@@ -202,6 +203,120 @@ describe('LabsClient.createBrowserSession', () => {
 
     await expect(client.createBrowserSession('workspace_1', 'user_1')).rejects.toThrow(
       'Labs 创建浏览器会话失败（502）：Command exited with 1.',
+    );
+  });
+});
+
+describe('LabsClient.stopVm', () => {
+  const originalFetch = global.fetch;
+  afterEach(() => {
+    global.fetch = originalFetch;
+    jest.restoreAllMocks();
+  });
+
+  it('缺少 Labs 配置时抛出 ServiceUnavailableException', async () => {
+    const client = await buildClient({});
+    await expect(client.stopVm('workspace_1')).rejects.toBeInstanceOf(ServiceUnavailableException);
+  });
+
+  it('POST /v1/vms/:labId/actions/stop，带上 bearer token 和 CF Access header', async () => {
+    const fetchMock = jest.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ lab_id: 'workspace_1', operation: 'stop', message: 'ok' }),
+    });
+    global.fetch = fetchMock as unknown as typeof fetch;
+
+    const client = await buildClient({
+      LABS_VM_BASE_URL: 'https://labs-vm.example.com',
+      AIVIRTEACH_API_TOKEN: 'labs-token',
+      CF_ACCESS_CLIENT_ID: 'cf-id',
+      CF_ACCESS_CLIENT_SECRET: 'cf-secret',
+    });
+
+    await client.stopVm('workspace_1');
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      'https://labs-vm.example.com/v1/vms/workspace_1/actions/stop',
+      expect.objectContaining({
+        method: 'POST',
+        headers: expect.objectContaining({
+          Authorization: 'Bearer labs-token',
+          'CF-Access-Client-Id': 'cf-id',
+          'CF-Access-Client-Secret': 'cf-secret',
+        }),
+      }),
+    );
+  });
+
+  it('Labs 返回非 2xx 时抛出带状态码和详情的错误', async () => {
+    global.fetch = jest.fn().mockResolvedValue({
+      ok: false,
+      status: 502,
+      statusText: 'Bad Gateway',
+      text: async () => 'Command exited with 1.',
+    }) as unknown as typeof fetch;
+
+    const client = await buildClient({
+      LABS_VM_BASE_URL: 'https://labs-vm.example.com',
+      AIVIRTEACH_API_TOKEN: 'labs-token',
+    });
+
+    await expect(client.stopVm('workspace_1')).rejects.toThrow(
+      'Labs 停止 VM 失败（502）：Command exited with 1.',
+    );
+  });
+});
+
+describe('LabsClient.startVm', () => {
+  const originalFetch = global.fetch;
+  afterEach(() => {
+    global.fetch = originalFetch;
+    jest.restoreAllMocks();
+  });
+
+  it('缺少 Labs 配置时抛出 ServiceUnavailableException', async () => {
+    const client = await buildClient({});
+    await expect(client.startVm('workspace_1')).rejects.toBeInstanceOf(ServiceUnavailableException);
+  });
+
+  it('POST /v1/vms/:labId/actions/start，带上 bearer token', async () => {
+    const fetchMock = jest.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ lab_id: 'workspace_1', operation: 'start', message: 'ok' }),
+    });
+    global.fetch = fetchMock as unknown as typeof fetch;
+
+    const client = await buildClient({
+      LABS_VM_BASE_URL: 'https://labs-vm.example.com',
+      AIVIRTEACH_API_TOKEN: 'labs-token',
+    });
+
+    await client.startVm('workspace_1');
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      'https://labs-vm.example.com/v1/vms/workspace_1/actions/start',
+      expect.objectContaining({
+        method: 'POST',
+        headers: expect.objectContaining({ Authorization: 'Bearer labs-token' }),
+      }),
+    );
+  });
+
+  it('Labs 返回非 2xx 时抛出带状态码和详情的错误', async () => {
+    global.fetch = jest.fn().mockResolvedValue({
+      ok: false,
+      status: 504,
+      statusText: 'Gateway Timeout',
+      text: async () => 'Command timed out after 180 seconds.',
+    }) as unknown as typeof fetch;
+
+    const client = await buildClient({
+      LABS_VM_BASE_URL: 'https://labs-vm.example.com',
+      AIVIRTEACH_API_TOKEN: 'labs-token',
+    });
+
+    await expect(client.startVm('workspace_1')).rejects.toThrow(
+      'Labs 启动 VM 失败（504）：Command timed out after 180 seconds.',
     );
   });
 });

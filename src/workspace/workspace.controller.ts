@@ -3,7 +3,14 @@ import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import type { Workspace } from '@prisma/client';
 import { JwtAuthGuard, type AuthenticatedRequest } from '../auth/jwt-auth.guard';
 import { ZodValidationPipe } from '../common/zod-validation.pipe';
-import { CreateWorkspaceSchema, ExchangeConsoleTokenSchema, type CreateWorkspaceInput, type ExchangeConsoleTokenInput } from './workspace.schemas';
+import {
+  CreateWorkspaceSchema,
+  ExchangeConsoleTokenSchema,
+  StopWorkspaceSchema,
+  type CreateWorkspaceInput,
+  type ExchangeConsoleTokenInput,
+  type StopWorkspaceInput,
+} from './workspace.schemas';
 import { WorkspaceService, type ConsoleSessionResult } from './workspace.service';
 import type { GuacamoleToken } from './labs-client';
 
@@ -41,5 +48,30 @@ export class WorkspaceController {
     @Req() request: AuthenticatedRequest,
   ): Promise<GuacamoleToken> {
     return this.workspaceService.exchangeConsoleToken(request.auth!.userId, enrollmentId, body.data);
+  }
+
+  // reason=beacon 是 navigator.sendBeacon() 在关标签页时打的（见 JwtAuthGuard 里的 query
+  // token 回退）；reason=manual 是"关闭学习环境"按钮打的。两条路径落到同一个 service.stop。
+  @Post(':enrollmentId/stop')
+  @HttpCode(200)
+  stop(
+    @Param('enrollmentId') enrollmentId: string,
+    @Body(new ZodValidationPipe(StopWorkspaceSchema)) body: StopWorkspaceInput,
+    @Req() request: AuthenticatedRequest,
+  ): Promise<Workspace> {
+    return this.workspaceService.stop(request.auth!.userId, enrollmentId, body.reason);
+  }
+
+  @Post(':enrollmentId/start')
+  @HttpCode(200)
+  start(@Param('enrollmentId') enrollmentId: string, @Req() request: AuthenticatedRequest): Promise<Workspace> {
+    return this.workspaceService.start(request.auth!.userId, enrollmentId);
+  }
+
+  // 客户端每 60 秒调一次，页面可见且有焦点时才调；用来刷新 lastSeenAt，供空闲兜底扫描判断。
+  @Post(':enrollmentId/heartbeat')
+  @HttpCode(200)
+  heartbeat(@Param('enrollmentId') enrollmentId: string, @Req() request: AuthenticatedRequest): Promise<Workspace> {
+    return this.workspaceService.heartbeat(request.auth!.userId, enrollmentId);
   }
 }

@@ -11,10 +11,11 @@ const ENV_STUB = {
   INVITATION_TTL_DAYS: 7,
   PORT: 3000,
   CORS_ORIGINS: 'tauri://localhost',
+  WORKSPACE_IDLE_TIMEOUT_MINUTES: 15,
 };
 
-const contextWith = (headers: Record<string, string>) => {
-  const request: Record<string, unknown> = { headers };
+const contextWith = (headers: Record<string, string>, query: Record<string, string> = {}) => {
+  const request: Record<string, unknown> = { headers, query };
   return {
     switchToHttp: () => ({ getRequest: () => request }),
     __request: request,
@@ -60,6 +61,29 @@ describe('JwtAuthGuard', () => {
       '15m',
     );
     const context = contextWith({ authorization: `Bearer ${token}` });
+
+    await expect(guard.canActivate(context)).rejects.toBeInstanceOf(
+      UnauthorizedException,
+    );
+  });
+
+  it('没有 Authorization 头时，回退到 query string 里的 token（sendBeacon 不能带自定义头）', async () => {
+    const token = await signAccessToken(
+      { sub: 'user_1', email: 'a@b.com' },
+      SECRET,
+      '15m',
+    );
+    const context = contextWith({}, { token });
+
+    await expect(guard.canActivate(context)).resolves.toBe(true);
+    expect(context.__request.auth).toEqual({
+      userId: 'user_1',
+      email: 'a@b.com',
+    });
+  });
+
+  it('query token 无效时拒绝', async () => {
+    const context = contextWith({}, { token: 'not-a-real-token' });
 
     await expect(guard.canActivate(context)).rejects.toBeInstanceOf(
       UnauthorizedException,

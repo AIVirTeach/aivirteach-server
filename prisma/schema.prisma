@@ -296,6 +296,7 @@ model Workspace {
   rdpPort       Int?
   rdpUsername   String?
   vncPort       Int?
+  lastSeenAt    DateTime?
   createdAt     DateTime        @default(now())
   updatedAt     DateTime        @updatedAt
 }

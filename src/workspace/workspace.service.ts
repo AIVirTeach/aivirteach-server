@@ -1,14 +1,16 @@
-import { BadGatewayException, ConflictException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadGatewayException, ConflictException, ForbiddenException, Inject, Injectable, NotFoundException } from '@nestjs/common';
 import { AuditActorType, WorkspaceStatus, type Workspace } from '@prisma/client';
 import { waitUntil } from '@vercel/functions';
+import { ENV, type Env } from '../config/env';
 import { PrismaService } from '../prisma/prisma.service';
-import { AuditService } from '../audit/audit.service';
+import { AuditService, type AuditActor } from '../audit/audit.service';
 import { LabsClient, type BrowserSession, type GuacamoleToken } from './labs-client';
 import { WorkspaceGateway } from './workspace.gateway';
 
 const STALE_CREATING_MS = 5 * 60 * 1000;
 
 export type ConsoleSessionResult = BrowserSession;
+export type StopReason = 'manual' | 'beacon';
 
 @Injectable()
 export class WorkspaceService {
@@ -17,6 +19,7 @@ export class WorkspaceService {
     private readonly audit: AuditService,
     private readonly labsClient: LabsClient,
     private readonly gateway: WorkspaceGateway,
+    @Inject(ENV) private readonly env: Env,
   ) {}
 
   async getForEnrollment(userId: string, enrollmentId: string): Promise<Workspace> {
@@ -115,6 +118,7 @@ export class WorkspaceService {
           rdpUsername: result.username,
           rdpPort: result.rdpPort,
           errorMessage: null,
+          lastSeenAt: new Date(),
         },
       });
       await this.audit.record({
@@ -140,6 +144,115 @@ export class WorkspaceService {
       });
       this.gateway.broadcastStatus(updated);
     }
+  }
+
+  async stop(userId: string, enrollmentId: string, reason: StopReason): Promise<Workspace> {
+    const enrollment = await this.requireOwnedEnrollment(userId, enrollmentId);
+    const workspace = await this.prisma.workspace.findUnique({ where: { enrollmentId: enrollment.id } });
+    if (!workspace) throw new NotFoundException('没有找到这个课程的工作区');
+    // 已经不是 RUNNING：可能是重复触发（beacon 打两次、关闭前先被空闲扫描停了），幂等返回现状。
+    if (workspace.status !== WorkspaceStatus.RUNNING) return workspace;
+
+    return this.stopWorkspace(workspace, { type: AuditActorType.USER, id: userId }, reason);
+  }
+
+  async start(userId: string, enrollmentId: string): Promise<Workspace> {
+    const enrollment = await this.requireOwnedEnrollment(userId, enrollmentId);
+    const workspace = await this.prisma.workspace.findUnique({ where: { enrollmentId: enrollment.id } });
+    if (!workspace) throw new NotFoundException('没有找到这个课程的工作区');
+    if (workspace.status !== WorkspaceStatus.STOPPED) return workspace;
+
+    try {
+      await this.labsClient.startVm(workspace.labId!);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : '未知错误';
+      await this.audit.record({
+        actor: { type: AuditActorType.USER, id: userId },
+        action: 'workspace.start',
+        success: false,
+        targetType: 'Workspace',
+        targetId: workspace.id,
+      });
+      throw new BadGatewayException(`无法启动远程桌面：${message}`);
+    }
+
+    const updated = await this.prisma.workspace.update({
+      where: { id: workspace.id },
+      data: { status: WorkspaceStatus.RUNNING, lastSeenAt: new Date() },
+    });
+    await this.audit.record({
+      actor: { type: AuditActorType.USER, id: userId },
+      action: 'workspace.start',
+      success: true,
+      targetType: 'Workspace',
+      targetId: workspace.id,
+    });
+    this.gateway.broadcastStatus(updated);
+    return updated;
+  }
+
+  // 客户端每 60 秒调一次；只在 RUNNING 时刷新 lastSeenAt，供 sweepIdle 判断空闲用，
+  // 不写审计——太频繁，不是有意义的审计事件（跟 console-session 轮询同样的取舍）。
+  async heartbeat(userId: string, enrollmentId: string): Promise<Workspace> {
+    const enrollment = await this.requireOwnedEnrollment(userId, enrollmentId);
+    const workspace = await this.prisma.workspace.findUnique({ where: { enrollmentId: enrollment.id } });
+    if (!workspace) throw new NotFoundException('没有找到这个课程的工作区');
+    if (workspace.status !== WorkspaceStatus.RUNNING) return workspace;
+
+    return this.prisma.workspace.update({
+      where: { id: workspace.id },
+      data: { lastSeenAt: new Date() },
+    });
+  }
+
+  // Plan B 兜底：关标签页时 sendBeacon 没送到（崩溃/断网）的情况下，靠这个把长期没心跳的
+  // workspace 收掉。由全局 interceptor 搭便车调用（见 workspace.module.ts），不用 Vercel Cron
+  // ——免费版 Cron 一天只能跑一次，覆盖不了分钟级的空闲检测。单个 workspace 停止失败不阻塞其它的。
+  async sweepIdle(): Promise<void> {
+    const threshold = new Date(Date.now() - this.env.WORKSPACE_IDLE_TIMEOUT_MINUTES * 60 * 1000);
+    const idleWorkspaces = await this.prisma.workspace.findMany({
+      where: { status: WorkspaceStatus.RUNNING, lastSeenAt: { lt: threshold } },
+    });
+
+    for (const workspace of idleWorkspaces) {
+      try {
+        await this.stopWorkspace(workspace, { type: AuditActorType.SYSTEM }, 'idle');
+      } catch {
+        // stopWorkspace 内部已经写了失败审计，这里只是不让一个 workspace 的失败挡住其它的。
+      }
+    }
+  }
+
+  private async stopWorkspace(workspace: Workspace, actor: AuditActor, reason: string): Promise<Workspace> {
+    try {
+      await this.labsClient.stopVm(workspace.labId!);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : '未知错误';
+      await this.audit.record({
+        actor,
+        action: 'workspace.stop',
+        success: false,
+        targetType: 'Workspace',
+        targetId: workspace.id,
+        reason,
+      });
+      throw new BadGatewayException(`无法停止远程桌面：${message}`);
+    }
+
+    const updated = await this.prisma.workspace.update({
+      where: { id: workspace.id },
+      data: { status: WorkspaceStatus.STOPPED },
+    });
+    await this.audit.record({
+      actor,
+      action: 'workspace.stop',
+      success: true,
+      targetType: 'Workspace',
+      targetId: workspace.id,
+      reason,
+    });
+    this.gateway.broadcastStatus(updated);
+    return updated;
   }
 
   private isStale(workspace: Workspace): boolean {

@@ -11,3 +11,9 @@ export const ExchangeConsoleTokenSchema = z.object({
 });
 
 export type ExchangeConsoleTokenInput = z.infer<typeof ExchangeConsoleTokenSchema>;
+
+export const StopWorkspaceSchema = z.object({
+  reason: z.enum(['manual', 'beacon']).default('manual'),
+});
+
+export type StopWorkspaceInput = z.infer<typeof StopWorkspaceSchema>;

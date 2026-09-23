@@ -1,6 +1,7 @@
 import { BadGatewayException, ConflictException, ForbiddenException, NotFoundException } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
 import { WorkspaceStatus } from '@prisma/client';
+import { ENV, type Env } from '../config/env';
 import { PrismaService } from '../prisma/prisma.service';
 import { AuditService } from '../audit/audit.service';
 import { LabsClient } from './labs-client';
@@ -10,7 +11,7 @@ import { WorkspaceService } from './workspace.service';
 function buildPrisma() {
   return {
     enrollment: { findUnique: jest.fn() },
-    workspace: { findUnique: jest.fn(), upsert: jest.fn(), update: jest.fn() },
+    workspace: { findUnique: jest.fn(), upsert: jest.fn(), update: jest.fn(), findMany: jest.fn() },
   };
 }
 
@@ -20,12 +21,14 @@ async function buildService(
     labsClient?: any;
     gateway?: any;
     audit?: any;
+    env?: Partial<Env>;
   } = {},
 ) {
   const prisma = overrides.prisma ?? buildPrisma();
-  const labsClient = overrides.labsClient ?? { createVm: jest.fn() };
+  const labsClient = overrides.labsClient ?? { createVm: jest.fn(), stopVm: jest.fn(), startVm: jest.fn() };
   const gateway = overrides.gateway ?? { broadcastStatus: jest.fn() };
   const audit = overrides.audit ?? { record: jest.fn() };
+  const env = { WORKSPACE_IDLE_TIMEOUT_MINUTES: 15, ...overrides.env };
 
   const moduleRef = await Test.createTestingModule({
     providers: [
@@ -34,6 +37,7 @@ async function buildService(
       { provide: AuditService, useValue: audit },
       { provide: LabsClient, useValue: labsClient },
       { provide: WorkspaceGateway, useValue: gateway },
+      { provide: ENV, useValue: env },
     ],
   }).compile();
   return { service: moduleRef.get(WorkspaceService), prisma, labsClient, gateway, audit };
@@ -139,6 +143,7 @@ describe('WorkspaceService.provisionInBackground', () => {
         rdpUsername: 'learner',
         rdpPort: 3389,
         errorMessage: null,
+        lastSeenAt: expect.any(Date),
       },
     });
     expect(audit.record).toHaveBeenCalledWith(
@@ -321,5 +326,241 @@ describe('WorkspaceService.exchangeConsoleToken', () => {
     await expect(service.exchangeConsoleToken('user_1', 'enr_1', 'bad-ticket')).rejects.toBeInstanceOf(
       BadGatewayException,
     );
+  });
+});
+
+describe('WorkspaceService.stop', () => {
+  it('enrollment 不属于当前用户时拒绝', async () => {
+    const { service, prisma } = await buildService();
+    prisma.enrollment.findUnique.mockResolvedValue({ ...ENROLLMENT, userId: 'someone_else' });
+    await expect(service.stop('user_1', 'enr_1', 'manual')).rejects.toBeInstanceOf(ForbiddenException);
+  });
+
+  it('没有 workspace 记录时 404', async () => {
+    const { service, prisma } = await buildService();
+    prisma.enrollment.findUnique.mockResolvedValue(ENROLLMENT);
+    prisma.workspace.findUnique.mockResolvedValue(null);
+    await expect(service.stop('user_1', 'enr_1', 'manual')).rejects.toBeInstanceOf(NotFoundException);
+  });
+
+  it('workspace 不是 RUNNING 时幂等返回现状，不调用 Labs', async () => {
+    const { service, prisma, labsClient } = await buildService();
+    prisma.enrollment.findUnique.mockResolvedValue(ENROLLMENT);
+    const stopped = { id: 'ws_1', enrollmentId: 'enr_1', status: WorkspaceStatus.STOPPED, labId: 'ws_1' };
+    prisma.workspace.findUnique.mockResolvedValue(stopped);
+
+    const result = await service.stop('user_1', 'enr_1', 'manual');
+
+    expect(result).toBe(stopped);
+    expect(labsClient.stopVm).not.toHaveBeenCalled();
+    expect(prisma.workspace.update).not.toHaveBeenCalled();
+  });
+
+  it('RUNNING 时调用 Labs 停止、落库 STOPPED、写审计（带 reason）、广播', async () => {
+    const { service, prisma, labsClient, gateway, audit } = await buildService();
+    prisma.enrollment.findUnique.mockResolvedValue(ENROLLMENT);
+    const running = { id: 'ws_1', enrollmentId: 'enr_1', status: WorkspaceStatus.RUNNING, labId: 'lab_1' };
+    prisma.workspace.findUnique.mockResolvedValue(running);
+    labsClient.stopVm.mockResolvedValue(undefined);
+    const updated = { ...running, status: WorkspaceStatus.STOPPED };
+    prisma.workspace.update.mockResolvedValue(updated);
+
+    const result = await service.stop('user_1', 'enr_1', 'beacon');
+
+    expect(labsClient.stopVm).toHaveBeenCalledWith('lab_1');
+    expect(prisma.workspace.update).toHaveBeenCalledWith({
+      where: { id: 'ws_1' },
+      data: { status: WorkspaceStatus.STOPPED },
+    });
+    expect(audit.record).toHaveBeenCalledWith(
+      expect.objectContaining({ action: 'workspace.stop', success: true, targetId: 'ws_1', reason: 'beacon' }),
+    );
+    expect(gateway.broadcastStatus).toHaveBeenCalledWith(updated);
+    expect(result).toBe(updated);
+  });
+
+  it('Labs 停止失败时抛出 BadGatewayException，写失败审计，不改库里的状态', async () => {
+    const { service, prisma, labsClient, audit } = await buildService();
+    prisma.enrollment.findUnique.mockResolvedValue(ENROLLMENT);
+    const running = { id: 'ws_1', enrollmentId: 'enr_1', status: WorkspaceStatus.RUNNING, labId: 'lab_1' };
+    prisma.workspace.findUnique.mockResolvedValue(running);
+    labsClient.stopVm.mockRejectedValue(new Error('Labs 停止 VM 失败（502）：boom'));
+
+    await expect(service.stop('user_1', 'enr_1', 'manual')).rejects.toBeInstanceOf(BadGatewayException);
+
+    expect(prisma.workspace.update).not.toHaveBeenCalled();
+    expect(audit.record).toHaveBeenCalledWith(
+      expect.objectContaining({ action: 'workspace.stop', success: false, targetId: 'ws_1', reason: 'manual' }),
+    );
+  });
+});
+
+describe('WorkspaceService.start', () => {
+  it('enrollment 不属于当前用户时拒绝', async () => {
+    const { service, prisma } = await buildService();
+    prisma.enrollment.findUnique.mockResolvedValue({ ...ENROLLMENT, userId: 'someone_else' });
+    await expect(service.start('user_1', 'enr_1')).rejects.toBeInstanceOf(ForbiddenException);
+  });
+
+  it('没有 workspace 记录时 404', async () => {
+    const { service, prisma } = await buildService();
+    prisma.enrollment.findUnique.mockResolvedValue(ENROLLMENT);
+    prisma.workspace.findUnique.mockResolvedValue(null);
+    await expect(service.start('user_1', 'enr_1')).rejects.toBeInstanceOf(NotFoundException);
+  });
+
+  it('workspace 不是 STOPPED 时幂等返回现状，不调用 Labs', async () => {
+    const { service, prisma, labsClient } = await buildService();
+    prisma.enrollment.findUnique.mockResolvedValue(ENROLLMENT);
+    const running = { id: 'ws_1', enrollmentId: 'enr_1', status: WorkspaceStatus.RUNNING, labId: 'ws_1' };
+    prisma.workspace.findUnique.mockResolvedValue(running);
+
+    const result = await service.start('user_1', 'enr_1');
+
+    expect(result).toBe(running);
+    expect(labsClient.startVm).not.toHaveBeenCalled();
+    expect(prisma.workspace.update).not.toHaveBeenCalled();
+  });
+
+  it('STOPPED 时调用 Labs 启动、落库 RUNNING 并刷新 lastSeenAt、写审计、广播', async () => {
+    const { service, prisma, labsClient, gateway, audit } = await buildService();
+    prisma.enrollment.findUnique.mockResolvedValue(ENROLLMENT);
+    const stopped = { id: 'ws_1', enrollmentId: 'enr_1', status: WorkspaceStatus.STOPPED, labId: 'lab_1' };
+    prisma.workspace.findUnique.mockResolvedValue(stopped);
+    labsClient.startVm.mockResolvedValue(undefined);
+    const updated = { ...stopped, status: WorkspaceStatus.RUNNING, lastSeenAt: new Date() };
+    prisma.workspace.update.mockResolvedValue(updated);
+
+    const result = await service.start('user_1', 'enr_1');
+
+    expect(labsClient.startVm).toHaveBeenCalledWith('lab_1');
+    expect(prisma.workspace.update).toHaveBeenCalledWith({
+      where: { id: 'ws_1' },
+      data: { status: WorkspaceStatus.RUNNING, lastSeenAt: expect.any(Date) },
+    });
+    expect(audit.record).toHaveBeenCalledWith(
+      expect.objectContaining({ action: 'workspace.start', success: true, targetId: 'ws_1' }),
+    );
+    expect(gateway.broadcastStatus).toHaveBeenCalledWith(updated);
+    expect(result).toBe(updated);
+  });
+
+  it('Labs 启动失败时抛出 BadGatewayException，写失败审计', async () => {
+    const { service, prisma, labsClient, audit } = await buildService();
+    prisma.enrollment.findUnique.mockResolvedValue(ENROLLMENT);
+    const stopped = { id: 'ws_1', enrollmentId: 'enr_1', status: WorkspaceStatus.STOPPED, labId: 'lab_1' };
+    prisma.workspace.findUnique.mockResolvedValue(stopped);
+    labsClient.startVm.mockRejectedValue(new Error('Labs 启动 VM 失败（504）：boom'));
+
+    await expect(service.start('user_1', 'enr_1')).rejects.toBeInstanceOf(BadGatewayException);
+
+    expect(prisma.workspace.update).not.toHaveBeenCalled();
+    expect(audit.record).toHaveBeenCalledWith(
+      expect.objectContaining({ action: 'workspace.start', success: false, targetId: 'ws_1' }),
+    );
+  });
+});
+
+describe('WorkspaceService.heartbeat', () => {
+  it('enrollment 不属于当前用户时拒绝', async () => {
+    const { service, prisma } = await buildService();
+    prisma.enrollment.findUnique.mockResolvedValue({ ...ENROLLMENT, userId: 'someone_else' });
+    await expect(service.heartbeat('user_1', 'enr_1')).rejects.toBeInstanceOf(ForbiddenException);
+  });
+
+  it('没有 workspace 记录时 404', async () => {
+    const { service, prisma } = await buildService();
+    prisma.enrollment.findUnique.mockResolvedValue(ENROLLMENT);
+    prisma.workspace.findUnique.mockResolvedValue(null);
+    await expect(service.heartbeat('user_1', 'enr_1')).rejects.toBeInstanceOf(NotFoundException);
+  });
+
+  it('RUNNING 时刷新 lastSeenAt', async () => {
+    const { service, prisma } = await buildService();
+    prisma.enrollment.findUnique.mockResolvedValue(ENROLLMENT);
+    const running = { id: 'ws_1', enrollmentId: 'enr_1', status: WorkspaceStatus.RUNNING };
+    prisma.workspace.findUnique.mockResolvedValue(running);
+    const updated = { ...running, lastSeenAt: new Date() };
+    prisma.workspace.update.mockResolvedValue(updated);
+
+    const result = await service.heartbeat('user_1', 'enr_1');
+
+    expect(prisma.workspace.update).toHaveBeenCalledWith({
+      where: { id: 'ws_1' },
+      data: { lastSeenAt: expect.any(Date) },
+    });
+    expect(result).toBe(updated);
+  });
+
+  it('非 RUNNING 时不更新，原样返回现状', async () => {
+    const { service, prisma } = await buildService();
+    prisma.enrollment.findUnique.mockResolvedValue(ENROLLMENT);
+    const stopped = { id: 'ws_1', enrollmentId: 'enr_1', status: WorkspaceStatus.STOPPED };
+    prisma.workspace.findUnique.mockResolvedValue(stopped);
+
+    const result = await service.heartbeat('user_1', 'enr_1');
+
+    expect(prisma.workspace.update).not.toHaveBeenCalled();
+    expect(result).toBe(stopped);
+  });
+});
+
+describe('WorkspaceService.sweepIdle', () => {
+  it('查询 RUNNING 且 lastSeenAt 早于超时阈值的 workspace', async () => {
+    const { service, prisma } = await buildService({ env: { WORKSPACE_IDLE_TIMEOUT_MINUTES: 15 } });
+    prisma.workspace.findMany.mockResolvedValue([]);
+
+    const before = Date.now();
+    await service.sweepIdle();
+    const after = Date.now();
+
+    expect(prisma.workspace.findMany).toHaveBeenCalledTimes(1);
+    const call = prisma.workspace.findMany.mock.calls[0][0];
+    expect(call.where.status).toBe(WorkspaceStatus.RUNNING);
+    const threshold = call.where.lastSeenAt.lt as Date;
+    expect(threshold.getTime()).toBeGreaterThanOrEqual(before - 15 * 60 * 1000 - 1000);
+    expect(threshold.getTime()).toBeLessThanOrEqual(after - 15 * 60 * 1000 + 1000);
+  });
+
+  it('命中的每个 workspace 都调用 Labs 停止、落库 STOPPED、写系统审计（reason=idle）、广播', async () => {
+    const { service, prisma, labsClient, gateway, audit } = await buildService();
+    const idle1 = { id: 'ws_1', enrollmentId: 'enr_1', status: WorkspaceStatus.RUNNING, labId: 'lab_1' };
+    const idle2 = { id: 'ws_2', enrollmentId: 'enr_2', status: WorkspaceStatus.RUNNING, labId: 'lab_2' };
+    prisma.workspace.findMany.mockResolvedValue([idle1, idle2]);
+    labsClient.stopVm.mockResolvedValue(undefined);
+    prisma.workspace.update
+      .mockResolvedValueOnce({ ...idle1, status: WorkspaceStatus.STOPPED })
+      .mockResolvedValueOnce({ ...idle2, status: WorkspaceStatus.STOPPED });
+
+    await service.sweepIdle();
+
+    expect(labsClient.stopVm).toHaveBeenCalledWith('lab_1');
+    expect(labsClient.stopVm).toHaveBeenCalledWith('lab_2');
+    expect(prisma.workspace.update).toHaveBeenCalledWith({
+      where: { id: 'ws_1' },
+      data: { status: WorkspaceStatus.STOPPED },
+    });
+    expect(prisma.workspace.update).toHaveBeenCalledWith({
+      where: { id: 'ws_2' },
+      data: { status: WorkspaceStatus.STOPPED },
+    });
+    expect(audit.record).toHaveBeenCalledWith(
+      expect.objectContaining({ action: 'workspace.stop', success: true, targetId: 'ws_1', reason: 'idle' }),
+    );
+    expect(gateway.broadcastStatus).toHaveBeenCalledTimes(2);
+  });
+
+  it('某个 workspace 停止失败不影响其它 workspace 继续处理', async () => {
+    const { service, prisma, labsClient } = await buildService();
+    const idle1 = { id: 'ws_1', enrollmentId: 'enr_1', status: WorkspaceStatus.RUNNING, labId: 'lab_1' };
+    const idle2 = { id: 'ws_2', enrollmentId: 'enr_2', status: WorkspaceStatus.RUNNING, labId: 'lab_2' };
+    prisma.workspace.findMany.mockResolvedValue([idle1, idle2]);
+    labsClient.stopVm.mockRejectedValueOnce(new Error('boom')).mockResolvedValueOnce(undefined);
+    prisma.workspace.update.mockResolvedValue({ ...idle2, status: WorkspaceStatus.STOPPED });
+
+    await expect(service.sweepIdle()).resolves.toBeUndefined();
+
+    expect(labsClient.stopVm).toHaveBeenCalledWith('lab_1');
+    expect(labsClient.stopVm).toHaveBeenCalledWith('lab_2');
   });
 });
