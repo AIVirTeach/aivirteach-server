@@ -105,6 +105,7 @@ describe('ChatService.sendMessage — 兜底路径（不调用 Agent）', () => 
 
     expect(result.tutorMessage.text).toBe('请先启动虚拟机后再提问。');
     expect(agentClient.diagnose).not.toHaveBeenCalled();
+    expect(prisma.workspace.update).not.toHaveBeenCalled();
   });
 
   it('Workspace 状态不是 RUNNING 时落兜底消息', async () => {
@@ -192,7 +193,19 @@ describe('ChatService.sendMessage — 调用 Agent', () => {
       }),
     );
 
+    const before = Date.now();
     const result = await service.sendMessage('user_1', 'enr_1', 'docker 装不上');
+    const after = Date.now();
+
+    // 聊天本身就是"学生还在用这个 workspace"的活跃信号，不能只靠客户端独立的 60 秒心跳
+    // 定时器——否则一次长对话中如果心跳意外断了，idle-sweep 可能会在对话中途把 VM 收掉。
+    expect(prisma.workspace.update).toHaveBeenCalledWith({
+      where: { enrollmentId: 'enr_1' },
+      data: { lastSeenAt: expect.any(Date) },
+    });
+    const touchedAt = prisma.workspace.update.mock.calls[0][0].data.lastSeenAt as Date;
+    expect(touchedAt.getTime()).toBeGreaterThanOrEqual(before);
+    expect(touchedAt.getTime()).toBeLessThanOrEqual(after);
 
     expect(result.tutorMessage.text).toBe('试试重启 docker 服务');
     expect(agentClient.diagnose).toHaveBeenCalledWith(

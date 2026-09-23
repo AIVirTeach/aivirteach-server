@@ -1,4 +1,5 @@
 import { UnauthorizedException, type ExecutionContext } from '@nestjs/common';
+import type { Reflector } from '@nestjs/core';
 import { JwtAuthGuard } from './jwt-auth.guard';
 import { signAccessToken } from './tokens';
 
@@ -18,12 +19,18 @@ const contextWith = (headers: Record<string, string>, query: Record<string, stri
   const request: Record<string, unknown> = { headers, query };
   return {
     switchToHttp: () => ({ getRequest: () => request }),
+    getHandler: () => contextWith,
+    getClass: () => JwtAuthGuard,
     __request: request,
   } as unknown as ExecutionContext & { __request: Record<string, unknown> };
 };
 
+function reflectorAllowing(allowed: boolean): Reflector {
+  return { getAllAndOverride: () => allowed } as unknown as Reflector;
+}
+
 describe('JwtAuthGuard', () => {
-  const guard = new JwtAuthGuard(ENV_STUB);
+  const guard = new JwtAuthGuard(ENV_STUB, reflectorAllowing(true));
 
   it('合法 token 放行并把身份挂到 request.auth', async () => {
     const token = await signAccessToken(
@@ -86,6 +93,20 @@ describe('JwtAuthGuard', () => {
     const context = contextWith({}, { token: 'not-a-real-token' });
 
     await expect(guard.canActivate(context)).rejects.toBeInstanceOf(
+      UnauthorizedException,
+    );
+  });
+
+  it('handler 没标 @AllowQueryToken() 时，即使 query token 合法也拒绝——只有明确开放的端点才回退到 query string', async () => {
+    const scopedGuard = new JwtAuthGuard(ENV_STUB, reflectorAllowing(false));
+    const token = await signAccessToken(
+      { sub: 'user_1', email: 'a@b.com' },
+      SECRET,
+      '15m',
+    );
+    const context = contextWith({}, { token });
+
+    await expect(scopedGuard.canActivate(context)).rejects.toBeInstanceOf(
       UnauthorizedException,
     );
   });
