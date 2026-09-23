@@ -9,7 +9,7 @@ function buildPrisma() {
   return {
     enrollment: { findUnique: jest.fn() },
     conversation: { create: jest.fn(), findMany: jest.fn() },
-    workspace: { findUnique: jest.fn() },
+    workspace: { findUnique: jest.fn(), update: jest.fn() },
     progress: { findUnique: jest.fn() },
     courseLesson: { findUnique: jest.fn() },
   };
@@ -370,6 +370,7 @@ describe('ChatService.streamMessage — 兜底路径（不调用 Agent）', () =
       },
     ]);
     expect(agentClient.diagnoseStream).not.toHaveBeenCalled();
+    expect(prisma.workspace.update).not.toHaveBeenCalled();
   });
 });
 
@@ -402,7 +403,19 @@ describe('ChatService.streamMessage — 调用 Agent', () => {
       }),
     );
 
+    const before = Date.now();
     const events = await collect(service.streamMessage('user_1', 'enr_1', 'docker 装不上'));
+    const after = Date.now();
+
+    // 聊天本身就是"学生还在用这个 workspace"的活跃信号，不能只靠客户端独立的 60 秒心跳
+    // 定时器——否则一次长对话中如果心跳意外断了，idle-sweep 可能会在对话中途把 VM 收掉。
+    expect(prisma.workspace.update).toHaveBeenCalledWith({
+      where: { enrollmentId: 'enr_1' },
+      data: { lastSeenAt: expect.any(Date) },
+    });
+    const touchedAt = prisma.workspace.update.mock.calls[0][0].data.lastSeenAt as Date;
+    expect(touchedAt.getTime()).toBeGreaterThanOrEqual(before);
+    expect(touchedAt.getTime()).toBeLessThanOrEqual(after);
 
     expect(events).toEqual([
       { type: 'progress', event: 'context_ready', data: { course_id: 'linux-basics' } },
