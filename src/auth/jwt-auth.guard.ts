@@ -21,15 +21,16 @@ export class JwtAuthGuard implements CanActivate {
     const request = context.switchToHttp().getRequest<AuthenticatedRequest>();
     const header = request.headers.authorization;
 
-    if (!header?.startsWith('Bearer ')) {
+    // 正常请求都走 Authorization 头；只有 header 缺失时才回退到 query string ——
+    // 给 navigator.sendBeacon() 用（浏览器关标签页时发的请求不能带自定义头），
+    // 跟 WorkspaceGateway 的 WS 鉴权是同一个理由，见那边的注释。
+    const token = header?.startsWith('Bearer ') ? header.slice(7) : (request.query?.token as string | undefined);
+    if (!token) {
       throw new UnauthorizedException('缺少 Bearer token');
     }
 
     try {
-      const claims = await verifyAccessToken(
-        header.slice(7),
-        this.env.JWT_SECRET,
-      );
+      const claims = await verifyAccessToken(token, this.env.JWT_SECRET);
       request.auth = { userId: claims.sub, email: claims.email };
       return true;
     } catch {

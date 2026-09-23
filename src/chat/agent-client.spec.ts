@@ -11,6 +11,7 @@ const BASE_ENV: Env = {
   INVITATION_TTL_DAYS: 7,
   PORT: 4000,
   CORS_ORIGINS: 'http://localhost:3001',
+  WORKSPACE_IDLE_TIMEOUT_MINUTES: 15,
 };
 
 const PAYLOAD: DiagnoseRequestBody = {
