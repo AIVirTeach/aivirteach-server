@@ -1,5 +1,7 @@
-import { Body, Controller, Get, HttpCode, Param, Post, Req, UseGuards } from '@nestjs/common';
+import { Body, Controller, Get, HttpCode, Param, Post, Req, RequestMethod, Sse, UseGuards, type MessageEvent } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
+import { from, type Observable } from 'rxjs';
+import { map } from 'rxjs/operators';
 import { JwtAuthGuard, type AuthenticatedRequest } from '../auth/jwt-auth.guard';
 import { ZodValidationPipe } from '../common/zod-validation.pipe';
 import { SendChatMessageSchema, type SendChatMessageInput } from './chat.schemas';
@@ -28,5 +30,22 @@ export class ChatController {
     @Req() request: AuthenticatedRequest,
   ): Promise<{ studentMessage: ChatMessage; tutorMessage: ChatMessage }> {
     return this.chatService.sendMessage(request.auth!.userId, enrollmentId, body.text);
+  }
+
+  // EventSource 只能发 GET，但聊天文本要放 body，所以这条走 POST + client 端手动用
+  // fetch/ReadableStream 消费，不是标准 EventSource。@Sse() 本身负责设 SSE 响应头，
+  // 跟 method 选项正交，不冲突。
+  @Sse(':enrollmentId/chat/messages/stream', { method: RequestMethod.POST })
+  streamMessage(
+    @Param('enrollmentId') enrollmentId: string,
+    @Body(new ZodValidationPipe(SendChatMessageSchema)) body: SendChatMessageInput,
+    @Req() request: AuthenticatedRequest,
+  ): Observable<MessageEvent> {
+    return from(this.chatService.streamMessage(request.auth!.userId, enrollmentId, body.text)).pipe(
+      map((event): MessageEvent => ({
+        type: event.type === 'progress' ? event.event : 'complete',
+        data: event,
+      })),
+    );
   }
 }
