@@ -39,6 +39,9 @@ export async function* parseSseStream(stream: ReadableStream<Uint8Array>): Async
       }
     }
   } finally {
+    // 正常读完（done）时这是无操作；consumer 提前 return()（比如客户端断开连接）时，
+    // 这一步会把取消信号传回底层 fetch，避免 Labs 那边的上游连接被晾在那空转。
+    await reader.cancel().catch(() => {});
     reader.releaseLock();
   }
 }

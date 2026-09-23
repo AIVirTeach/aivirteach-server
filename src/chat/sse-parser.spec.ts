@@ -57,4 +57,24 @@ describe('parseSseStream', () => {
       { event: 'b', data: '{"n":2}' },
     ]);
   });
+
+  it('消费方提前结束迭代（客户端断开）时取消底层 stream，不让上游连接空转', async () => {
+    let cancelled = false;
+    const encoder = new TextEncoder();
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(encoder.encode('event: a\ndata: {"n":1}\n\n'));
+        // 不 close：模拟上游还在推数据，consumer 却提前走人的场景。
+      },
+      cancel() {
+        cancelled = true;
+      },
+    });
+
+    const iterator = parseSseStream(stream);
+    await iterator.next();
+    await iterator.return(undefined);
+
+    expect(cancelled).toBe(true);
+  });
 });
