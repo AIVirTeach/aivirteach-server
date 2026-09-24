@@ -154,12 +154,12 @@ describe('WorkspaceService.provisionInBackground', () => {
 
   it('Labs 失败：落库 ERROR、写失败审计、广播', async () => {
     const { service, prisma, labsClient, gateway, audit } = await buildService();
-    labsClient.createVm.mockRejectedValue(new Error('Labs 创建 VM 失败（504）：Command timed out after 180 seconds.'));
+    labsClient.createVm.mockRejectedValue(new Error('学习环境暂时连接不上，请稍后重试。'));
     const updated = {
       id: 'ws_1',
       enrollmentId: 'enr_1',
       status: WorkspaceStatus.ERROR,
-      errorMessage: 'Labs 创建 VM 失败（504）：Command timed out after 180 seconds.',
+      errorMessage: '学习环境暂时连接不上，请稍后重试。',
     };
     prisma.workspace.update.mockResolvedValue(updated);
 
@@ -169,7 +169,7 @@ describe('WorkspaceService.provisionInBackground', () => {
       where: { id: 'ws_1' },
       data: {
         status: WorkspaceStatus.ERROR,
-        errorMessage: 'Labs 创建 VM 失败（504）：Command timed out after 180 seconds.',
+        errorMessage: '学习环境暂时连接不上，请稍后重试。',
       },
     });
     expect(audit.record).toHaveBeenCalledWith(

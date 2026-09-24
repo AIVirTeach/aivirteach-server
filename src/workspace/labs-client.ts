@@ -1,5 +1,6 @@
-import { Inject, Injectable, ServiceUnavailableException } from '@nestjs/common';
+import { Inject, Injectable, Logger, ServiceUnavailableException } from '@nestjs/common';
 import { ENV, type Env } from '../config/env';
+import { classifyUpstreamStatus, type UpstreamErrorMessages } from '../common/upstream-error';
 
 export type CreateVmResult = {
   labId: string;
@@ -40,9 +41,38 @@ type GuacamoleTokenResponseBody = {
 // Labs 的 POST /v1/vms 最长阻塞 180 秒（CREATE_TIMEOUT_SECONDS），留够余量。
 const CREATE_VM_TIMEOUT_MS = 200_000;
 
+// 面向学生的文案，按"重试是否有用"分两档，不透出任何上游响应内容或内部服务名——
+// 具体原因只进服务端日志，见 LabsClient.assertOk() / LabsClient.logNetworkFailure()。
+const VM_MESSAGES: UpstreamErrorMessages = {
+  retryable: '学习环境暂时连接不上，请稍后重试。',
+  unavailable: '学习环境暂时无法使用，请稍后再试或联系客服。',
+};
+const REMOTE_DESKTOP_MESSAGES: UpstreamErrorMessages = {
+  retryable: '远程桌面连接失败，请稍后重试。',
+  unavailable: '远程桌面暂时无法使用，请联系客服。',
+};
+
 @Injectable()
 export class LabsClient {
+  private readonly logger = new Logger(LabsClient.name);
+
   constructor(@Inject(ENV) private readonly env: Env) {}
+
+  // response.ok 为 false 时：原始响应体只记日志（可能是 Cloudflare tunnel 挂了之类的
+  // 整页 HTML，见 2026-09-23 的 VM Manager 403 事故），抛给调用方的 Error 只带分档后的安全文案。
+  private async assertOk(response: Response, context: string, messages: UpstreamErrorMessages): Promise<void> {
+    if (response.ok) return;
+    const detail = await response.text().catch(() => '');
+    this.logger.error(`${context} 失败（${response.status}）：${(detail || response.statusText).slice(0, 2000)}`);
+    throw new Error(messages[classifyUpstreamStatus(response.status)]);
+  }
+
+  // fetch() 本身 reject（DNS 失败、超时、连接被拒……）拿不到 response，本质都是瞬时性问题，
+  // 直接用 messages.retryable，不需要走 classifyUpstreamStatus。
+  private logNetworkFailure(context: string, error: unknown, messages: UpstreamErrorMessages): never {
+    this.logger.error(`${context} 网络请求失败`, error instanceof Error ? error.stack : String(error));
+    throw new Error(messages.retryable);
+  }
 
   async createVm(labId: string): Promise<CreateVmResult> {
     const { LABS_VM_BASE_URL, AIVIRTEACH_API_TOKEN, CF_ACCESS_CLIENT_ID, CF_ACCESS_CLIENT_SECRET } = this.env;
@@ -59,17 +89,18 @@ export class LabsClient {
       headers['CF-Access-Client-Secret'] = CF_ACCESS_CLIENT_SECRET;
     }
 
-    const response = await fetch(`${LABS_VM_BASE_URL}/v1/vms`, {
-      method: 'POST',
-      headers,
-      body: JSON.stringify({ lab_id: labId }),
-      signal: AbortSignal.timeout(CREATE_VM_TIMEOUT_MS),
-    });
-
-    if (!response.ok) {
-      const detail = await response.text().catch(() => '');
-      throw new Error(`Labs 创建 VM 失败（${response.status}）：${detail || response.statusText}`);
+    let response: Response;
+    try {
+      response = await fetch(`${LABS_VM_BASE_URL}/v1/vms`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({ lab_id: labId }),
+        signal: AbortSignal.timeout(CREATE_VM_TIMEOUT_MS),
+      });
+    } catch (error) {
+      this.logNetworkFailure('createVm', error, VM_MESSAGES);
     }
+    await this.assertOk(response, 'createVm', VM_MESSAGES);
 
     // rdp_password 故意不读取、不透出——这次不需要连接 VM，没必要提前经手一个不用的明文密钥，
     // 见本文档 Global Constraints。
@@ -96,16 +127,17 @@ export class LabsClient {
       headers['CF-Access-Client-Secret'] = CF_ACCESS_CLIENT_SECRET;
     }
 
-    const response = await fetch(`${LABS_VM_BASE_URL}/v1/vms/${labId}/browser-sessions`, {
-      method: 'POST',
-      headers,
-      body: JSON.stringify({ subject }),
-    });
-
-    if (!response.ok) {
-      const detail = await response.text().catch(() => '');
-      throw new Error(`Labs 创建浏览器会话失败（${response.status}）：${detail || response.statusText}`);
+    let response: Response;
+    try {
+      response = await fetch(`${LABS_VM_BASE_URL}/v1/vms/${labId}/browser-sessions`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({ subject }),
+      });
+    } catch (error) {
+      this.logNetworkFailure('createBrowserSession', error, REMOTE_DESKTOP_MESSAGES);
     }
+    await this.assertOk(response, 'createBrowserSession', REMOTE_DESKTOP_MESSAGES);
 
     const body = (await response.json()) as BrowserSessionResponseBody;
     return {
@@ -117,14 +149,14 @@ export class LabsClient {
   }
 
   async stopVm(labId: string): Promise<void> {
-    await this.runVmAction(labId, 'stop', 'Labs 停止 VM 失败');
+    await this.runVmAction(labId, 'stop');
   }
 
   async startVm(labId: string): Promise<void> {
-    await this.runVmAction(labId, 'start', 'Labs 启动 VM 失败');
+    await this.runVmAction(labId, 'start');
   }
 
-  private async runVmAction(labId: string, action: 'stop' | 'start', errorPrefix: string): Promise<void> {
+  private async runVmAction(labId: string, action: 'stop' | 'start'): Promise<void> {
     const { LABS_VM_BASE_URL, AIVIRTEACH_API_TOKEN, CF_ACCESS_CLIENT_ID, CF_ACCESS_CLIENT_SECRET } = this.env;
     if (!LABS_VM_BASE_URL || !AIVIRTEACH_API_TOKEN) {
       throw new ServiceUnavailableException('Labs 集成未配置：缺少 LABS_VM_BASE_URL 或 AIVIRTEACH_API_TOKEN');
@@ -139,15 +171,16 @@ export class LabsClient {
       headers['CF-Access-Client-Secret'] = CF_ACCESS_CLIENT_SECRET;
     }
 
-    const response = await fetch(`${LABS_VM_BASE_URL}/v1/vms/${labId}/actions/${action}`, {
-      method: 'POST',
-      headers,
-    });
-
-    if (!response.ok) {
-      const detail = await response.text().catch(() => '');
-      throw new Error(`${errorPrefix}（${response.status}）：${detail || response.statusText}`);
+    let response: Response;
+    try {
+      response = await fetch(`${LABS_VM_BASE_URL}/v1/vms/${labId}/actions/${action}`, {
+        method: 'POST',
+        headers,
+      });
+    } catch (error) {
+      this.logNetworkFailure(`runVmAction(${action})`, error, VM_MESSAGES);
     }
+    await this.assertOk(response, `runVmAction(${action})`, VM_MESSAGES);
   }
 
   // 浏览器直接 fetch Guacamole 的 /api/tokens 会被 CORS 挡住（Guacamole 默认不带
@@ -161,16 +194,17 @@ export class LabsClient {
     }
     const base = LABS_GUACAMOLE_BASE_URL.endsWith('/') ? LABS_GUACAMOLE_BASE_URL : `${LABS_GUACAMOLE_BASE_URL}/`;
 
-    const response = await fetch(new URL('api/tokens', base).toString(), {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-      body: new URLSearchParams({ data }),
-    });
-
-    if (!response.ok) {
-      const detail = await response.text().catch(() => '');
-      throw new Error(`Guacamole 换取 authToken 失败（${response.status}）：${detail || response.statusText}`);
+    let response: Response;
+    try {
+      response = await fetch(new URL('api/tokens', base).toString(), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: new URLSearchParams({ data }),
+      });
+    } catch (error) {
+      this.logNetworkFailure('exchangeGuacamoleToken', error, REMOTE_DESKTOP_MESSAGES);
     }
+    await this.assertOk(response, 'exchangeGuacamoleToken', REMOTE_DESKTOP_MESSAGES);
 
     const body = (await response.json()) as GuacamoleTokenResponseBody;
     const websocketUrl = new URL('websocket-tunnel', base);
