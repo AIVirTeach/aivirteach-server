@@ -1,0 +1,126 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="UTF-8" />
+<title>Thinking indicator mock</title>
+<style>
+  body {
+    margin: 0;
+    min-height: 100vh;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: #0b0d12;
+    font-family: -apple-system, "PingFang SC", "Helvetica Neue", sans-serif;
+  }
+
+  .panel {
+    width: 380px;
+    background: #111318;
+    border: 1px solid #23262f;
+    border-radius: 12px;
+    padding: 20px;
+  }
+
+  .header {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-bottom: 18px;
+  }
+
+  .avatar {
+    width: 32px;
+    height: 32px;
+    border-radius: 8px;
+    background: #2563eb;
+    color: #fff;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 13px;
+    font-weight: 600;
+  }
+
+  .name {
+    color: #e6e8ee;
+    font-size: 14px;
+    font-weight: 600;
+  }
+
+  .status {
+    color: #6ee7a0;
+    font-size: 12px;
+  }
+
+  .bubble {
+    background: #1a1d24;
+    border-radius: 10px;
+    padding: 12px 14px;
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+  }
+
+  .dot {
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: #7c828f;
+    animation: bounce 1.2s infinite ease-in-out;
+  }
+
+  .dot:nth-child(2) { animation-delay: 0.15s; }
+  .dot:nth-child(3) { animation-delay: 0.3s; }
+
+  @keyframes bounce {
+    0%, 60%, 100% { transform: translateY(0); opacity: 0.4; }
+    30% { transform: translateY(-4px); opacity: 1; }
+  }
+
+  .caption {
+    margin-top: 10px;
+    color: #7c828f;
+    font-size: 12px;
+  }
+
+  .divider {
+    height: 1px;
+    background: #23262f;
+    margin: 20px 0;
+  }
+
+  .bubble-old {
+    background: #1a1d24;
+    border-radius: 10px;
+    padding: 10px 14px;
+    color: #9ca3af;
+    font-size: 13px;
+    display: inline-block;
+  }
+</style>
+</head>
+<body>
+  <div class="panel">
+    <div class="header">
+      <div class="avatar">AI</div>
+      <div>
+        <div class="name">AIVir Teacher</div>
+        <div class="status">● Online</div>
+      </div>
+    </div>
+
+    <div class="bubble">
+      <span class="dot"></span>
+      <span class="dot"></span>
+      <span class="dot"></span>
+    </div>
+    <div class="caption">替换方案：纯动画气泡，不展示任何文字状态</div>
+
+    <div class="divider"></div>
+
+    <div class="bubble-old">AI 正在思考…</div>
+    <div class="caption">替换方案：一句平实文案（可选，不叠加动画）</div>
+  </div>
+</body>
+</html>
