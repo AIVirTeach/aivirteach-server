@@ -381,6 +381,40 @@ describe('LabsClient.getVmState', () => {
     await expect(client.getVmState('lab_1')).resolves.toEqual({ kind: 'missing' });
   });
 
+  it('libvirt 的 "Domain not found" 措辞同样视为 missing', async () => {
+    global.fetch = jest.fn().mockResolvedValue({
+      ok: false,
+      status: 404,
+      statusText: 'Not Found',
+      text: async () => JSON.stringify({ detail: "error: Domain not found: no domain with matching name 'lab_1'" }),
+    }) as unknown as typeof fetch;
+
+    const client = await buildConfigured();
+
+    await expect(client.getVmState('lab_1')).resolves.toEqual({ kind: 'missing' });
+  });
+
+  it('200 但响应里没有 State 时返回 unknown，不当成已关机', async () => {
+    global.fetch = jest.fn().mockResolvedValue({ ok: true, json: async () => ({ Name: 'lab_1' }) }) as unknown as typeof fetch;
+
+    const client = await buildConfigured();
+
+    await expect(client.getVmState('lab_1')).resolves.toEqual({ kind: 'present', state: 'unknown' });
+  });
+
+  it('Labs 返回 503（libvirt 不可用）时抛错，不能当成 VM 不存在', async () => {
+    global.fetch = jest.fn().mockResolvedValue({
+      ok: false,
+      status: 503,
+      statusText: 'Service Unavailable',
+      text: async () => JSON.stringify({ detail: "ERROR: libvirt unavailable while checking 'lab_1'" }),
+    }) as unknown as typeof fetch;
+
+    const client = await buildConfigured();
+
+    await expect(client.getVmState('lab_1')).rejects.toThrow('学习环境暂时连接不上，请稍后重试。');
+  });
+
   it('404 但不是 Labs 的 "VM not found"（例如路由/网关配错）时抛错，不能当成 VM 不存在', async () => {
     global.fetch = jest.fn().mockResolvedValue({
       ok: false,

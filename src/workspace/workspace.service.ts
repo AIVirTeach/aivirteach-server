@@ -241,6 +241,9 @@ export class WorkspaceService {
       if (observed?.kind === 'missing') return this.markVmMissing(workspace, actor, reason);
       if (observed?.state !== 'shut off') {
         const message = error instanceof Error ? error.message : '未知错误';
+        const observedState = observed?.state ?? 'unknown';
+        // crashed/paused 这类状态下 shutdown 会一直失败，记下观察到的状态，排查时才看得出为什么反复重试。
+        this.logger.warn(`workspace ${workspace.id} 停止失败，VM ${workspace.labId} 当前状态：${observedState}`);
         await this.audit.record({
           actor,
           action: 'workspace.stop',
@@ -248,6 +251,7 @@ export class WorkspaceService {
           targetType: 'Workspace',
           targetId: workspace.id,
           reason,
+          metadata: { vmState: observedState },
         });
         throw new BadGatewayException(message);
       }

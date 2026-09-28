@@ -442,20 +442,29 @@ describe('WorkspaceService.stop', () => {
       expect(gateway.broadcastStatus).toHaveBeenCalledWith(updated);
     });
 
-    it('VM 仍在运行：保持 RUNNING，抛 BadGatewayException', async () => {
-      const { service, prisma, labsClient } = await setup();
-      labsClient.getVmState.mockResolvedValue({ kind: 'present', state: 'running' });
+    it.each(['running', 'in shutdown', 'paused', 'crashed'])(
+      'VM 状态为 %s：保持 RUNNING，抛 BadGatewayException，失败审计里带上观察到的状态',
+      async (state) => {
+        const { service, prisma, labsClient, audit } = await setup();
+        labsClient.getVmState.mockResolvedValue({ kind: 'present', state });
 
-      await expect(service.stop('user_1', 'enr_1', 'manual')).rejects.toBeInstanceOf(BadGatewayException);
-      expect(prisma.workspace.update).not.toHaveBeenCalled();
-    });
+        await expect(service.stop('user_1', 'enr_1', 'manual')).rejects.toBeInstanceOf(BadGatewayException);
+        expect(prisma.workspace.update).not.toHaveBeenCalled();
+        expect(audit.record).toHaveBeenCalledWith(
+          expect.objectContaining({ action: 'workspace.stop', success: false, metadata: { vmState: state } }),
+        );
+      },
+    );
 
     it('状态也查不到（如 403 鉴权故障）：保持 RUNNING，抛 BadGatewayException，留给下一轮 sweep 重试', async () => {
-      const { service, prisma, labsClient } = await setup();
+      const { service, prisma, labsClient, audit } = await setup();
       labsClient.getVmState.mockRejectedValue(new Error('学习环境暂时无法使用，请稍后再试或联系客服。'));
 
       await expect(service.stop('user_1', 'enr_1', 'manual')).rejects.toBeInstanceOf(BadGatewayException);
       expect(prisma.workspace.update).not.toHaveBeenCalled();
+      expect(audit.record).toHaveBeenCalledWith(
+        expect.objectContaining({ action: 'workspace.stop', success: false, metadata: { vmState: 'unknown' } }),
+      );
     });
   });
 });
