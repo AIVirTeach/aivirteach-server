@@ -1,10 +1,10 @@
-import { BadGatewayException, ConflictException, ForbiddenException, Inject, Injectable, NotFoundException } from '@nestjs/common';
+import { BadGatewayException, ConflictException, ForbiddenException, Inject, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { AuditActorType, WorkspaceStatus, type Workspace } from '@prisma/client';
 import { waitUntil } from '@vercel/functions';
 import { ENV, type Env } from '../config/env';
 import { PrismaService } from '../prisma/prisma.service';
 import { AuditService, type AuditActor } from '../audit/audit.service';
-import { LabsClient, type BrowserSession, type GuacamoleToken } from './labs-client';
+import { LabsClient, type BrowserSession, type GuacamoleToken, type VmState } from './labs-client';
 import { WorkspaceGateway } from './workspace.gateway';
 
 const STALE_CREATING_MS = 5 * 60 * 1000;
@@ -15,6 +15,8 @@ type InternalStopReason = StopReason | 'idle';
 
 @Injectable()
 export class WorkspaceService {
+  private readonly logger = new Logger(WorkspaceService.name);
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly audit: AuditService,
@@ -228,19 +230,32 @@ export class WorkspaceService {
   }
 
   private async stopWorkspace(workspace: Workspace, actor: AuditActor, reason: InternalStopReason): Promise<Workspace> {
+    let vmState: string | undefined;
     try {
       await this.labsClient.stopVm(workspace.labId!);
     } catch (error) {
-      const message = error instanceof Error ? error.message : '未知错误';
-      await this.audit.record({
-        actor,
-        action: 'workspace.stop',
-        success: false,
-        targetType: 'Workspace',
-        targetId: workspace.id,
-        reason,
-      });
-      throw new BadGatewayException(message);
+      // stop 失败不代表 VM 还在跑（可能早已关机或被删），也不代表它已经停了（可能是鉴权/网络故障）。
+      // 不从错误码猜，而是再问一次 Labs 的真实状态：只有观察到"已关机"或"确实不存在"才改库，
+      // 其余情况保持 RUNNING 并抛错，交给下一轮 sweep 重试——宁可多重试，也不能把还在计费的 VM 标成已停止。
+      const observed = await this.observeVmState(workspace.labId!);
+      if (observed?.kind === 'missing') return this.markVmMissing(workspace, actor, reason);
+      if (observed?.state !== 'shut off') {
+        const message = error instanceof Error ? error.message : '未知错误';
+        const observedState = observed?.state ?? 'unknown';
+        // crashed/paused 这类状态下 shutdown 会一直失败，记下观察到的状态，排查时才看得出为什么反复重试。
+        this.logger.warn(`workspace ${workspace.id} 停止失败，VM ${workspace.labId} 当前状态：${observedState}`);
+        await this.audit.record({
+          actor,
+          action: 'workspace.stop',
+          success: false,
+          targetType: 'Workspace',
+          targetId: workspace.id,
+          reason,
+          metadata: { vmState: observedState },
+        });
+        throw new BadGatewayException(message);
+      }
+      vmState = observed.state;
     }
 
     const updated = await this.prisma.workspace.update({
@@ -254,6 +269,37 @@ export class WorkspaceService {
       targetType: 'Workspace',
       targetId: workspace.id,
       reason,
+      ...(vmState ? { metadata: { vmState } } : {}),
+    });
+    this.gateway.broadcastStatus(updated);
+    return updated;
+  }
+
+  // 查询本身失败（鉴权、网络……）时返回 undefined，调用方按"状态未知"处理。
+  private async observeVmState(labId: string): Promise<VmState | undefined> {
+    try {
+      return await this.labsClient.getVmState(labId);
+    } catch {
+      return undefined;
+    }
+  }
+
+  // Labs 确认 VM 已不存在：落库 ERROR 而不是 STOPPED——STOPPED 会让用户点 start 继续 404，
+  // ERROR 则走 create() 的重建分支。sweep 只查 RUNNING，所以也不会再重试。
+  private async markVmMissing(workspace: Workspace, actor: AuditActor, reason: InternalStopReason): Promise<Workspace> {
+    this.logger.warn(`workspace ${workspace.id} 的 VM ${workspace.labId} 在 Labs 上已不存在，标记为 ERROR`);
+    const updated = await this.prisma.workspace.update({
+      where: { id: workspace.id },
+      data: { status: WorkspaceStatus.ERROR, errorMessage: '学习环境已失效，请重新创建。' },
+    });
+    await this.audit.record({
+      actor,
+      action: 'workspace.stop',
+      success: false,
+      targetType: 'Workspace',
+      targetId: workspace.id,
+      reason,
+      metadata: { vmMissing: true },
     });
     this.gateway.broadcastStatus(updated);
     return updated;
