@@ -4,6 +4,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { AuditService } from '../audit/audit.service';
 import { CoursesService } from '../courses/courses.service';
 import { computeProgressPercent } from '../dashboard/dashboard.service';
+import { deriveEnrollmentStatus, type EnrollmentStatus } from './enrollment-status';
 
 export type EnrollmentResponse = {
   id: string;
@@ -11,6 +12,7 @@ export type EnrollmentResponse = {
   courseId: string;
   active: boolean;
   progressPercent: number;
+  status: EnrollmentStatus;
   currentModule: string;
   enrolledAt: string;
 };
@@ -37,7 +39,7 @@ export class EnrollmentsService {
         where: { userId_courseId: { userId, courseId: course.id } },
         update: { active: true, courseVersionId: latestVersionId },
         create: { userId, courseId: course.id, courseVersionId: latestVersionId, active: true },
-        include: { currentModule: true },
+        include: { currentModule: true, progress: true },
       });
     });
 
@@ -49,7 +51,15 @@ export class EnrollmentsService {
       targetId: enrollment.id,
     });
 
-    return this.toResponse(enrollment, course.slug, 0);
+    return this.toResponse(
+      enrollment,
+      course.slug,
+      0,
+      deriveEnrollmentStatus({
+        completedAt: enrollment.completedAt,
+        currentLessonId: enrollment.progress?.currentLessonId ?? null,
+      }),
+    );
   }
 
   async restart(userId: string, slug: string): Promise<EnrollmentResponse> {
@@ -64,7 +74,7 @@ export class EnrollmentsService {
 
       const upserted = await tx.enrollment.upsert({
         where: { userId_courseId: { userId, courseId: course.id } },
-        update: { active: true, currentModuleId: null, courseVersionId: latestVersionId },
+        update: { active: true, currentModuleId: null, courseVersionId: latestVersionId, completedAt: null },
         create: { userId, courseId: course.id, courseVersionId: latestVersionId, active: true },
         include: { currentModule: true },
       });
@@ -91,7 +101,7 @@ export class EnrollmentsService {
       targetId: enrollment.id,
     });
 
-    return this.toResponse(enrollment, course.slug, 0);
+    return this.toResponse(enrollment, course.slug, 0, 'not_started');
   }
 
   async listForUser(userId: string): Promise<EnrollmentResponse[]> {
@@ -112,6 +122,10 @@ export class EnrollmentsService {
         enrollment.courseVersion
           ? computeProgressPercent({ progress: enrollment.progress, modules: enrollment.courseVersion.modules })
           : 0,
+        deriveEnrollmentStatus({
+          completedAt: enrollment.completedAt,
+          currentLessonId: enrollment.progress?.currentLessonId ?? null,
+        }),
       ),
     );
   }
@@ -184,12 +198,22 @@ export class EnrollmentsService {
       create: { enrollmentId: enrollment.id, currentLessonId: nextLessonId },
     });
 
+    const completedAt = nextLessonId === null ? new Date() : enrollment.completedAt;
+    if (nextLessonId === null) {
+      await this.prisma.enrollment.update({ where: { id: enrollment.id }, data: { completedAt } });
+    }
+
     const progressPercent = computeProgressPercent({
       progress: { currentLessonId: nextLessonId },
       modules,
     });
 
-    return this.toResponse(enrollment, enrollment.course.slug, progressPercent);
+    return this.toResponse(
+      enrollment,
+      enrollment.course.slug,
+      progressPercent,
+      deriveEnrollmentStatus({ completedAt, currentLessonId: nextLessonId }),
+    );
   }
 
   private toResponse(
@@ -203,6 +227,7 @@ export class EnrollmentsService {
     },
     courseSlug: string,
     progressPercent: number,
+    status: EnrollmentStatus,
   ): EnrollmentResponse {
     return {
       id: enrollment.id,
@@ -210,6 +235,7 @@ export class EnrollmentsService {
       courseId: courseSlug,
       active: enrollment.active,
       progressPercent,
+      status,
       currentModule: enrollment.currentModule?.title ?? '',
       enrolledAt: enrollment.createdAt.toISOString(),
     };
