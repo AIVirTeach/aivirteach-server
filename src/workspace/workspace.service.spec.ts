@@ -2,7 +2,6 @@ import { BadGatewayException, ConflictException, ForbiddenException, NotFoundExc
 import { Test } from '@nestjs/testing';
 import { WorkspaceStatus } from '@prisma/client';
 import { ENV, type Env } from '../config/env';
-import { UpstreamError } from '../common/upstream-error';
 import { PrismaService } from '../prisma/prisma.service';
 import { AuditService } from '../audit/audit.service';
 import { LabsClient } from './labs-client';
@@ -26,7 +25,7 @@ async function buildService(
   } = {},
 ) {
   const prisma = overrides.prisma ?? buildPrisma();
-  const labsClient = overrides.labsClient ?? { createVm: jest.fn(), stopVm: jest.fn(), startVm: jest.fn() };
+  const labsClient = overrides.labsClient ?? { createVm: jest.fn(), stopVm: jest.fn(), startVm: jest.fn(), getVmState: jest.fn() };
   const gateway = overrides.gateway ?? { broadcastStatus: jest.fn() };
   const audit = overrides.audit ?? { record: jest.fn() };
   const env = { WORKSPACE_IDLE_TIMEOUT_MINUTES: 15, ...overrides.env };
@@ -395,26 +394,78 @@ describe('WorkspaceService.stop', () => {
     );
   });
 
-  it('Labs 报告 VM 已不存在（tier=unavailable，不可重试）时视为目标已达成，落库 STOPPED 而不是抛错', async () => {
-    const { service, prisma, labsClient, gateway, audit } = await buildService();
-    prisma.enrollment.findUnique.mockResolvedValue(ENROLLMENT);
+  // stop 失败时不从错误码猜 VM 状态，而是再问一次 Labs 真实状态，按观察结果决定。
+  describe('stop 失败后按 Labs 的真实状态对账', () => {
     const running = { id: 'ws_1', enrollmentId: 'enr_1', status: WorkspaceStatus.RUNNING, labId: 'lab_1' };
-    prisma.workspace.findUnique.mockResolvedValue(running);
-    labsClient.stopVm.mockRejectedValue(new UpstreamError('学习环境暂时无法使用，请稍后再试或联系客服。', 'unavailable'));
-    const updated = { ...running, status: WorkspaceStatus.STOPPED };
-    prisma.workspace.update.mockResolvedValue(updated);
 
-    const result = await service.stop('user_1', 'enr_1', 'manual');
+    async function setup() {
+      const ctx = await buildService();
+      ctx.prisma.enrollment.findUnique.mockResolvedValue(ENROLLMENT);
+      ctx.prisma.workspace.findUnique.mockResolvedValue(running);
+      ctx.labsClient.stopVm.mockRejectedValue(new Error('学习环境暂时无法使用，请稍后再试或联系客服。'));
+      return ctx;
+    }
 
-    expect(result).toBe(updated);
-    expect(prisma.workspace.update).toHaveBeenCalledWith({
-      where: { id: 'ws_1' },
-      data: { status: WorkspaceStatus.STOPPED },
+    it('VM 其实已经关机：落库 STOPPED，按成功处理', async () => {
+      const { service, prisma, labsClient, audit, gateway } = await setup();
+      labsClient.getVmState.mockResolvedValue({ kind: 'present', state: 'shut off' });
+      const updated = { ...running, status: WorkspaceStatus.STOPPED };
+      prisma.workspace.update.mockResolvedValue(updated);
+
+      await expect(service.stop('user_1', 'enr_1', 'manual')).resolves.toBe(updated);
+
+      expect(prisma.workspace.update).toHaveBeenCalledWith({
+        where: { id: 'ws_1' },
+        data: { status: WorkspaceStatus.STOPPED },
+      });
+      expect(audit.record).toHaveBeenCalledWith(
+        expect.objectContaining({ action: 'workspace.stop', success: true, metadata: { vmState: 'shut off' } }),
+      );
+      expect(gateway.broadcastStatus).toHaveBeenCalledWith(updated);
     });
-    expect(audit.record).toHaveBeenCalledWith(
-      expect.objectContaining({ action: 'workspace.stop', success: true, targetId: 'ws_1', reason: 'manual' }),
+
+    it('Labs 确认 VM 不存在：落库 ERROR（用户可重新创建），审计标记 vmMissing，不抛错', async () => {
+      const { service, prisma, labsClient, audit, gateway } = await setup();
+      labsClient.getVmState.mockResolvedValue({ kind: 'missing' });
+      const updated = { ...running, status: WorkspaceStatus.ERROR };
+      prisma.workspace.update.mockResolvedValue(updated);
+
+      await expect(service.stop('user_1', 'enr_1', 'manual')).resolves.toBe(updated);
+
+      expect(prisma.workspace.update).toHaveBeenCalledWith({
+        where: { id: 'ws_1' },
+        data: { status: WorkspaceStatus.ERROR, errorMessage: '学习环境已失效，请重新创建。' },
+      });
+      expect(audit.record).toHaveBeenCalledWith(
+        expect.objectContaining({ action: 'workspace.stop', success: false, metadata: { vmMissing: true } }),
+      );
+      expect(gateway.broadcastStatus).toHaveBeenCalledWith(updated);
+    });
+
+    it.each(['running', 'in shutdown', 'paused', 'crashed'])(
+      'VM 状态为 %s：保持 RUNNING，抛 BadGatewayException，失败审计里带上观察到的状态',
+      async (state) => {
+        const { service, prisma, labsClient, audit } = await setup();
+        labsClient.getVmState.mockResolvedValue({ kind: 'present', state });
+
+        await expect(service.stop('user_1', 'enr_1', 'manual')).rejects.toBeInstanceOf(BadGatewayException);
+        expect(prisma.workspace.update).not.toHaveBeenCalled();
+        expect(audit.record).toHaveBeenCalledWith(
+          expect.objectContaining({ action: 'workspace.stop', success: false, metadata: { vmState: state } }),
+        );
+      },
     );
-    expect(gateway.broadcastStatus).toHaveBeenCalledWith(updated);
+
+    it('状态也查不到（如 403 鉴权故障）：保持 RUNNING，抛 BadGatewayException，留给下一轮 sweep 重试', async () => {
+      const { service, prisma, labsClient, audit } = await setup();
+      labsClient.getVmState.mockRejectedValue(new Error('学习环境暂时无法使用，请稍后再试或联系客服。'));
+
+      await expect(service.stop('user_1', 'enr_1', 'manual')).rejects.toBeInstanceOf(BadGatewayException);
+      expect(prisma.workspace.update).not.toHaveBeenCalled();
+      expect(audit.record).toHaveBeenCalledWith(
+        expect.objectContaining({ action: 'workspace.stop', success: false, metadata: { vmState: 'unknown' } }),
+      );
+    });
   });
 });
 
@@ -589,18 +640,19 @@ describe('WorkspaceService.sweepIdle', () => {
     expect(gateway.broadcastStatus).toHaveBeenCalledTimes(2);
   });
 
-  it('VM 已不存在（tier=unavailable）的 workspace 落库 STOPPED，不再被下一轮 sweep 命中（对应 sweepIdle 无限重试的根因修复）', async () => {
+  it('VM 已不存在的 workspace 落库 ERROR，不再被下一轮 sweep 命中（sweepIdle 每分钟重试的根因修复）', async () => {
     const { service, prisma, labsClient } = await buildService();
     const orphaned = { id: 'ws_1', enrollmentId: 'enr_1', status: WorkspaceStatus.RUNNING, labId: 'lab_gone' };
     prisma.workspace.findMany.mockResolvedValue([orphaned]);
-    labsClient.stopVm.mockRejectedValue(new UpstreamError('学习环境暂时无法使用，请稍后再试或联系客服。', 'unavailable'));
-    prisma.workspace.update.mockResolvedValue({ ...orphaned, status: WorkspaceStatus.STOPPED });
+    labsClient.stopVm.mockRejectedValue(new Error('学习环境暂时无法使用，请稍后再试或联系客服。'));
+    labsClient.getVmState.mockResolvedValue({ kind: 'missing' });
+    prisma.workspace.update.mockResolvedValue({ ...orphaned, status: WorkspaceStatus.ERROR });
 
     await expect(service.sweepIdle()).resolves.toBeUndefined();
 
     expect(prisma.workspace.update).toHaveBeenCalledWith({
       where: { id: 'ws_1' },
-      data: { status: WorkspaceStatus.STOPPED },
+      data: { status: WorkspaceStatus.ERROR, errorMessage: '学习环境已失效，请重新创建。' },
     });
   });
 

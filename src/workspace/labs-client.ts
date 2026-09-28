@@ -1,6 +1,6 @@
 import { Inject, Injectable, Logger, ServiceUnavailableException } from '@nestjs/common';
 import { ENV, type Env } from '../config/env';
-import { classifyUpstreamStatus, UpstreamError, type UpstreamErrorMessages } from '../common/upstream-error';
+import { classifyUpstreamStatus, type UpstreamErrorMessages } from '../common/upstream-error';
 
 export type CreateVmResult = {
   labId: string;
@@ -14,6 +14,13 @@ type CreateVmResponseBody = {
   rdp_password: string;
   rdp_port: number;
 };
+
+// VM 的真实状态。missing 只在 Labs 明确回答 "VM not found" 时返回——404 本身不够，
+// 网关/路由配错也会回 404，见 LabsClient.getVmState()。
+export type VmState = { kind: 'present'; state: string } | { kind: 'missing' };
+
+// vm-manager 的 vm-control.sh 在 domain 不存在时输出 "VM not found"，_error_status() 映射成 404。
+const VM_MISSING_PATTERN = /vm not found|domain not found/i;
 
 export type BrowserSession = {
   labId: string;
@@ -64,8 +71,7 @@ export class LabsClient {
     if (response.ok) return;
     const detail = await response.text().catch(() => '');
     this.logger.error(`${context} 失败（${response.status}）：${(detail || response.statusText).slice(0, 2000)}`);
-    const tier = classifyUpstreamStatus(response.status);
-    throw new UpstreamError(messages[tier], tier);
+    throw new Error(messages[classifyUpstreamStatus(response.status)]);
   }
 
   // fetch() 本身 reject（DNS 失败、超时、连接被拒……）拿不到 response，本质都是瞬时性问题，
@@ -157,7 +163,45 @@ export class LabsClient {
     await this.runVmAction(labId, 'start');
   }
 
+  // 只读地问 Labs 这台 VM 现在是什么状态，供 stop 失败后对账用。
+  async getVmState(labId: string): Promise<VmState> {
+    const { baseUrl, headers } = this.vmApiRequest();
+
+    let response: Response;
+    try {
+      response = await fetch(`${baseUrl}/v1/vms/${labId}/status`, { method: 'GET', headers });
+    } catch (error) {
+      this.logNetworkFailure('getVmState', error, VM_MESSAGES);
+    }
+
+    if (response.status === 404) {
+      const detail = await response.text().catch(() => '');
+      if (VM_MISSING_PATTERN.test(detail)) return { kind: 'missing' };
+      this.logger.error(`getVmState 失败（404，不是 VM not found）：${detail.slice(0, 2000)}`);
+      throw new Error(VM_MESSAGES[classifyUpstreamStatus(404)]);
+    }
+    await this.assertOk(response, 'getVmState', VM_MESSAGES);
+
+    const body = (await response.json()) as { State?: string };
+    return { kind: 'present', state: body.State ?? 'unknown' };
+  }
+
   private async runVmAction(labId: string, action: 'stop' | 'start'): Promise<void> {
+    const { baseUrl, headers } = this.vmApiRequest();
+
+    let response: Response;
+    try {
+      response = await fetch(`${baseUrl}/v1/vms/${labId}/actions/${action}`, {
+        method: 'POST',
+        headers,
+      });
+    } catch (error) {
+      this.logNetworkFailure(`runVmAction(${action})`, error, VM_MESSAGES);
+    }
+    await this.assertOk(response, `runVmAction(${action})`, VM_MESSAGES);
+  }
+
+  private vmApiRequest(): { baseUrl: string; headers: Record<string, string> } {
     const { LABS_VM_BASE_URL, AIVIRTEACH_API_TOKEN, CF_ACCESS_CLIENT_ID, CF_ACCESS_CLIENT_SECRET } = this.env;
     if (!LABS_VM_BASE_URL || !AIVIRTEACH_API_TOKEN) {
       throw new ServiceUnavailableException('Labs 集成未配置：缺少 LABS_VM_BASE_URL 或 AIVIRTEACH_API_TOKEN');
@@ -171,17 +215,7 @@ export class LabsClient {
       headers['CF-Access-Client-Id'] = CF_ACCESS_CLIENT_ID;
       headers['CF-Access-Client-Secret'] = CF_ACCESS_CLIENT_SECRET;
     }
-
-    let response: Response;
-    try {
-      response = await fetch(`${LABS_VM_BASE_URL}/v1/vms/${labId}/actions/${action}`, {
-        method: 'POST',
-        headers,
-      });
-    } catch (error) {
-      this.logNetworkFailure(`runVmAction(${action})`, error, VM_MESSAGES);
-    }
-    await this.assertOk(response, `runVmAction(${action})`, VM_MESSAGES);
+    return { baseUrl: LABS_VM_BASE_URL, headers };
   }
 
   // 浏览器直接 fetch Guacamole 的 /api/tokens 会被 CORS 挡住（Guacamole 默认不带
