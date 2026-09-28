@@ -2,6 +2,7 @@ import { BadGatewayException, ConflictException, ForbiddenException, Inject, Inj
 import { AuditActorType, WorkspaceStatus, type Workspace } from '@prisma/client';
 import { waitUntil } from '@vercel/functions';
 import { ENV, type Env } from '../config/env';
+import { UpstreamError } from '../common/upstream-error';
 import { PrismaService } from '../prisma/prisma.service';
 import { AuditService, type AuditActor } from '../audit/audit.service';
 import { LabsClient, type BrowserSession, type GuacamoleToken } from './labs-client';
@@ -231,16 +232,22 @@ export class WorkspaceService {
     try {
       await this.labsClient.stopVm(workspace.labId!);
     } catch (error) {
-      const message = error instanceof Error ? error.message : '未知错误';
-      await this.audit.record({
-        actor,
-        action: 'workspace.stop',
-        success: false,
-        targetType: 'Workspace',
-        targetId: workspace.id,
-        reason,
-      });
-      throw new BadGatewayException(message);
+      // tier=unavailable（如 404 VM not found）是不可重试的永久失败：VM 本来就已经不存在，
+      // 目标状态（不再运行）其实已经达成，落库 STOPPED 而不是抛错——否则 sweepIdle 会对着
+      // 一个联系不上的 VM 永远重试下去（每次都失败、workspace 永远卡在 RUNNING）。
+      const isPermanentFailure = error instanceof UpstreamError && error.tier === 'unavailable';
+      if (!isPermanentFailure) {
+        const message = error instanceof Error ? error.message : '未知错误';
+        await this.audit.record({
+          actor,
+          action: 'workspace.stop',
+          success: false,
+          targetType: 'Workspace',
+          targetId: workspace.id,
+          reason,
+        });
+        throw new BadGatewayException(message);
+      }
     }
 
     const updated = await this.prisma.workspace.update({

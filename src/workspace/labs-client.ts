@@ -1,6 +1,6 @@
 import { Inject, Injectable, Logger, ServiceUnavailableException } from '@nestjs/common';
 import { ENV, type Env } from '../config/env';
-import { classifyUpstreamStatus, type UpstreamErrorMessages } from '../common/upstream-error';
+import { classifyUpstreamStatus, UpstreamError, type UpstreamErrorMessages } from '../common/upstream-error';
 
 export type CreateVmResult = {
   labId: string;
@@ -64,7 +64,8 @@ export class LabsClient {
     if (response.ok) return;
     const detail = await response.text().catch(() => '');
     this.logger.error(`${context} 失败（${response.status}）：${(detail || response.statusText).slice(0, 2000)}`);
-    throw new Error(messages[classifyUpstreamStatus(response.status)]);
+    const tier = classifyUpstreamStatus(response.status);
+    throw new UpstreamError(messages[tier], tier);
   }
 
   // fetch() 本身 reject（DNS 失败、超时、连接被拒……）拿不到 response，本质都是瞬时性问题，

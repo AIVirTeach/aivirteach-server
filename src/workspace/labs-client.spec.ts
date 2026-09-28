@@ -340,6 +340,22 @@ describe('LabsClient.stopVm', () => {
 
     await expect(client.stopVm('workspace_1')).rejects.toThrow('学习环境暂时连接不上，请稍后重试。');
   });
+
+  it('Labs 返回 404（VM 已不存在）时抛出的 error 带 tier=unavailable，供上层判断是否该放弃重试', async () => {
+    global.fetch = jest.fn().mockResolvedValue({
+      ok: false,
+      status: 404,
+      statusText: 'Not Found',
+      text: async () => 'VM not found',
+    }) as unknown as typeof fetch;
+
+    const client = await buildClient({
+      LABS_VM_BASE_URL: 'https://labs-vm.example.com',
+      AIVIRTEACH_API_TOKEN: 'labs-token',
+    });
+
+    await expect(client.stopVm('workspace_1')).rejects.toMatchObject({ tier: 'unavailable' });
+  });
 });
 
 describe('LabsClient.startVm', () => {
