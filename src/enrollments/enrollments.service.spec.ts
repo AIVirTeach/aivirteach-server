@@ -265,6 +265,34 @@ describe('EnrollmentsService.completeLesson', () => {
     expect(result.status).toBe('completed');
   });
 
+  it('完成最后一课时，推进 Progress 和写 completedAt 在同一个事务里', async () => {
+    const prisma = buildPrisma();
+    prisma.enrollment.findMany.mockResolvedValue([buildEnrollment({})]);
+    // 事务内外用不同的 mock，才能断言两次写入确实走的是 tx。
+    const tx = { progress: { upsert: jest.fn() }, enrollment: { update: jest.fn() } };
+    prisma.$transaction.mockImplementation((callback: (client: typeof tx) => unknown) => callback(tx));
+    const { service } = await buildService(prisma);
+
+    await service.completeLesson(USER_ID, 'verify-network');
+
+    expect(tx.progress.upsert).toHaveBeenCalled();
+    expect(tx.enrollment.update).toHaveBeenCalled();
+    expect(prisma.progress.upsert).not.toHaveBeenCalled();
+    expect(prisma.enrollment.update).not.toHaveBeenCalled();
+  });
+
+  it('已完成的课再次完成最后一课时，保留原来的 completedAt', async () => {
+    const prisma = buildPrisma();
+    const firstCompletedAt = new Date('2026-01-01T00:00:00Z');
+    prisma.enrollment.findMany.mockResolvedValue([buildEnrollment({ completedAt: firstCompletedAt })]);
+    const { service } = await buildService(prisma);
+
+    const result = await service.completeLesson(USER_ID, 'verify-network');
+
+    expect(prisma.enrollment.update).not.toHaveBeenCalled();
+    expect(result.status).toBe('completed');
+  });
+
   it('只有非 active 的报名里有这个课时时，仍然可以完成（不再要求这门课是当前 active 课程）', async () => {
     const prisma = buildPrisma();
     prisma.enrollment.findMany.mockResolvedValue([

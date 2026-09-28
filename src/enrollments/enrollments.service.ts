@@ -192,16 +192,20 @@ export class EnrollmentsService {
 
     const nextLessonId = flattened[index + 1]?.id ?? null;
 
-    await this.prisma.progress.upsert({
-      where: { enrollmentId: enrollment.id },
-      update: { currentLessonId: nextLessonId },
-      create: { enrollmentId: enrollment.id, currentLessonId: nextLessonId },
+    // 学完最后一课时 currentLessonId 置空；completedAt 必须同时写入，
+    // 否则两次写入之间失败会让这门课被判成 not_started。已完成过的课保留首次完成时间。
+    const completedAt =
+      nextLessonId === null ? (enrollment.completedAt ?? new Date()) : enrollment.completedAt;
+    await this.prisma.$transaction(async (tx) => {
+      await tx.progress.upsert({
+        where: { enrollmentId: enrollment.id },
+        update: { currentLessonId: nextLessonId },
+        create: { enrollmentId: enrollment.id, currentLessonId: nextLessonId },
+      });
+      if (nextLessonId === null && !enrollment.completedAt) {
+        await tx.enrollment.update({ where: { id: enrollment.id }, data: { completedAt } });
+      }
     });
-
-    const completedAt = nextLessonId === null ? new Date() : enrollment.completedAt;
-    if (nextLessonId === null) {
-      await this.prisma.enrollment.update({ where: { id: enrollment.id }, data: { completedAt } });
-    }
 
     const progressPercent = computeProgressPercent({
       progress: { currentLessonId: nextLessonId },
