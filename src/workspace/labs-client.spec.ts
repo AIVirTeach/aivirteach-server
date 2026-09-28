@@ -340,21 +340,71 @@ describe('LabsClient.stopVm', () => {
 
     await expect(client.stopVm('workspace_1')).rejects.toThrow('学习环境暂时连接不上，请稍后重试。');
   });
+});
 
-  it('Labs 返回 404（VM 已不存在）时抛出的 error 带 tier=unavailable，供上层判断是否该放弃重试', async () => {
+describe('LabsClient.getVmState', () => {
+  const originalFetch = global.fetch;
+  afterEach(() => {
+    global.fetch = originalFetch;
+    jest.restoreAllMocks();
+  });
+
+  const buildConfigured = () =>
+    buildClient({ LABS_VM_BASE_URL: 'https://labs-vm.example.com', AIVIRTEACH_API_TOKEN: 'labs-token' });
+
+  it('GET /v1/vms/:labId/status，返回 dominfo 里的 State', async () => {
+    const fetchMock = jest.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ Id: '-', Name: 'lab_1', State: 'shut off' }),
+    });
+    global.fetch = fetchMock as unknown as typeof fetch;
+
+    const client = await buildConfigured();
+
+    await expect(client.getVmState('lab_1')).resolves.toEqual({ kind: 'present', state: 'shut off' });
+    expect(fetchMock).toHaveBeenCalledWith(
+      'https://labs-vm.example.com/v1/vms/lab_1/status',
+      expect.objectContaining({ method: 'GET', headers: expect.objectContaining({ Authorization: 'Bearer labs-token' }) }),
+    );
+  });
+
+  it('Labs 明确回答 VM 不存在（404 + "VM not found"）时返回 missing', async () => {
     global.fetch = jest.fn().mockResolvedValue({
       ok: false,
       status: 404,
       statusText: 'Not Found',
-      text: async () => 'VM not found',
+      text: async () => JSON.stringify({ detail: 'ERROR: VM not found' }),
     }) as unknown as typeof fetch;
 
-    const client = await buildClient({
-      LABS_VM_BASE_URL: 'https://labs-vm.example.com',
-      AIVIRTEACH_API_TOKEN: 'labs-token',
-    });
+    const client = await buildConfigured();
 
-    await expect(client.stopVm('workspace_1')).rejects.toMatchObject({ tier: 'unavailable' });
+    await expect(client.getVmState('lab_1')).resolves.toEqual({ kind: 'missing' });
+  });
+
+  it('404 但不是 Labs 的 "VM not found"（例如路由/网关配错）时抛错，不能当成 VM 不存在', async () => {
+    global.fetch = jest.fn().mockResolvedValue({
+      ok: false,
+      status: 404,
+      statusText: 'Not Found',
+      text: async () => JSON.stringify({ detail: 'Not Found' }),
+    }) as unknown as typeof fetch;
+
+    const client = await buildConfigured();
+
+    await expect(client.getVmState('lab_1')).rejects.toThrow('学习环境暂时无法使用，请稍后再试或联系客服。');
+  });
+
+  it('403（鉴权/隧道配置问题）时抛错，不能当成 VM 不存在', async () => {
+    global.fetch = jest.fn().mockResolvedValue({
+      ok: false,
+      status: 403,
+      statusText: 'Forbidden',
+      text: async () => '<html>Cloudflare Access</html>',
+    }) as unknown as typeof fetch;
+
+    const client = await buildConfigured();
+
+    await expect(client.getVmState('lab_1')).rejects.toThrow('学习环境暂时无法使用，请稍后再试或联系客服。');
   });
 });
 
