@@ -193,17 +193,21 @@ export class EnrollmentsService {
     const nextLessonId = flattened[index + 1]?.id ?? null;
 
     // 学完最后一课时 currentLessonId 置空；completedAt 必须同时写入，
-    // 否则两次写入之间失败会让这门课被判成 not_started。已完成过的课保留首次完成时间。
-    const completedAt =
-      nextLessonId === null ? (enrollment.completedAt ?? new Date()) : enrollment.completedAt;
+    // 否则两次写入之间失败会让这门课被判成 not_started。
+    // 首次完成时间由数据库保证：只写 completedAt 仍为空的行，
+    // 并发请求或已完成的课再次完成都不会覆盖（enrollment.completedAt 是事务外读的旧值，不能拿来判断）。
+    const completedNow = nextLessonId === null ? new Date() : null;
     await this.prisma.$transaction(async (tx) => {
       await tx.progress.upsert({
         where: { enrollmentId: enrollment.id },
         update: { currentLessonId: nextLessonId },
         create: { enrollmentId: enrollment.id, currentLessonId: nextLessonId },
       });
-      if (nextLessonId === null && !enrollment.completedAt) {
-        await tx.enrollment.update({ where: { id: enrollment.id }, data: { completedAt } });
+      if (completedNow) {
+        await tx.enrollment.updateMany({
+          where: { id: enrollment.id, completedAt: null },
+          data: { completedAt: completedNow },
+        });
       }
     });
 
@@ -216,7 +220,10 @@ export class EnrollmentsService {
       enrollment,
       enrollment.course.slug,
       progressPercent,
-      deriveEnrollmentStatus({ completedAt, currentLessonId: nextLessonId }),
+      deriveEnrollmentStatus({
+        completedAt: enrollment.completedAt ?? completedNow,
+        currentLessonId: nextLessonId,
+      }),
     );
   }
 
@@ -238,7 +245,8 @@ export class EnrollmentsService {
       userId: enrollment.userId,
       courseId: courseSlug,
       active: enrollment.active,
-      progressPercent,
+      // 学完后课时指针为空，按指针算出来是 0，所以已完成一律 100。
+      progressPercent: status === 'completed' ? 100 : progressPercent,
       status,
       currentModule: enrollment.currentModule?.title ?? '',
       enrolledAt: enrollment.createdAt.toISOString(),

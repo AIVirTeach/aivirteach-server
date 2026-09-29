@@ -176,6 +176,18 @@ describe('EnrollmentsService.listForUser', () => {
       { id: 'done', status: 'completed' },
     ]);
   });
+
+  it('已完成的课程 progressPercent 为 100（学完后课时指针为空，不能按指针算成 0）', async () => {
+    const prisma = buildPrisma();
+    prisma.enrollment.findMany.mockResolvedValue([
+      buildEnrollment({ id: 'done', progress: { currentLessonId: null }, completedAt: new Date() }),
+    ]);
+    const { service } = await buildService(prisma);
+
+    const [done] = await service.listForUser(USER_ID);
+
+    expect(done.progressPercent).toBe(100);
+  });
 });
 
 const buildEnrollment = (overrides: Record<string, unknown>) => ({
@@ -248,40 +260,41 @@ describe('EnrollmentsService.completeLesson', () => {
       expect.objectContaining({ id: 'enrollment_1', courseId: 'sample', progressPercent: 100, status: 'in_progress' }),
     );
     // 还没学完最后一课，不能写 completedAt。
-    expect(prisma.enrollment.update).not.toHaveBeenCalled();
+    expect(prisma.enrollment.updateMany).not.toHaveBeenCalled();
   });
 
-  it('完成最后一课时写入 completedAt，返回 completed', async () => {
+  it('完成最后一课时写入 completedAt，返回 completed 且进度为 100', async () => {
     const prisma = buildPrisma();
     prisma.enrollment.findMany.mockResolvedValue([buildEnrollment({})]);
     const { service } = await buildService(prisma);
 
     const result = await service.completeLesson(USER_ID, 'verify-network');
 
-    expect(prisma.enrollment.update).toHaveBeenCalledWith({
-      where: { id: 'enrollment_1' },
+    expect(prisma.enrollment.updateMany).toHaveBeenCalledWith({
+      where: { id: 'enrollment_1', completedAt: null },
       data: { completedAt: expect.any(Date) },
     });
     expect(result.status).toBe('completed');
+    expect(result.progressPercent).toBe(100);
   });
 
   it('完成最后一课时，推进 Progress 和写 completedAt 在同一个事务里', async () => {
     const prisma = buildPrisma();
     prisma.enrollment.findMany.mockResolvedValue([buildEnrollment({})]);
     // 事务内外用不同的 mock，才能断言两次写入确实走的是 tx。
-    const tx = { progress: { upsert: jest.fn() }, enrollment: { update: jest.fn() } };
+    const tx = { progress: { upsert: jest.fn() }, enrollment: { updateMany: jest.fn() } };
     prisma.$transaction.mockImplementation((callback: (client: typeof tx) => unknown) => callback(tx));
     const { service } = await buildService(prisma);
 
     await service.completeLesson(USER_ID, 'verify-network');
 
     expect(tx.progress.upsert).toHaveBeenCalled();
-    expect(tx.enrollment.update).toHaveBeenCalled();
+    expect(tx.enrollment.updateMany).toHaveBeenCalled();
     expect(prisma.progress.upsert).not.toHaveBeenCalled();
-    expect(prisma.enrollment.update).not.toHaveBeenCalled();
+    expect(prisma.enrollment.updateMany).not.toHaveBeenCalled();
   });
 
-  it('已完成的课再次完成最后一课时，保留原来的 completedAt', async () => {
+  it('已完成的课再次完成最后一课时，只允许写入 completedAt 为空的行，保留首次完成时间', async () => {
     const prisma = buildPrisma();
     const firstCompletedAt = new Date('2026-01-01T00:00:00Z');
     prisma.enrollment.findMany.mockResolvedValue([buildEnrollment({ completedAt: firstCompletedAt })]);
@@ -289,7 +302,24 @@ describe('EnrollmentsService.completeLesson', () => {
 
     const result = await service.completeLesson(USER_ID, 'verify-network');
 
-    expect(prisma.enrollment.update).not.toHaveBeenCalled();
+    expect(prisma.enrollment.updateMany).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { id: 'enrollment_1', completedAt: null } }),
+    );
+    expect(result.status).toBe('completed');
+  });
+
+  it('并发完成：事务外读到 completedAt 为空、但库里已被抢先写入时，条件写入不覆盖，仍返回 completed', async () => {
+    const prisma = buildPrisma();
+    prisma.enrollment.findMany.mockResolvedValue([buildEnrollment({ completedAt: null })]);
+    // 另一个请求已经写过 completedAt，这次带 completedAt: null 条件的写入命中 0 行。
+    prisma.enrollment.updateMany.mockResolvedValue({ count: 0 });
+    const { service } = await buildService(prisma);
+
+    const result = await service.completeLesson(USER_ID, 'verify-network');
+
+    expect(prisma.enrollment.updateMany).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { id: 'enrollment_1', completedAt: null } }),
+    );
     expect(result.status).toBe('completed');
   });
 
