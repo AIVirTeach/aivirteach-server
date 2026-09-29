@@ -1,22 +1,8 @@
 import { Injectable } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
+import { deriveEnrollmentView, type EnrollmentStatus } from '../enrollments/enrollment-view';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
-
-type EnrollmentWithVersion = {
-  progress: { currentLessonId: string | null } | null;
-  modules: Array<{ lessons: Array<{ id: string }> }>;
-};
-
-export function computeProgressPercent(enrollment: EnrollmentWithVersion): number {
-  const flattened = enrollment.modules.flatMap((courseModule) => courseModule.lessons);
-  if (flattened.length === 0 || !enrollment.progress?.currentLessonId) {
-    return 0;
-  }
-  const index = flattened.findIndex((lesson) => lesson.id === enrollment.progress!.currentLessonId);
-  if (index === -1) return 0;
-  return Math.round(((index + 1) / flattened.length) * 100);
-}
 
 function dayKey(date: Date, timezone: string): string {
   return new Intl.DateTimeFormat('en-CA', {
@@ -62,6 +48,7 @@ export type DashboardResponse = {
       courseId: string;
       active: boolean;
       progressPercent: number;
+      status: EnrollmentStatus;
       currentModule: string;
       enrolledAt: string;
     };
@@ -150,12 +137,11 @@ export class DashboardService {
               userId: activeEnrollment.userId,
               courseId: activeEnrollment.course.slug,
               active: activeEnrollment.active,
-              progressPercent: activeEnrollment.courseVersion
-                ? computeProgressPercent({
-                    progress: activeEnrollment.progress,
-                    modules: activeEnrollment.courseVersion.modules,
-                  })
-                : 0,
+              ...deriveEnrollmentView({
+                completedAt: activeEnrollment.completedAt,
+                progress: activeEnrollment.progress,
+                modules: activeEnrollment.courseVersion?.modules ?? [],
+              }),
               currentModule: '',
               enrolledAt: activeEnrollment.createdAt.toISOString(),
             },

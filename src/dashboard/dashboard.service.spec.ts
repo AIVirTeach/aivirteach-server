@@ -1,6 +1,6 @@
 import { Test } from '@nestjs/testing';
 import { PrismaService } from '../prisma/prisma.service';
-import { DashboardService, computeProgressPercent } from './dashboard.service';
+import { DashboardService } from './dashboard.service';
 
 const buildPrisma = () => ({
   user: { findUniqueOrThrow: jest.fn() },
@@ -25,26 +25,6 @@ const buildService = async (prisma: ReturnType<typeof buildPrisma>) => {
   }).compile();
   return moduleRef.get(DashboardService);
 };
-
-describe('computeProgressPercent', () => {
-  it('没有 currentLessonId 时是 0', () => {
-    expect(
-      computeProgressPercent({
-        progress: null,
-        modules: [{ lessons: [{ id: 'l1' }, { id: 'l2' }] }],
-      }),
-    ).toBe(0);
-  });
-
-  it('走到第二课（共 4 课）算出 50', () => {
-    expect(
-      computeProgressPercent({
-        progress: { currentLessonId: 'l2' },
-        modules: [{ lessons: [{ id: 'l1' }, { id: 'l2' }] }, { lessons: [{ id: 'l3' }, { id: 'l4' }] }],
-      }),
-    ).toBe(50);
-  });
-});
 
 describe('DashboardService.getDashboard', () => {
   it('没有 active enrollment 时 activeCourse 为 null', async () => {
@@ -114,6 +94,87 @@ describe('DashboardService.getDashboard', () => {
     expect(dashboard.activeCourse?.level).toBe('Beginner');
     expect(dashboard.activeCourse?.enrollment.courseId).toBe('sample-course');
     expect(dashboard.activeCourse?.enrollment.progressPercent).toBe(50);
+    expect(dashboard.activeCourse?.enrollment.status).toBe('in_progress');
+  });
+
+  it('active enrollment 已完成时 status 为 completed、progressPercent 为 100（学完后课时指针为空）', async () => {
+    const prisma = buildPrisma();
+    prisma.user.findUniqueOrThrow.mockResolvedValue({
+      id: 'user_1',
+      displayName: 'Learner',
+      email: 'learner@example.com',
+      role: 'Learner',
+      plan: 'FREE',
+      level: 1,
+      timezone: 'Asia/Kuala_Lumpur',
+      createdAt: new Date('2026-08-01T00:00:00.000Z'),
+    });
+    prisma.enrollment.findFirst.mockResolvedValue({
+      id: 'enrollment_1',
+      userId: 'user_1',
+      active: true,
+      completedAt: new Date('2026-09-01T00:00:00.000Z'),
+      createdAt: new Date('2026-08-10T00:00:00.000Z'),
+      course: {
+        slug: 'sample-course',
+        title: 'Sample Course',
+        category: 'AI',
+        description: 'desc',
+        level: 'BEGINNER',
+        durationMinutes: 60,
+        lessonCount: 2,
+        published: true,
+        coverAssetId: null,
+      },
+      progress: { currentLessonId: null },
+      courseVersion: { modules: [{ lessons: [{ id: 'lesson_1' }, { id: 'lesson_2' }] }] },
+    });
+    const service = await buildService(prisma);
+
+    const dashboard = await service.getDashboard('user_1');
+
+    expect(dashboard.activeCourse?.enrollment.status).toBe('completed');
+    expect(dashboard.activeCourse?.enrollment.progressPercent).toBe(100);
+  });
+
+  it('active enrollment 没有课程版本时按未开始返回', async () => {
+    const prisma = buildPrisma();
+    prisma.user.findUniqueOrThrow.mockResolvedValue({
+      id: 'user_1',
+      displayName: null,
+      email: 'learner@example.com',
+      role: 'Learner',
+      plan: 'FREE',
+      level: 1,
+      timezone: 'Asia/Kuala_Lumpur',
+      createdAt: new Date('2026-08-01T00:00:00.000Z'),
+    });
+    prisma.enrollment.findFirst.mockResolvedValue({
+      id: 'enrollment_1',
+      userId: 'user_1',
+      active: true,
+      completedAt: null,
+      createdAt: new Date('2026-08-10T00:00:00.000Z'),
+      course: {
+        slug: 'sample-course',
+        title: 'Sample Course',
+        category: 'AI',
+        description: 'desc',
+        level: 'BEGINNER',
+        durationMinutes: 60,
+        lessonCount: 2,
+        published: true,
+        coverAssetId: null,
+      },
+      progress: null,
+      courseVersion: null,
+    });
+    const service = await buildService(prisma);
+
+    const dashboard = await service.getDashboard('user_1');
+
+    expect(dashboard.activeCourse?.enrollment.status).toBe('not_started');
+    expect(dashboard.activeCourse?.enrollment.progressPercent).toBe(0);
   });
 });
 

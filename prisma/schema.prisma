@@ -265,6 +265,7 @@ model Enrollment {
   courseVersion   CourseVersion? @relation(fields: [courseVersionId], references: [id])
   currentModule   CourseModule?  @relation(fields: [currentModuleId], references: [id])
   active          Boolean        @default(true)
+  completedAt     DateTime?
   createdAt       DateTime       @default(now())
 
   workspace     Workspace?
