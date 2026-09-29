@@ -117,6 +117,50 @@ describe('EnrollmentsService.enroll', () => {
     // updateMany 和 upsert 必须在同一个事务里，否则并发/重试请求可能留下 0 个或 2 个 active enrollment。
     expect(prisma.$transaction).toHaveBeenCalledTimes(1);
   });
+
+  const COURSE_WITH_LESSONS = {
+    ...SAMPLE_COURSE,
+    versions: [
+      { id: 'version_1', version: 1, modules: [{ lessons: [{ id: 'lesson_cuid_1' }, { id: 'lesson_cuid_2' }] }] },
+    ],
+  };
+  const upsertedEnrollment = (overrides: Record<string, unknown>) => ({
+    id: 'enrollment_1',
+    userId: USER_ID,
+    courseId: 'course_1',
+    active: true,
+    currentModule: null,
+    createdAt: new Date('2026-08-20T00:00:00.000Z'),
+    completedAt: null,
+    progress: null,
+    ...overrides,
+  });
+
+  it('重新报名一门学到一半的课：status 是 in_progress，progressPercent 按进度算而不是写死 0', async () => {
+    const prisma = buildPrisma();
+    const coursesService = buildCoursesService();
+    coursesService.requirePublishedCourseWithLatestVersion.mockResolvedValue(COURSE_WITH_LESSONS);
+    prisma.enrollment.upsert.mockResolvedValue(upsertedEnrollment({ progress: { currentLessonId: 'lesson_cuid_1' } }));
+    const { service } = await buildService(prisma, undefined, coursesService);
+
+    const result = await service.enroll(USER_ID, 'sample');
+
+    expect(result).toEqual(expect.objectContaining({ status: 'in_progress', progressPercent: 50 }));
+  });
+
+  it('重新报名一门已完成的课：status 是 completed，progressPercent 是 100', async () => {
+    const prisma = buildPrisma();
+    const coursesService = buildCoursesService();
+    coursesService.requirePublishedCourseWithLatestVersion.mockResolvedValue(COURSE_WITH_LESSONS);
+    prisma.enrollment.upsert.mockResolvedValue(
+      upsertedEnrollment({ completedAt: new Date('2026-09-01T00:00:00Z'), progress: { currentLessonId: null } }),
+    );
+    const { service } = await buildService(prisma, undefined, coursesService);
+
+    const result = await service.enroll(USER_ID, 'sample');
+
+    expect(result).toEqual(expect.objectContaining({ status: 'completed', progressPercent: 100 }));
+  });
 });
 
 describe('EnrollmentsService.restart', () => {
@@ -278,20 +322,62 @@ describe('EnrollmentsService.completeLesson', () => {
     expect(result.progressPercent).toBe(100);
   });
 
-  it('完成最后一课时，推进 Progress 和写 completedAt 在同一个事务里', async () => {
+  it('完成最后一课时，Activity、completedAt、Progress 三次写入都在同一个事务里', async () => {
     const prisma = buildPrisma();
     prisma.enrollment.findMany.mockResolvedValue([buildEnrollment({})]);
-    // 事务内外用不同的 mock，才能断言两次写入确实走的是 tx。
-    const tx = { progress: { upsert: jest.fn() }, enrollment: { updateMany: jest.fn() } };
+    // 事务内外用不同的 mock，才能断言写入确实走的是 tx。
+    const tx = {
+      progress: { upsert: jest.fn() },
+      enrollment: { updateMany: jest.fn() },
+      activity: { create: jest.fn() },
+    };
     prisma.$transaction.mockImplementation((callback: (client: typeof tx) => unknown) => callback(tx));
     const { service } = await buildService(prisma);
 
     await service.completeLesson(USER_ID, 'verify-network');
 
+    expect(tx.activity.create).toHaveBeenCalled();
     expect(tx.progress.upsert).toHaveBeenCalled();
     expect(tx.enrollment.updateMany).toHaveBeenCalled();
+    expect(prisma.activity.create).not.toHaveBeenCalled();
     expect(prisma.progress.upsert).not.toHaveBeenCalled();
     expect(prisma.enrollment.updateMany).not.toHaveBeenCalled();
+  });
+
+  it('事务内先锁 Enrollment 再写 Progress，和 restart 的加锁顺序一致，避免并发时互相死锁', async () => {
+    const prisma = buildPrisma();
+    prisma.enrollment.findMany.mockResolvedValue([buildEnrollment({})]);
+    const { service } = await buildService(prisma);
+
+    await service.completeLesson(USER_ID, 'verify-network');
+
+    const [enrollmentWrite] = prisma.enrollment.updateMany.mock.invocationCallOrder;
+    const [progressWrite] = prisma.progress.upsert.mock.invocationCallOrder;
+    expect(enrollmentWrite).toBeLessThan(progressWrite);
+  });
+
+  it('事务失败时不留下孤立的 Activity 记录', async () => {
+    const prisma = buildPrisma();
+    prisma.enrollment.findMany.mockResolvedValue([buildEnrollment({})]);
+    prisma.$transaction.mockRejectedValue(new Error('boom'));
+    const { service } = await buildService(prisma);
+
+    await expect(service.completeLesson(USER_ID, 'verify-network')).rejects.toThrow('boom');
+
+    expect(prisma.activity.create).not.toHaveBeenCalled();
+  });
+
+  it('已完成的课回看前面的课：不重写 completedAt，仍返回 completed 和 100', async () => {
+    const prisma = buildPrisma();
+    prisma.enrollment.findMany.mockResolvedValue([
+      buildEnrollment({ completedAt: new Date('2026-01-01T00:00:00Z') }),
+    ]);
+    const { service } = await buildService(prisma);
+
+    const result = await service.completeLesson(USER_ID, 'verify-virtual-machine');
+
+    expect(prisma.enrollment.updateMany).not.toHaveBeenCalled();
+    expect(result).toEqual(expect.objectContaining({ status: 'completed', progressPercent: 100 }));
   });
 
   it('已完成的课再次完成最后一课时，只允许写入 completedAt 为空的行，保留首次完成时间', async () => {

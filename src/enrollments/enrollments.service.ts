@@ -3,8 +3,7 @@ import { AuditActorType } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { AuditService } from '../audit/audit.service';
 import { CoursesService } from '../courses/courses.service';
-import { computeProgressPercent } from '../dashboard/dashboard.service';
-import { deriveEnrollmentStatus, type EnrollmentStatus } from './enrollment-status';
+import { deriveEnrollmentView, type EnrollmentStatus } from './enrollment-view';
 
 export type EnrollmentResponse = {
   id: string;
@@ -54,10 +53,10 @@ export class EnrollmentsService {
     return this.toResponse(
       enrollment,
       course.slug,
-      0,
-      deriveEnrollmentStatus({
+      deriveEnrollmentView({
         completedAt: enrollment.completedAt,
-        currentLessonId: enrollment.progress?.currentLessonId ?? null,
+        progress: enrollment.progress,
+        modules: course.versions[0].modules,
       }),
     );
   }
@@ -101,7 +100,12 @@ export class EnrollmentsService {
       targetId: enrollment.id,
     });
 
-    return this.toResponse(enrollment, course.slug, 0, 'not_started');
+    // restart 刚把进度指针清空、completedAt 置空，所以一定是 not_started。
+    return this.toResponse(
+      enrollment,
+      course.slug,
+      deriveEnrollmentView({ completedAt: enrollment.completedAt, progress: null, modules: [] }),
+    );
   }
 
   async listForUser(userId: string): Promise<EnrollmentResponse[]> {
@@ -119,12 +123,10 @@ export class EnrollmentsService {
       this.toResponse(
         enrollment,
         enrollment.course.slug,
-        enrollment.courseVersion
-          ? computeProgressPercent({ progress: enrollment.progress, modules: enrollment.courseVersion.modules })
-          : 0,
-        deriveEnrollmentStatus({
+        deriveEnrollmentView({
           completedAt: enrollment.completedAt,
-          currentLessonId: enrollment.progress?.currentLessonId ?? null,
+          progress: enrollment.progress,
+          modules: enrollment.courseVersion?.modules ?? [],
         }),
       ),
     );
@@ -180,49 +182,44 @@ export class EnrollmentsService {
       matches.find((candidate) => candidate.enrollment.active) ?? matches[0];
     const lesson = flattened[index];
 
-    await this.prisma.activity.create({
-      data: {
-        userId,
-        enrollmentId: enrollment.id,
-        kind: 'LESSON',
-        title: lesson.title,
-        detail: `完成课时：${lesson.title}`,
-      },
-    });
-
     const nextLessonId = flattened[index + 1]?.id ?? null;
-
-    // 学完最后一课时 currentLessonId 置空；completedAt 必须同时写入，
-    // 否则两次写入之间失败会让这门课被判成 not_started。
-    // 首次完成时间由数据库保证：只写 completedAt 仍为空的行，
-    // 并发请求或已完成的课再次完成都不会覆盖（enrollment.completedAt 是事务外读的旧值，不能拿来判断）。
     const completedNow = nextLessonId === null ? new Date() : null;
+
+    // Activity、completedAt、Progress 放进同一个事务：任何一步失败都不会留下孤立的完成记录，
+    // 学完最后一课时 currentLessonId 置空，completedAt 必须同时写入，否则这门课会被判成 not_started。
+    // 首次完成时间由数据库保证：只写 completedAt 仍为空的行，并发请求或已完成的课再次完成都不会覆盖
+    // （enrollment.completedAt 是事务外读的旧值，不能拿来判断）。
+    // 加锁顺序和 restart 一致（先 Enrollment 再 Progress），避免两者并发时互相死锁。
     await this.prisma.$transaction(async (tx) => {
-      await tx.progress.upsert({
-        where: { enrollmentId: enrollment.id },
-        update: { currentLessonId: nextLessonId },
-        create: { enrollmentId: enrollment.id, currentLessonId: nextLessonId },
-      });
       if (completedNow) {
         await tx.enrollment.updateMany({
           where: { id: enrollment.id, completedAt: null },
           data: { completedAt: completedNow },
         });
       }
-    });
-
-    const progressPercent = computeProgressPercent({
-      progress: { currentLessonId: nextLessonId },
-      modules,
+      await tx.progress.upsert({
+        where: { enrollmentId: enrollment.id },
+        update: { currentLessonId: nextLessonId },
+        create: { enrollmentId: enrollment.id, currentLessonId: nextLessonId },
+      });
+      await tx.activity.create({
+        data: {
+          userId,
+          enrollmentId: enrollment.id,
+          kind: 'LESSON',
+          title: lesson.title,
+          detail: `完成课时：${lesson.title}`,
+        },
+      });
     });
 
     return this.toResponse(
       enrollment,
       enrollment.course.slug,
-      progressPercent,
-      deriveEnrollmentStatus({
+      deriveEnrollmentView({
         completedAt: enrollment.completedAt ?? completedNow,
-        currentLessonId: nextLessonId,
+        progress: { currentLessonId: nextLessonId },
+        modules,
       }),
     );
   }
@@ -237,17 +234,15 @@ export class EnrollmentsService {
       createdAt: Date;
     },
     courseSlug: string,
-    progressPercent: number,
-    status: EnrollmentStatus,
+    view: { status: EnrollmentStatus; progressPercent: number },
   ): EnrollmentResponse {
     return {
       id: enrollment.id,
       userId: enrollment.userId,
       courseId: courseSlug,
       active: enrollment.active,
-      // 学完后课时指针为空，按指针算出来是 0，所以已完成一律 100。
-      progressPercent: status === 'completed' ? 100 : progressPercent,
-      status,
+      progressPercent: view.progressPercent,
+      status: view.status,
       currentModule: enrollment.currentModule?.title ?? '',
       enrolledAt: enrollment.createdAt.toISOString(),
     };
