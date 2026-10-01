@@ -108,7 +108,7 @@ npm run cli -w api -- invite someone@example.com -o "你的邮箱" -r "联调测
 # 拿到返回的 invitationToken，再调 POST /auth/invitations/accept 激活
 
 npm run cli -w api -- course:create /path/to/course-content-dir -o "你的邮箱" -r "联调用课程" --execute
-# course-content-dir 下要有 course.json（定义课程/模块/课时结构，见 src/courses/course-content.schemas.ts）
+# course-content-dir 下要有 course.json（定义课程/模块/课时结构，见 apps/api/src/courses/course-content.schemas.ts）
 npm run cli -w api -- course:publish <slug> -o "你的邮箱" -r "发布" --execute
 npm run cli -w api -- enroll someone@example.com <slug> -o "你的邮箱" -r "开课" --execute
 npm run cli -w api -- quota:grant someone@example.com 60 -o "你的邮箱" -r "发额度" --execute
