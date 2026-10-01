@@ -198,23 +198,7 @@ export class ChatService {
   ): Promise<{ course: DiagnoseRequestBody['course']; currentStep: DiagnoseRequestBody['current_step'] } | null> {
     const course = await this.prisma.course.findUnique({
       where: { id: courseId },
-      include: {
-        versions: {
-          ...LATEST_PUBLISHED_VERSION,
-          include: {
-            ...LATEST_PUBLISHED_VERSION.include,
-            modules: {
-              ...LATEST_PUBLISHED_VERSION.include.modules,
-              include: {
-                lessons: {
-                  ...LATEST_PUBLISHED_VERSION.include.modules.include.lessons,
-                  include: { assessments: true },
-                },
-              },
-            },
-          },
-        },
-      },
+      include: { versions: LATEST_PUBLISHED_VERSION },
     });
     const version = course?.versions[0];
     if (!course || !version) return null;
@@ -224,7 +208,16 @@ export class ChatService {
     if (index < 0) return null;
     const { lesson, courseModule } = flattened[index];
     const sequence = index + 1;
-    const assessment = lesson.assessments[0] ?? null;
+    const lessonWithAssessment = await this.prisma.courseLesson.findFirst({
+      where: {
+        id: lesson.id,
+        moduleId: courseModule.id,
+        module: { courseVersionId: version.id, courseVersion: { courseId } },
+      },
+      select: { assessments: { take: 1 } },
+    });
+    if (!lessonWithAssessment) return null;
+    const assessment = lessonWithAssessment.assessments[0] ?? null;
 
     return {
       course: {

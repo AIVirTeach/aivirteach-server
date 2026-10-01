@@ -13,6 +13,7 @@ function buildPrisma() {
     workspace: { findUnique: jest.fn(), update: jest.fn() },
     progress: { findUnique: jest.fn() },
     course: { findUnique: jest.fn() },
+    courseLesson: { findFirst: jest.fn() },
   };
 }
 
@@ -178,9 +179,9 @@ const LESSON = {
 
 const PUBLISHED_COURSE = {
   slug: 'linux-basics', title: 'Linux 基础', description: '入门课程',
-  versions: [{ version: 2, modules: [{ id: 'module_1', position: 1, lessons: [
-    { contentId: 'previous-lesson', position: 1, title: '前一课', activityPrompt: '', assessments: [] },
-    { contentId: 'verify-virtual-machine', position: 2, title: '验证虚拟机', activityPrompt: LESSON.activityPrompt, assessments: LESSON.assessments },
+  versions: [{ id: 'version_2', version: 2, modules: [{ id: 'module_1', position: 1, lessons: [
+    { id: 'lesson_previous', contentId: 'previous-lesson', position: 1, title: '前一课', activityPrompt: '' },
+    { id: 'lesson_target', contentId: 'verify-virtual-machine', position: 2, title: '验证虚拟机', activityPrompt: LESSON.activityPrompt },
   ] }] }],
 };
 
@@ -190,6 +191,7 @@ describe('ChatService.sendMessage — 调用 Agent', () => {
     prisma.workspace.findUnique.mockResolvedValue({ labId: 'lab_1', status: WorkspaceStatus.RUNNING });
     prisma.progress.findUnique.mockResolvedValue({ currentLessonContentId: 'verify-virtual-machine' });
     prisma.course.findUnique.mockResolvedValue(PUBLISHED_COURSE);
+    prisma.courseLesson.findFirst.mockResolvedValue({ assessments: LESSON.assessments });
   }
 
   it('成功响应：落 ASSISTANT 消息，content=answer，contextRef=完整响应，payload 字段映射正确', async () => {
@@ -249,18 +251,10 @@ describe('ChatService.sendMessage — 调用 Agent', () => {
         },
       }),
     );
-    expect(prisma.course.findUnique).toHaveBeenCalledWith({
-      where: { id: 'course_1' },
-      include: expect.objectContaining({
-        versions: expect.objectContaining({
-          ...LATEST_PUBLISHED_VERSION,
-          include: expect.objectContaining({
-            modules: expect.objectContaining({
-              include: { lessons: { orderBy: { position: 'asc' }, include: { assessments: true } } },
-            }),
-          }),
-        }),
-      }),
+    expect(prisma.course.findUnique).toHaveBeenCalledWith({ where: { id: 'course_1' }, include: { versions: LATEST_PUBLISHED_VERSION } });
+    expect(prisma.courseLesson.findFirst).toHaveBeenCalledWith({
+      where: { id: 'lesson_target', moduleId: 'module_1', module: { courseVersionId: 'version_2', courseVersion: { courseId: 'course_1' } } },
+      select: { assessments: { take: 1 } },
     });
     expect(prisma.conversation.create).toHaveBeenLastCalledWith({
       data: {
@@ -336,7 +330,7 @@ describe('ChatService.sendMessage — 调用 Agent', () => {
   it('当前 contentId 已不在最新已发布版本时走学习起始兜底，不抛错', async () => {
     const { service, prisma, agentClient } = await buildService();
     setupReadyWorkspace(prisma);
-    prisma.course.findUnique.mockResolvedValue({ ...PUBLISHED_COURSE, versions: [{ ...PUBLISHED_COURSE.versions[0], modules: [{ ...PUBLISHED_COURSE.versions[0].modules[0], lessons: [{ contentId: 'previous-lesson', position: 1, title: '前一课', assessments: [] }] }] }] });
+    prisma.course.findUnique.mockResolvedValue({ ...PUBLISHED_COURSE, versions: [{ ...PUBLISHED_COURSE.versions[0], modules: [{ ...PUBLISHED_COURSE.versions[0].modules[0], lessons: [{ id: 'lesson_previous', contentId: 'previous-lesson', position: 1, title: '前一课', activityPrompt: '' }] }] }] });
     prisma.conversation.create.mockResolvedValueOnce(conversationRow({ id: 'student_1', content: '？' }));
     prisma.conversation.create.mockResolvedValueOnce(conversationRow({ id: 'tutor_1', role: ConversationRole.ASSISTANT, content: '还没有开始学习课程内容，请先进入第一课时。' }));
 
@@ -344,6 +338,20 @@ describe('ChatService.sendMessage — 调用 Agent', () => {
 
     expect(result.tutorMessage.text).toBe('还没有开始学习课程内容，请先进入第一课时。');
     expect(agentClient.diagnose).not.toHaveBeenCalled();
+  });
+
+  it('最新版本存在目标课时但查不到对应课时行时走学习起始兜底', async () => {
+    const { service, prisma, agentClient } = await buildService();
+    setupReadyWorkspace(prisma);
+    prisma.courseLesson.findFirst.mockResolvedValue(null);
+    prisma.conversation.create.mockResolvedValueOnce(conversationRow({ id: 'student_1', content: '？' }));
+    prisma.conversation.create.mockResolvedValueOnce(conversationRow({ id: 'tutor_1', role: ConversationRole.ASSISTANT, content: '还没有开始学习课程内容，请先进入第一课时。' }));
+
+    const result = await service.sendMessage('user_1', 'enr_1', '？');
+
+    expect(result.tutorMessage.text).toBe('还没有开始学习课程内容，请先进入第一课时。');
+    expect(agentClient.diagnose).not.toHaveBeenCalled();
+    expect(prisma.courseLesson.findFirst).toHaveBeenCalledTimes(1);
   });
 });
 
@@ -406,6 +414,7 @@ describe('ChatService.streamMessage — 调用 Agent', () => {
     prisma.workspace.findUnique.mockResolvedValue({ labId: 'lab_1', status: WorkspaceStatus.RUNNING });
     prisma.progress.findUnique.mockResolvedValue({ currentLessonContentId: 'verify-virtual-machine' });
     prisma.course.findUnique.mockResolvedValue(PUBLISHED_COURSE);
+    prisma.courseLesson.findFirst.mockResolvedValue({ assessments: LESSON.assessments });
   }
 
   it('依次转发 progress 帧，result 帧落库后发 complete 事件', async () => {
