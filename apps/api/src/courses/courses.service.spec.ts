@@ -70,6 +70,21 @@ describe('CoursesService.getDetail', () => {
     );
   });
 
+  it('课程没有已发布版本时抛 NotFoundException', async () => {
+    const prisma = buildPrisma();
+    prisma.course.findUnique.mockResolvedValue({
+      id: 'course_cuid_1',
+      slug: 'draft-only',
+      published: true,
+      versions: [],
+    });
+    const service = await buildService(prisma);
+
+    await expect(service.getDetail('draft-only')).rejects.toThrow(
+      NotFoundException,
+    );
+  });
+
   it('返回完整 detail，modules/lessons 按 position 排序拼好', async () => {
     const prisma = buildPrisma();
     prisma.course.findUnique.mockResolvedValue({
