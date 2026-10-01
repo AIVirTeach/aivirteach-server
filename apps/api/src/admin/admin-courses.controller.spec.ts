@@ -257,10 +257,92 @@ describe('AdminCoursesController', () => {
       markdown: 'markdown',
       blocks: [],
     });
+    expect(prisma.courseAsset.findMany).not.toHaveBeenCalled();
     const missing = await request(app.getHttpServer())
       .get('/admin/courses/demo/draft/lessons/missing')
       .set('Authorization', `Bearer ${TOKEN}`);
     expect(missing.status).toBe(404);
+  });
+
+  it('loads only referenced image assets for preview', async () => {
+    const lesson = {
+      id: 'db-1',
+      contentId: 'lesson-1',
+      position: 1,
+      title: 'Lesson',
+      estimatedMinutes: 2,
+      objectives: [],
+      activityType: 'read',
+      activityPrompt: '',
+      activityCompletionType: 'none',
+      body: 'markdown',
+      content: {
+        schemaVersion: 1,
+        blocks: [
+          {
+            id: 'image-1',
+            type: 'image',
+            props: { assetId: 'asset-1', alt: 'Diagram' },
+          },
+        ],
+      },
+    };
+    drafts.requireDraft.mockResolvedValue({
+      ...draft,
+      modules: [
+        { id: 'module-1', position: 1, title: 'Module', lessons: [lesson] },
+      ],
+    });
+    prisma.courseAsset.findMany.mockResolvedValue([
+      { id: 'asset-1', objectKey: 'course/image.png', altText: 'Diagram' },
+    ]);
+
+    const response = await request(app.getHttpServer())
+      .get('/admin/courses/demo/draft/lessons/lesson-1')
+      .set('Authorization', `Bearer ${TOKEN}`);
+
+    expect(response.status).toBe(200);
+    expect(prisma.courseAsset.findMany).toHaveBeenCalledWith({
+      where: { courseId: 'course-1', id: { in: ['asset-1'] } },
+    });
+    expect(response.body.assets).toEqual({
+      'asset-1': { url: 'course/image.png', alt: 'Diagram' },
+    });
+  });
+
+  it('returns 409 when contentId matches lessons in multiple modules', async () => {
+    const lesson = {
+      id: 'db-1',
+      contentId: 'lesson-1',
+      position: 1,
+      title: 'Lesson',
+      estimatedMinutes: 2,
+      objectives: [],
+      activityType: 'read',
+      activityPrompt: '',
+      activityCompletionType: 'none',
+      body: '',
+      content: { schemaVersion: 1, blocks: [] },
+    };
+    drafts.requireDraft.mockResolvedValue({
+      ...draft,
+      modules: [
+        { id: 'module-1', position: 1, title: 'One', lessons: [lesson] },
+        {
+          id: 'module-2',
+          position: 2,
+          title: 'Two',
+          lessons: [{ ...lesson, id: 'db-2' }],
+        },
+      ],
+    });
+
+    const response = await request(app.getHttpServer())
+      .get('/admin/courses/demo/draft/lessons/lesson-1')
+      .set('Authorization', `Bearer ${TOKEN}`);
+
+    expect(response.status).toBe(409);
+    expect(prisma.courseAsset.findMany).not.toHaveBeenCalled();
   });
 
   it('protects draft preview with the admin token', async () => {

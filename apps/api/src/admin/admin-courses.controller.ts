@@ -1,5 +1,6 @@
 import {
   Body,
+  ConflictException,
   Controller,
   createParamDecorator,
   Delete,
@@ -17,6 +18,8 @@ import { z } from 'zod';
 import { ZodValidationPipe } from '../common/zod-validation.pipe';
 import { PrismaService } from '../prisma/prisma.service';
 import { buildLessonResponse } from '../courses/lesson-response';
+import { loadCourseAssets } from '../courses/course-assets';
+import { collectImageAssetIds } from '@aivirteach/lesson-blocks';
 import { AdminApiTokenGuard } from './admin-api-token.guard';
 import { OperatorSchema } from './admin.schemas';
 import { CourseDraftService } from './draft/course-draft.service';
@@ -182,10 +185,18 @@ export class AdminCoursesController {
     @Param('contentId') contentId: string,
   ) {
     const draft = await this.drafts.requireDraft(slug);
-    const courseAssets = await this.prisma.courseAsset.findMany({
-      where: { courseId: draft.courseId },
-      select: { id: true, objectKey: true, altText: true },
-    });
+    const matches = draft.modules.flatMap((courseModule) =>
+      courseModule.lessons.filter((lesson) => lesson.contentId === contentId),
+    );
+    if (matches.length > 1) {
+      throw new ConflictException(`contentId ${contentId} 对应多个草稿课时`);
+    }
+    const assetIds = collectImageAssetIds(matches[0]?.content);
+    const courseAssets = await loadCourseAssets(
+      this.prisma,
+      draft.courseId,
+      assetIds,
+    );
     return buildLessonResponse({
       courseSlug: slug,
       modules: draft.modules,
