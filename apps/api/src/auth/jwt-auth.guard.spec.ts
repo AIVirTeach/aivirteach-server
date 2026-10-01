@@ -7,6 +7,7 @@ const SECRET = 'a'.repeat(48);
 const ENV_STUB = {
   DATABASE_URL: 'postgresql://unused',
   JWT_SECRET: SECRET,
+  ADMIN_API_TOKEN: 't'.repeat(32),
   ACCESS_TOKEN_TTL: '15m',
   REFRESH_TOKEN_TTL_DAYS: 30,
   INVITATION_TTL_DAYS: 7,
