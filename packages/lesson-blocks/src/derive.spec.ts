@@ -42,6 +42,10 @@ describe('lesson content derived helpers', () => {
       .toBe('[x](url) and **literal** / \\even / [odd](url) / `unmatched');
   });
 
+  it('treats backslashes as literal inside inline code spans', () => {
+    expect(blocksToPlainText(content([block('p', 'paragraph', { text: '`foo\\`' })]))).toBe('foo\\');
+  });
+
   it('preserves literal sentinel-shaped text', () => {
     expect(blocksToPlainText(content([block('p', 'paragraph', { text: '\u0000123\u0000 and \\*literal\\*' })])))
       .toBe('\u0000123\u0000 and *literal*');

@@ -45,12 +45,6 @@ function countRun(value: string, start: number, char: string): number {
 
 function findInlineCodeEnd(value: string, start: number, delimiterLength: number): number {
   for (let index = start; index < value.length;) {
-    if (value[index] === '\\') {
-      const runLength = countRun(value, index, '\\');
-      index += runLength;
-      if (runLength % 2 === 1) index++;
-      continue;
-    }
     if (value[index] === '`') {
       const runLength = countRun(value, index, '`');
       if (runLength === delimiterLength) return index;
