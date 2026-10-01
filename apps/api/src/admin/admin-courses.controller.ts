@@ -39,9 +39,10 @@ const OperatorHeader = createParamDecorator((_data, context) => {
     .getRequest<{ headers: Record<string, string | undefined> }>();
   return request.headers['x-operator'] ?? '';
 });
-const PublishBodySchema = z
-  .object({ reason: z.string().min(1).optional() })
-  .strict();
+const PublishBodySchema = z.preprocess(
+  (body) => (body === undefined ? {} : body),
+  z.object({ reason: z.string().min(1).optional() }).strict(),
+);
 
 @ApiTags('Admin Courses')
 @ApiBearerAuth()
@@ -197,7 +198,7 @@ export class AdminCoursesController {
   publish(
     @Param('slug') slug: string,
     @Body(new ZodValidationPipe(PublishBodySchema))
-    body: z.infer<typeof PublishBodySchema>,
+    body: z.infer<typeof PublishBodySchema> = {},
     @OperatorHeader(new ZodValidationPipe(OperatorSchema)) operator: string,
   ) {
     return this.publishing.publish(

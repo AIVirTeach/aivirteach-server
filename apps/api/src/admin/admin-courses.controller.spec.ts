@@ -287,4 +287,18 @@ describe('AdminCoursesController', () => {
     expect(response.status).toBe(422);
     expect(response.body.problems).toEqual(problems);
   });
+
+  it('publishes with the default reason when the request has no body', async () => {
+    const response = await request(app.getHttpServer())
+      .post('/admin/courses/demo/publish')
+      .set('Authorization', `Bearer ${TOKEN}`)
+      .set('X-Operator', OPERATOR);
+
+    expect(response.status).toBe(201);
+    expect(publishing.publish).toHaveBeenCalledWith(
+      'demo',
+      OPERATOR,
+      'admin publish',
+    );
+  });
 });
