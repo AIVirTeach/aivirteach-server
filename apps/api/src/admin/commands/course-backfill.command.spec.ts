@@ -4,8 +4,8 @@ import { PrismaService } from '../../prisma/prisma.service';
 import { CourseBackfillCommand } from './course-backfill.command';
 
 describe('CourseBackfillCommand', () => {
-  const report = { bodies: { filled: 2, unresolved: [] }, progress: { filled: 1, total: 1 }, content: { filled: 3, skipped: [], reports: [] } };
-  let service: { run: jest.Mock };
+  const report = { bodies: { filled: 2, unresolved: [] }, progress: { filled: 1, total: 1 }, content: { filled: 3, skipped: [], reports: [], pendingBody: [{ lessonId: 'pending-lesson', reason: '版本没有 sourceMarkdown' }] } };
+  let service: { prepare: jest.Mock; apply: jest.Mock };
   let audit: { record: jest.Mock };
   let prisma: { $transaction: jest.Mock };
   let transaction: object;
@@ -15,8 +15,9 @@ describe('CourseBackfillCommand', () => {
 
   beforeEach(() => {
     service = {
-      run: jest.fn(async (options: { execute: boolean }, tx?: { writes: string[] }) => {
-        if (options.execute) tx?.writes.push('backfill write');
+      prepare: jest.fn().mockResolvedValue({ report, plan: true }),
+      apply: jest.fn(async (_plan: unknown, tx?: { writes: string[] }) => {
+        tx?.writes.push('backfill write');
         return report;
       }),
     };
@@ -44,7 +45,8 @@ describe('CourseBackfillCommand', () => {
 
   it('dry-run 输出 JSON 报告且不记录执行审计', async () => {
     await command.run([], { operator: 'ops@example.com', reason: '校验' });
-    expect(service.run).toHaveBeenCalledWith({ execute: false });
+    expect(service.prepare).toHaveBeenCalledTimes(1);
+    expect(service.apply).not.toHaveBeenCalled();
     expect(audit.record).not.toHaveBeenCalled();
     expect(log).toHaveBeenCalledWith(JSON.stringify({ command: 'course:backfill-content-model', dryRun: true, operator: 'ops@example.com', reason: '校验', ...report }));
   });
@@ -56,14 +58,20 @@ describe('CourseBackfillCommand', () => {
       maxWait: 10_000,
       timeout: 120_000,
     });
-    expect(service.run).toHaveBeenCalledWith({ execute: true }, transaction);
+    expect(service.prepare).toHaveBeenCalledTimes(1);
+    expect(service.apply).toHaveBeenCalledWith({ report, plan: true }, transaction);
     expect(audit.record).toHaveBeenCalledWith({
       actor: { type: 'OPERATOR', id: 'ops@example.com' },
       action: 'admin.backfillContentModel',
       success: true,
       targetType: 'CourseVersion',
       reason: '迁移回填',
-      metadata: { report },
+      metadata: { report: {
+        ...report,
+        bodies: { ...report.bodies },
+        progress: { ...report.progress },
+        content: { ...report.content },
+      } },
     }, transaction);
     expect(persistedWrites).toEqual(['backfill write']);
     expect(log).toHaveBeenCalledWith(JSON.stringify({ command: 'course:backfill-content-model', dryRun: false, operator: 'ops@example.com', reason: '迁移回填', ...report }));
@@ -78,7 +86,8 @@ describe('CourseBackfillCommand', () => {
     ).rejects.toBe(failure);
 
     expect(prisma.$transaction).toHaveBeenCalledTimes(1);
-    expect(service.run).toHaveBeenCalledWith({ execute: true }, transaction);
+    expect(service.prepare).toHaveBeenCalledTimes(1);
+    expect(service.apply).toHaveBeenCalledWith({ report, plan: true }, transaction);
     expect(audit.record).toHaveBeenCalledWith(expect.any(Object), transaction);
     expect(log).not.toHaveBeenCalled();
     expect(persistedWrites).toEqual([]);
@@ -87,6 +96,6 @@ describe('CourseBackfillCommand', () => {
   it('operator 和 reason 沿用 schema 校验', async () => {
     await expect(command.run([], { operator: 'bad', reason: 'test' })).rejects.toThrow();
     await expect(command.run([], { operator: 'ops@example.com', reason: '' })).rejects.toThrow();
-    expect(service.run).not.toHaveBeenCalled();
+    expect(service.prepare).not.toHaveBeenCalled();
   });
 });

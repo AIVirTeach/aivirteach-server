@@ -48,7 +48,7 @@ describe('ContentModelBackfillService', () => {
     expect(report).toEqual({
       bodies: { filled: 2, unresolved: [{ lessonId: 'unresolved', reason: '版本没有 sourceMarkdown' }] },
       progress: { filled: 1, total: 2 },
-      content: { filled: 0, skipped: [], reports: [] },
+      content: { filled: 0, skipped: [], reports: [], pendingBody: [] },
     });
     expect(prisma.courseLesson.updateMany).toHaveBeenNthCalledWith(1, {
       where: { id: 'l1', body: '' },
@@ -79,7 +79,7 @@ describe('ContentModelBackfillService', () => {
 
     const report = await service.run({ execute: false });
 
-    expect(report).toEqual({ bodies: { filled: 1, unresolved: [] }, progress: { filled: 1, total: 1 }, content: { filled: 0, skipped: [], reports: [] } });
+    expect(report).toEqual({ bodies: { filled: 1, unresolved: [] }, progress: { filled: 1, total: 1 }, content: { filled: 0, skipped: [], reports: [], pendingBody: [] } });
     expect(prisma.courseLesson.updateMany).not.toHaveBeenCalled();
     expect(prisma.progress.updateMany).not.toHaveBeenCalled();
   });
@@ -99,7 +99,7 @@ describe('ContentModelBackfillService', () => {
 
     const report = await service.run({ execute: true });
 
-    expect(report).toEqual({ bodies: { filled: 0, unresolved: [] }, progress: { filled: 0, total: 1 }, content: { filled: 0, skipped: [], reports: [] } });
+    expect(report).toEqual({ bodies: { filled: 0, unresolved: [] }, progress: { filled: 0, total: 1 }, content: { filled: 0, skipped: [], reports: [], pendingBody: [] } });
     expect(prisma.courseLesson.updateMany).toHaveBeenCalledWith(expect.objectContaining({ where: { id: 'raced_lesson', body: '' } }));
     expect(prisma.progress.updateMany).toHaveBeenCalledWith(expect.objectContaining({
       where: { id: 'raced_progress', currentLessonContentId: null, currentLessonId: 'old_id' },
@@ -124,9 +124,9 @@ describe('ContentModelBackfillService', () => {
     expect(prisma.courseLesson.updateMany).not.toHaveBeenCalled();
 
     const report = await service.run({ execute: true });
-    expect(report.content).toEqual({ filled: 1, skipped: [], reports: [{ lessonId: 'lesson-1', issues: [] }] });
+    expect(report.content).toEqual({ filled: 1, skipped: [], reports: [{ lessonId: 'lesson-1', issues: [] }], pendingBody: [] });
     expect(prisma.courseLesson.updateMany).toHaveBeenCalledWith({
-      where: { id: 'lesson-1', content: { equals: Prisma.DbNull } },
+      where: { id: 'lesson-1', content: { equals: Prisma.DbNull }, body: '## hello\n\n![A](./a.png)' },
       data: { content: expect.objectContaining({
         schemaVersion: 1,
         blocks: expect.arrayContaining([expect.objectContaining({ type: 'image', props: expect.objectContaining({ assetId: 'asset-a' }) })]),
@@ -155,6 +155,74 @@ describe('ContentModelBackfillService', () => {
     expect(report.content.reports.find(({ lessonId }) => lessonId === 'oversized')?.issues).toEqual(
       expect.arrayContaining([expect.objectContaining({ level: 'error' })]),
     );
+    expect(prisma.courseLesson.updateMany).not.toHaveBeenCalled();
+  });
+
+  it('finishes asset reads and equivalence checks before opening the execute transaction', async () => {
+    const prisma = createPrisma();
+    const events: string[] = [];
+    prisma.courseLesson.findMany.mockImplementation(async () => {
+      events.push('lesson-read');
+      return [{ id: 'lesson-1', body: 'plain text', content: null, module: { courseVersion: { courseId: 'c', sourceMarkdown: null } } }];
+    });
+    prisma.courseAsset.findMany.mockImplementation(async () => {
+      events.push('asset-read');
+      return [];
+    });
+    prisma.progress.findMany.mockResolvedValue([]);
+    prisma.$transaction.mockImplementation(async (callback: (tx: unknown) => unknown) => {
+      events.push('transaction-start');
+      return callback(prisma);
+    });
+    jest.mocked(equivalence.checkPlainTextEquivalence).mockImplementation(async (...args) => {
+      events.push('equivalence');
+      return { equal: true, expected: args[0], actual: args[0] };
+    });
+    const service = new ContentModelBackfillService(prisma as unknown as PrismaService);
+
+    await service.run({ execute: true });
+
+    expect(events).toEqual(['lesson-read', 'asset-read', 'equivalence', 'transaction-start']);
+  });
+
+  it('converts a body prepared from source and CAS-gates content on that expected body', async () => {
+    const markdown = await markdownPromise;
+    const expectedBody = sliceLessonBody(markdown, { startLine: 3, endLine: 4 });
+    const prisma = createPrisma();
+    prisma.courseLesson.findMany.mockResolvedValue([{
+      id: 'body-empty', body: '', content: null, sourceRange: { startLine: 3, endLine: 4 },
+      module: { courseVersion: { courseId: 'course-1', sourceMarkdown: markdown } },
+    }]);
+    prisma.progress.findMany.mockResolvedValue([]);
+    jest.mocked(equivalence.checkPlainTextEquivalence).mockResolvedValue({ equal: true, expected: expectedBody, actual: expectedBody });
+    const service = new ContentModelBackfillService(prisma as unknown as PrismaService);
+
+    const report = await service.run({ execute: true });
+
+    expect(report.bodies.filled).toBe(1);
+    expect(report.content.filled).toBe(1);
+    expect(prisma.courseLesson.updateMany).toHaveBeenNthCalledWith(1, {
+      where: { id: 'body-empty', body: '' },
+      data: { body: expectedBody },
+    });
+    expect(prisma.courseLesson.updateMany).toHaveBeenNthCalledWith(2, {
+      where: { id: 'body-empty', content: { equals: Prisma.DbNull }, body: expectedBody },
+      data: { content: expect.any(Object) },
+    });
+  });
+
+  it('reports content pending on body preparation so operators know another run is needed', async () => {
+    const prisma = createPrisma();
+    prisma.courseLesson.findMany.mockResolvedValue([{
+      id: 'missing-source', body: '', content: null, sourceRange: { startLine: 1, endLine: 1 },
+      module: { courseVersion: { courseId: 'course-1', sourceMarkdown: null } },
+    }]);
+    prisma.progress.findMany.mockResolvedValue([]);
+    const service = new ContentModelBackfillService(prisma as unknown as PrismaService);
+
+    const report = await service.run({ execute: false });
+
+    expect(report.content.pendingBody).toEqual([{ lessonId: 'missing-source', reason: '版本没有 sourceMarkdown' }]);
     expect(prisma.courseLesson.updateMany).not.toHaveBeenCalled();
   });
 });

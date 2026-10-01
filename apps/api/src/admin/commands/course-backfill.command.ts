@@ -31,12 +31,13 @@ export class CourseBackfillCommand extends CommandRunner {
     const operator = OperatorSchema.parse(options.operator);
     const reason = ReasonSchema.parse(options.reason);
     const execute = Boolean(options.execute);
+    const plan = await this.backfill.prepare();
     let report: BackfillReport;
 
     if (execute) {
-      // Allow a large operator-run global backfill to finish while keeping writes and audit atomic.
+      // Conversion and asset reads are complete before opening the write-and-audit transaction.
       report = await this.prisma.$transaction(async (transaction) => {
-        const result = await this.backfill.run({ execute: true }, transaction);
+        const result = await this.backfill.apply(plan, transaction);
         const metadata: Prisma.InputJsonObject = {
           report: {
             bodies: {
@@ -53,6 +54,7 @@ export class CourseBackfillCommand extends CommandRunner {
               filled: result.content.filled,
               skipped: result.content.skipped.map(({ lessonId, reason }) => ({ lessonId, reason })),
               reports: result.content.reports.map(({ lessonId, issues }) => ({ lessonId, issues })),
+              pendingBody: result.content.pendingBody.map(({ lessonId, reason }) => ({ lessonId, reason })),
             },
           },
         };
@@ -70,7 +72,7 @@ export class CourseBackfillCommand extends CommandRunner {
         return result;
       }, { maxWait: 10_000, timeout: 120_000 });
     } else {
-      report = await this.backfill.run({ execute: false });
+      report = plan.report;
     }
 
     console.log(

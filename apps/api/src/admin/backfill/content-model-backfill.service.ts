@@ -17,7 +17,15 @@ export interface BackfillReport {
     filled: number;
     skipped: Array<{ lessonId: string; reason: string }>;
     reports: Array<{ lessonId: string; issues: ConversionIssue[] }>;
+    pendingBody: Array<{ lessonId: string; reason: string }>;
   };
+}
+
+export interface PreparedBackfill {
+  report: BackfillReport;
+  bodyUpdates: Array<{ id: string; body: string }>;
+  progressUpdates: Array<{ id: string; currentLessonId: string; contentId: string }>;
+  contentUpdates: Array<{ id: string; expectedBody: string; content: Prisma.InputJsonValue }>;
 }
 
 type LessonBackfillRow = {
@@ -38,14 +46,8 @@ type ProgressBackfillRow = {
 export class ContentModelBackfillService {
   constructor(private readonly prisma: PrismaService) {}
 
-  async run(
-    options: { execute: boolean },
-    transaction?: Prisma.TransactionClient,
-  ): Promise<BackfillReport> {
-    if (options.execute && !transaction) {
-      return this.prisma.$transaction((tx) => this.run(options, tx));
-    }
-    const client = transaction ?? this.prisma;
+  async prepare(): Promise<PreparedBackfill> {
+    const client = this.prisma;
     const [lessons, progresses] = await Promise.all([
       client.courseLesson.findMany({
         where: { OR: [{ body: '' }, { content: { equals: Prisma.DbNull } }] },
@@ -88,17 +90,25 @@ export class ContentModelBackfillService {
     const progressUpdates = (progresses as ProgressBackfillRow[]).flatMap(
       (row) =>
         row.currentLesson
-          ? [{ id: row.id, contentId: row.currentLesson.contentId }]
+          ? [{ id: row.id, currentLessonId: row.currentLessonId, contentId: row.currentLesson.contentId }]
           : [],
     );
 
     const contentSkipped: BackfillReport['content']['skipped'] = [];
+    const pendingBody: BackfillReport['content']['pendingBody'] = [];
     const conversionReports: BackfillReport['content']['reports'] = [];
-    const contentUpdates: Array<{ id: string; content: Prisma.InputJsonValue }> = [];
+    const contentUpdates: PreparedBackfill['contentUpdates'] = [];
+    const preparedBodyById = new Map(bodyUpdates.map(({ id, body }) => [id, body]));
     const assetMapByCourse = new Map<string, Map<string, string>>();
     // Convert one lesson at a time: remark ASTs and intermediate blocks become collectible immediately.
     for (const row of lessons as unknown as LessonBackfillRow[]) {
-      if (row.content !== null || row.body === '') continue;
+      if (row.content !== null) continue;
+      const expectedBody = row.body === '' ? preparedBodyById.get(row.id) : row.body;
+      if (expectedBody === undefined) {
+        const reason = unresolved.find(({ lessonId }) => lessonId === row.id)?.reason ?? '课时正文未能准备';
+        pendingBody.push({ lessonId: row.id, reason });
+        continue;
+      }
       const courseId = row.module.courseVersion.courseId;
       let assetIdsByFilename = assetMapByCourse.get(courseId);
       if (!assetIdsByFilename) {
@@ -109,7 +119,7 @@ export class ContentModelBackfillService {
         assetIdsByFilename = new Map(assets.map((asset) => [basename(asset.objectKey), asset.id]));
         assetMapByCourse.set(courseId, assetIdsByFilename);
       }
-      const converted = await convertMarkdownToBlocks(row.body, { assetIdsByFilename });
+      const converted = await convertMarkdownToBlocks(expectedBody, { assetIdsByFilename });
       conversionReports.push({ lessonId: row.id, issues: converted.report });
       const errors = converted.report.filter(({ level }) => level === 'error');
       if (errors.length) {
@@ -119,57 +129,71 @@ export class ContentModelBackfillService {
         });
         continue;
       }
-      const equivalence = await checkPlainTextEquivalence(row.body, converted);
+      const equivalence = await checkPlainTextEquivalence(expectedBody, converted);
       if (!equivalence.equal) {
         contentSkipped.push({ lessonId: row.id, reason: '纯文本与 body 不一致' });
         continue;
       }
-      contentUpdates.push({ id: row.id, content: converted.content as unknown as Prisma.InputJsonValue });
-    }
-
-    let bodyFilled = bodyUpdates.length;
-    let progressFilled = progressUpdates.length;
-    let contentFilled = contentUpdates.length;
-    if (options.execute) {
-      bodyFilled = 0;
-      for (const update of bodyUpdates) {
-        const result = await client.courseLesson.updateMany({
-          where: { id: update.id, body: '' },
-          data: { body: update.body },
-        });
-        bodyFilled += result.count;
-      }
-      progressFilled = 0;
-      for (const update of progressUpdates) {
-        const row = (progresses as ProgressBackfillRow[]).find(
-          (candidate) => candidate.id === update.id,
-        );
-        if (!row) continue;
-        const result = await client.progress.updateMany({
-          where: {
-            id: update.id,
-            currentLessonContentId: null,
-            currentLessonId: row.currentLessonId,
-          },
-          data: { currentLessonContentId: update.contentId },
-        });
-        progressFilled += result.count;
-      }
-      contentFilled = 0;
-      for (const update of contentUpdates) {
-        const result = await client.courseLesson.updateMany({
-          where: { id: update.id, content: { equals: Prisma.DbNull } },
-          data: { content: update.content },
-        });
-        contentFilled += result.count;
-      }
+      contentUpdates.push({ id: row.id, expectedBody, content: converted.content as unknown as Prisma.InputJsonValue });
     }
 
     return {
-      bodies: { filled: bodyFilled, unresolved },
-      progress: { filled: progressFilled, total: progresses.length },
-      content: { filled: contentFilled, skipped: contentSkipped, reports: conversionReports },
+      report: {
+        bodies: { filled: bodyUpdates.length, unresolved },
+        progress: { filled: progressUpdates.length, total: progresses.length },
+        content: { filled: contentUpdates.length, skipped: contentSkipped, reports: conversionReports, pendingBody },
+      },
+      bodyUpdates,
+      progressUpdates,
+      contentUpdates,
     };
+  }
+
+  async apply(plan: PreparedBackfill, transaction: Prisma.TransactionClient): Promise<BackfillReport> {
+    let bodyFilled = 0;
+    for (const update of plan.bodyUpdates) {
+      const result = await transaction.courseLesson.updateMany({
+        where: { id: update.id, body: '' },
+        data: { body: update.body },
+      });
+      bodyFilled += result.count;
+    }
+    let progressFilled = 0;
+    for (const update of plan.progressUpdates) {
+      const result = await transaction.progress.updateMany({
+        where: {
+          id: update.id,
+          currentLessonContentId: null,
+          currentLessonId: update.currentLessonId,
+        },
+        data: { currentLessonContentId: update.contentId },
+      });
+      progressFilled += result.count;
+    }
+    let contentFilled = 0;
+    for (const update of plan.contentUpdates) {
+      const result = await transaction.courseLesson.updateMany({
+        where: {
+          id: update.id,
+          content: { equals: Prisma.DbNull },
+          body: update.expectedBody,
+        },
+        data: { content: update.content },
+      });
+      contentFilled += result.count;
+    }
+    return {
+      ...plan.report,
+      bodies: { ...plan.report.bodies, filled: bodyFilled },
+      progress: { ...plan.report.progress, filled: progressFilled },
+      content: { ...plan.report.content, filled: contentFilled },
+    };
+  }
+
+  async run(options: { execute: boolean }): Promise<BackfillReport> {
+    const plan = await this.prepare();
+    if (!options.execute) return plan.report;
+    return this.prisma.$transaction((transaction) => this.apply(plan, transaction));
   }
 }
 
