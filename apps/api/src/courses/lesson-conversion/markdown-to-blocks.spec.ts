@@ -94,4 +94,43 @@ describe('convertMarkdownToBlocks', () => {
       expect(plainText).toContain(paragraph.replaceAll('**', ''));
     }
   });
+
+  it('maps images, missing assets, blockquotes, and raw HTML with explicit fallbacks', async () => {
+    const result = await convertMarkdownToBlocks(
+      '![Diagram](folder/a.png)\n\n![No asset](missing.png)\n\n> 提示\n\n<div>x</div>',
+      { assetIdsByFilename: new Map([['a.png', 'asset-a']]) },
+    );
+    expect(result.content.blocks).toMatchObject([
+      { type: 'image', props: { assetId: 'asset-a', alt: 'Diagram' } },
+      { type: 'paragraph', props: { text: '[图片缺失：missing.png]' } },
+      { type: 'callout', props: { variant: 'note', body: '提示' } },
+      { type: 'paragraph', props: { text: 'x' } },
+    ]);
+    expect(result.report).toEqual(expect.arrayContaining([
+      expect.objectContaining({ level: 'warning', code: 'missing-asset' }),
+      expect.objectContaining({ level: 'warning', code: 'unmapped-node' }),
+    ]));
+  });
+
+  it('defaults an empty image alt to the resolved filename', async () => {
+    const result = await convertMarkdownToBlocks('![](images/a.png)', {
+      assetIdsByFilename: new Map([['a.png', 'asset-a']]),
+    });
+    expect(result.content.blocks[0]).toMatchObject({ type: 'image', props: { assetId: 'asset-a', alt: 'a.png' } });
+    expect(result.report).toEqual(expect.arrayContaining([
+      expect.objectContaining({ level: 'warning', code: 'empty-alt-defaulted' }),
+    ]));
+  });
+
+  it('validates converted content and reports invalid block properties', async () => {
+    const code = `\`\`\`\n${'x'.repeat(20_001)}\n\`\`\``;
+    const paragraph = 'y'.repeat(5_001);
+    const result = await convertMarkdownToBlocks(`${code}\n\n${paragraph}`, ctx);
+    expect(result.report.filter(({ code }) => code === 'invalid-output')).toHaveLength(2);
+  });
+
+  it('has no validation errors for legal conversions', async () => {
+    const result = await convertMarkdownToBlocks('## Intro\n\nText\n\n- one\n- two\n\n> note', ctx);
+    expect(result.report.filter(({ level }) => level === 'error')).toEqual([]);
+  });
 });
