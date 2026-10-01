@@ -1,6 +1,7 @@
 import { blocksToPlainText } from '@aivirteach/lesson-blocks';
 import type { Nodes, Root } from 'mdast';
 import type { ConversionResult } from './markdown-to-blocks';
+import { inlineToMarkdownSubset } from './inline';
 
 async function parseMarkdown(markdown: string): Promise<{ tree: Root; toString: (node: Nodes | Root) => string }> {
   const [{ unified }, { default: remarkParse }, { default: remarkGfm }, { toString }] = await Promise.all([
@@ -27,14 +28,25 @@ export async function checkPlainTextEquivalence(
   }
   const expected = tree.children.filter((node) => {
     if (node.type !== 'heading' || node.depth !== 1) return true;
-    const plainHeading = toString(node);
+    const mappedHeading = inlineToMarkdownSubset(node.children, []);
+    const plainHeading = blocksToPlainText({ schemaVersion: 1, blocks: [{ id: 'heading', type: 'paragraph', props: { text: mappedHeading } }] });
     const remaining = droppedCounts.get(plainHeading) ?? 0;
     if (remaining === 0) return true;
     if (remaining === 1) droppedCounts.delete(plainHeading);
     else droppedCounts.set(plainHeading, remaining - 1);
     return false;
   }).map(toString).join('\n');
-  const actual = blocksToPlainText(result.content);
+  const ignoredBlockIds = new Set(result.equivalenceIgnoredBlockIds ?? []);
+  const comparableContent = {
+    ...result.content,
+    blocks: result.content.blocks.map((block) => {
+      if (!ignoredBlockIds.has(block.id) || block.type !== 'paragraph' || typeof block.props !== 'object' || block.props === null) return block;
+      const props = block.props as Record<string, unknown>;
+      if (typeof props.text !== 'string') return block;
+      return { ...block, props: { ...props, text: props.text.replace(/^\[图片缺失：[^\]]+\]\s?/, '') } };
+    }),
+  };
+  const actual = blocksToPlainText(comparableContent);
   const normalize = (value: string) => value.replace(/\s/gu, '');
   return { equal: normalize(expected) === normalize(actual), expected, actual };
 }

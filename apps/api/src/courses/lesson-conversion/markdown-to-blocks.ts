@@ -14,6 +14,7 @@ export type ConversionResult = {
   content: LessonContent;
   report: ConversionIssue[];
   dropped: string[];
+  equivalenceIgnoredBlockIds?: string[];
 };
 
 type Context = { assetIdsByFilename: ReadonlyMap<string, string> };
@@ -32,27 +33,40 @@ export async function convertMarkdownToBlocks(
   const tree = unified().use(remarkParse).use(remarkGfm).parse(markdown) as Root;
   const report: ConversionIssue[] = [];
   const dropped: string[] = [];
+  const equivalenceIgnoredBlockIds: string[] = [];
   const blocks: LessonBlock[] = [];
   const append = (type: string, props: unknown) => {
-    blocks.push({ id: `b-${String(blocks.length + 1).padStart(3, '0')}`, type, props });
+    const id = `b-${String(blocks.length + 1).padStart(3, '0')}`;
+    blocks.push({ id, type, props });
+    return id;
   };
   const plainText = (node: Nodes) => toString(node).trim();
-  const inline = (children: PhrasingContent[]) => inlineToMarkdownSubset(children, report);
+  const withoutImages = (node: PhrasingContent): PhrasingContent | undefined => {
+    if (node.type === 'image' || node.type === 'imageReference') return undefined;
+    if ('children' in node) {
+      return { ...node, children: node.children.map((child) => withoutImages(child as PhrasingContent)).filter(Boolean) } as PhrasingContent;
+    }
+    return node;
+  };
+  const inline = (children: PhrasingContent[]) => inlineToMarkdownSubset(
+    children.map(withoutImages).filter((child): child is PhrasingContent => child !== undefined), report,
+  );
   const assetDefinitions = new Map(tree.children.flatMap((node) => node.type === 'definition' ? [[node.identifier, node.url] as const] : []));
   type ImageNode = Extract<Nodes, { type: 'image' | 'imageReference' }>;
   const imageBlock = (node: ImageNode) => {
     const url = node.type === 'image' ? node.url : (assetDefinitions.get(node.identifier) ?? node.identifier);
     const filename = url.split(/[\\/]/).filter(Boolean).at(-1) || url;
-    const assetId = ctx.assetIdsByFilename.get(filename);
-    if (!assetId) {
-      report.push({ level: 'warning', code: 'missing-asset', message: `找不到图片素材：${filename}`, line: node.position?.start.line });
-      append('paragraph', { text: `[图片缺失：${filename}]` });
-      return;
-    }
     let alt = node.alt?.trim() ?? '';
     if (!alt) {
       alt = filename;
       report.push({ level: 'warning', code: 'empty-alt-defaulted', message: `图片缺少替代文字，已使用文件名：${filename}`, line: node.position?.start.line });
+    }
+    const assetId = ctx.assetIdsByFilename.get(filename);
+    if (!assetId) {
+      report.push({ level: 'warning', code: 'missing-asset', message: `找不到图片素材：${filename}`, line: node.position?.start.line });
+      const placeholderId = append('paragraph', { text: `[图片缺失：${filename}]${alt ? ` ${alt}` : ''}` });
+      equivalenceIgnoredBlockIds.push(placeholderId);
+      return;
     }
     append('image', { assetId, alt });
   };
@@ -77,7 +91,7 @@ export async function convertMarkdownToBlocks(
 
   for (const node of tree.children) {
     if (node.type === 'heading') {
-      const text = inline(node.children);
+      const text = inline(node.children).trim();
       if (node.depth === 1) {
         dropped.push(text);
         report.push({ level: 'warning', code: 'h1-dropped', message: '一级标题不会转换为课时内容块。', line: node.position?.start.line });
@@ -96,7 +110,7 @@ export async function convertMarkdownToBlocks(
         ...(language ? { language } : {}),
       });
     } else if (node.type === 'table') {
-      const rows = node.children.map((row) => row.children.map((cell) => inline(cell.children)));
+      const rows = node.children.map((row) => row.children.map((cell) => inline(cell.children).trim()));
       append('table', { columns: rows[0] ?? [], rows: rows.slice(1) });
       emitNestedImages(node);
     } else if (node.type === 'list') {
@@ -108,34 +122,24 @@ export async function convertMarkdownToBlocks(
             flattenedNestedList = true;
             child.children.forEach(visitListItem);
           } else {
-            const text = child.type === 'paragraph' ? inline(child.children) : plainText(child);
+            const text = child.type === 'paragraph' ? inline(child.children).trim() : plainText(child);
             if (text) items.push(text);
           }
         }
       };
       node.children.forEach(visitListItem);
-      append(node.ordered ? 'numberedList' : 'bulletList', { items });
+      if (items.length) append(node.ordered ? 'numberedList' : 'bulletList', { items });
       emitNestedImages(node);
       if (flattenedNestedList) {
         report.push({ level: 'warning', code: 'nested-list-flattened', message: '嵌套列表已拍平。', line: node.position?.start.line });
       }
     } else if (node.type === 'paragraph') {
-      let phrasing: PhrasingContent[] = [];
-      const flush = () => {
-        if (phrasing.length) append('paragraph', { text: inline(phrasing) });
-        phrasing = [];
-      };
-      for (const child of node.children) {
-        if (child.type === 'image' || child.type === 'imageReference') {
-          flush();
-          imageBlock(child);
-        } else {
-          phrasing.push(child);
-        }
-      }
-      flush();
+      const text = inline(node.children).trim();
+      if (text) append('paragraph', { text });
+      emitNestedImages(node);
     } else if (node.type === 'blockquote') {
-      append('callout', { variant: 'note', body: node.children.flatMap(quotedText).join('\n') });
+      const body = node.children.flatMap(quotedText).join('\n').trim();
+      if (body) append('callout', { variant: 'note', body });
       emitNestedImages(node);
     } else if (node.type === 'definition') {
       continue;
@@ -149,5 +153,5 @@ export async function convertMarkdownToBlocks(
   const content: LessonContent = { schemaVersion: 1, blocks };
   const validation = validateLessonContent(content, { courseAssetIds: new Set(ctx.assetIdsByFilename.values()) });
   for (const problem of validation.errors) report.push({ level: 'error', code: 'invalid-output', message: problem.message });
-  return { content, report, dropped };
+  return { content, report, dropped, equivalenceIgnoredBlockIds };
 }

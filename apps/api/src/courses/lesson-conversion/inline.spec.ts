@@ -37,4 +37,9 @@ describe('inlineToMarkdownSubset', () => {
     expect(output).toBe('**highlight**');
     expect(blocksToPlainText({ schemaVersion: 1, blocks: [{ id: 'b-001', type: 'paragraph', props: { text: output } }] })).toBe('highlight');
   });
+
+  it('keeps the readable footnote label as plain text', () => {
+    const footnote = { type: 'footnoteReference', identifier: 'note', label: 'Note' } as import('mdast').PhrasingContent;
+    expect(inlineToMarkdownSubset([footnote], [])).toBe('Note');
+  });
 });

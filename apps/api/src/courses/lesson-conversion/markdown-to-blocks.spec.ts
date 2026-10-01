@@ -102,7 +102,7 @@ describe('convertMarkdownToBlocks', () => {
     );
     expect(result.content.blocks).toMatchObject([
       { type: 'image', props: { assetId: 'asset-a', alt: 'Diagram' } },
-      { type: 'paragraph', props: { text: '[图片缺失：missing.png]' } },
+      { type: 'paragraph', props: { text: '[图片缺失：missing.png] No asset' } },
       { type: 'callout', props: { variant: 'note', body: '提示' } },
       { type: 'paragraph', props: { text: 'x' } },
     ]);
@@ -140,12 +140,12 @@ describe('convertMarkdownToBlocks', () => {
       { assetIdsByFilename: new Map([['a.png', 'a'], ['b.png', 'b'], ['c.png', 'c']]) },
     );
     expect(result.content.blocks).toMatchObject([
-      { type: 'bulletList', props: { items: ['item Diagram', 'missing absent'] } },
+      { type: 'bulletList', props: { items: ['item', 'missing'] } },
       { type: 'image', props: { assetId: 'a', alt: 'Diagram' } },
-      { type: 'paragraph', props: { text: '[图片缺失：missing.png]' } },
-      { type: 'table', props: { rows: [['row', 'Table image']] } },
+      { type: 'paragraph', props: { text: '[图片缺失：missing.png] absent' } },
+      { type: 'table', props: { rows: [['row', '']] } },
       { type: 'image', props: { assetId: 'b', alt: 'Table image' } },
-      { type: 'callout', props: { variant: 'note', body: 'quoted\nQuote image' } },
+      { type: 'callout', props: { variant: 'note', body: 'quoted' } },
       { type: 'image', props: { assetId: 'c', alt: 'Quote image' } },
     ]);
     expect(result.report).toEqual(expect.arrayContaining([

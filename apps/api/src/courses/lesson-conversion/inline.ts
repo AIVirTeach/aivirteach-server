@@ -6,6 +6,7 @@ const escapeLiteral = (value: string) => value.replace(/[\\*`\[\]=]/g, '\\$&');
 function textOf(node: PhrasingContent): string {
   if (node.type === 'text' || node.type === 'inlineCode' || node.type === 'html') return node.value;
   if (node.type === 'image' || node.type === 'imageReference') return node.alt ?? '';
+  if (node.type === 'footnoteReference') return node.label ?? node.identifier;
   if ('children' in node) return node.children.map((child) => textOf(child as PhrasingContent)).join('');
   return '';
 }

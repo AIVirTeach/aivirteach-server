@@ -2,6 +2,7 @@ import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { convertMarkdownToBlocks } from './markdown-to-blocks';
 import { checkPlainTextEquivalence, markdownToPlainText } from './plain-text';
+import { blocksToPlainText } from '@aivirteach/lesson-blocks';
 
 describe('markdownToPlainText', () => {
   it('includes image alt and link text but excludes URLs', async () => {
@@ -41,5 +42,25 @@ describe('checkPlainTextEquivalence', () => {
     expect(result.dropped).toContain('**Title**');
     expect(comparison.equal).toBe(true);
     expect(comparison.expected).toContain('Title appears again.');
+  });
+
+  it('normalizes ==highlight== in a dropped H1 before comparing', async () => {
+    const markdown = '# ==Title==\n\nBody';
+    const result = await convertMarkdownToBlocks(markdown, ctx);
+    expect(await checkPlainTextEquivalence(markdown, result)).toMatchObject({ equal: true });
+  });
+
+  it('compares nested resolved and missing images once across lists, tables, and quotes', async () => {
+    const markdown = '- List ![List alt](list.png)\n\n| Visual |\n| --- |\n| ![Table alt](missing.png) |\n\n> Quoted ![Quote alt](quote.png)\n\nBody mentions [图片缺失：missing.png].';
+    const result = await convertMarkdownToBlocks(markdown, {
+      assetIdsByFilename: new Map([['list.png', 'list-id'], ['quote.png', 'quote-id']]),
+    });
+    const comparison = await checkPlainTextEquivalence(markdown, result);
+    expect(comparison.equal).toBe(true);
+    expect(comparison.actual).toContain('[图片缺失：missing.png]');
+    const actual = blocksToPlainText(result.content);
+    for (const alt of ['List alt', 'Table alt', 'Quote alt']) {
+      expect(actual.split(alt)).toHaveLength(2);
+    }
   });
 });
