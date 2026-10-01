@@ -3,6 +3,8 @@ import { PrismaService } from '../prisma/prisma.service';
 import { buildLessonResponse } from './lesson-response';
 import type { LessonResponse } from './lesson-response';
 import { LATEST_PUBLISHED_VERSION } from './published-version';
+import { loadCourseAssets } from './course-assets';
+import { collectImageAssetIds } from '@aivirteach/lesson-blocks';
 
 export type { LessonResponse } from './lesson-response';
 
@@ -122,10 +124,16 @@ export class CoursesService {
   async getLesson(slug: string, lessonId: string): Promise<LessonResponse> {
     const course = await this.requirePublishedCourseWithLatestVersion(slug);
     const version = course.versions[0];
+    const lesson = version.modules
+      .flatMap((courseModule) => courseModule.lessons)
+      .find((candidate) => candidate.contentId === lessonId);
+    const assetIds = collectImageAssetIds(lesson?.content);
+    const courseAssets = await loadCourseAssets(this.prisma, course.id, assetIds);
     return buildLessonResponse({
       courseSlug: course.slug,
       modules: version.modules,
       lessonId,
+      courseAssets,
     });
   }
 

@@ -1,5 +1,7 @@
 import { NotFoundException } from '@nestjs/common';
 import type { Prisma } from '@prisma/client';
+import { LessonEnvelopeSchema, collectImageAssetIds } from '@aivirteach/lesson-blocks';
+import type { LessonBlock } from '@aivirteach/lesson-blocks';
 
 type ModuleRow = Prisma.CourseModuleGetPayload<{
   include: { lessons: true };
@@ -16,7 +18,10 @@ export type LessonResponse = {
     objectives: string[];
     activity: { type: string; prompt: string; completionType: string };
   };
+  /** @deprecated 迁移 B 删除；迁移期供旧 client 回退。 */
   markdown: string;
+  blocks: LessonBlock[] | null;
+  assets: Record<string, { url: string; alt?: string }>;
   assessment: null;
   navigation: {
     previousLessonId: string | null;
@@ -30,6 +35,7 @@ export function buildLessonResponse(input: {
   courseSlug: string;
   modules: ModuleRow[];
   lessonId: string;
+  courseAssets: Array<{ id: string; objectKey: string; altText: string | null }>;
 }): LessonResponse {
   const flattened = input.modules.flatMap((courseModule) =>
     courseModule.lessons.map((lesson) => ({ courseModule, lesson })),
@@ -44,6 +50,17 @@ export function buildLessonResponse(input: {
   }
 
   const { courseModule, lesson } = flattened[index];
+  const parsedContent = LessonEnvelopeSchema.safeParse(lesson.content);
+  const blocks = parsedContent.success ? parsedContent.data.blocks : null;
+  const referencedAssetIds = new Set(collectImageAssetIds(lesson.content));
+  const assets = Object.fromEntries(
+    input.courseAssets
+      .filter((asset) => referencedAssetIds.has(asset.id))
+      .map((asset) => [asset.id, {
+        url: asset.objectKey,
+        ...(asset.altText === null ? {} : { alt: asset.altText }),
+      }]),
+  );
   return {
     courseId: input.courseSlug,
     module: {
@@ -64,6 +81,8 @@ export function buildLessonResponse(input: {
       },
     },
     markdown: lesson.body,
+    blocks,
+    assets,
     // LessonAssessment 行要等 assessments.json 落地才会存在，这轮之前先固定返回 null。
     assessment: null,
     navigation: {

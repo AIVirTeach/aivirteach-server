@@ -6,7 +6,7 @@ import { LATEST_PUBLISHED_VERSION } from './published-version';
 
 const buildPrisma = () => ({
   course: { findMany: jest.fn(), findUnique: jest.fn() },
-  courseAsset: { findUnique: jest.fn() },
+  courseAsset: { findUnique: jest.fn(), findMany: jest.fn() },
 });
 
 const buildService = async (prisma: ReturnType<typeof buildPrisma>) => {
@@ -250,6 +250,30 @@ describe('CoursesService.getLesson', () => {
       total: 2,
     });
     expect(lesson.assessment).toBeNull();
+    expect(prisma.courseAsset.findMany).not.toHaveBeenCalled();
+  });
+
+  it('只按本课程和图片块引用的 id 查询素材', async () => {
+    const prisma = buildPrisma();
+    const version = structuredClone(versionWithTwoLessons);
+    version.modules[0].lessons[0].content = {
+      schemaVersion: 1,
+      blocks: [{ id: 'image', type: 'image', props: { assetId: 'owned', alt: 'owned' } }],
+    };
+    prisma.course.findUnique.mockResolvedValue({
+      id: 'course_cuid_1', slug: 'sample', published: true, versions: [version],
+    });
+    prisma.courseAsset.findMany.mockResolvedValue([
+      { id: 'owned', objectKey: 'https://cdn.test/owned.png', altText: null },
+    ]);
+    const service = await buildService(prisma);
+
+    const lesson = await service.getLesson('sample', 'verify-virtual-machine');
+
+    expect(prisma.courseAsset.findMany).toHaveBeenCalledWith({
+      where: { courseId: 'course_cuid_1', id: { in: ['owned'] } },
+    });
+    expect(lesson.assets).toEqual({ owned: { url: 'https://cdn.test/owned.png' } });
   });
 
   it('第二课的 navigation 指回第一课，且没有 next', async () => {
