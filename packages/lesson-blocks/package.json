@@ -4,10 +4,17 @@
   "private": true,
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
+  "files": [
+    "dist",
+    "fixtures/canonical-lesson.json"
+  ],
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
+    },
+    "./fixtures/canonical-lesson.json": {
+      "default": "./fixtures/canonical-lesson.json"
     }
   },
   "scripts": {
