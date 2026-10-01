@@ -24,8 +24,16 @@ export interface BackfillReport {
 export interface PreparedBackfill {
   report: BackfillReport;
   bodyUpdates: Array<{ id: string; body: string }>;
-  progressUpdates: Array<{ id: string; currentLessonId: string; contentId: string }>;
-  contentUpdates: Array<{ id: string; expectedBody: string; content: Prisma.InputJsonValue }>;
+  progressUpdates: Array<{
+    id: string;
+    currentLessonId: string;
+    contentId: string;
+  }>;
+  contentUpdates: Array<{
+    id: string;
+    expectedBody: string;
+    content: Prisma.InputJsonValue;
+  }>;
 }
 
 type LessonBackfillRow = {
@@ -33,7 +41,9 @@ type LessonBackfillRow = {
   body: string;
   content: Prisma.JsonValue | null;
   sourceRange: Prisma.JsonValue | null;
-  module: { courseVersion: { courseId: string; sourceMarkdown: string | null } };
+  module: {
+    courseVersion: { courseId: string; sourceMarkdown: string | null };
+  };
 };
 
 type ProgressBackfillRow = {
@@ -56,7 +66,13 @@ export class ContentModelBackfillService {
           body: true,
           content: true,
           sourceRange: true,
-          module: { select: { courseVersion: { select: { courseId: true, sourceMarkdown: true } } } },
+          module: {
+            select: {
+              courseVersion: {
+                select: { courseId: true, sourceMarkdown: true },
+              },
+            },
+          },
         },
       }),
       client.progress.findMany({
@@ -76,12 +92,18 @@ export class ContentModelBackfillService {
       if (row.body !== '') continue;
       const markdown = row.module.courseVersion.sourceMarkdown;
       if (markdown === null) {
-        unresolved.push({ lessonId: row.id, reason: '版本没有 sourceMarkdown' });
+        unresolved.push({
+          lessonId: row.id,
+          reason: '版本没有 sourceMarkdown',
+        });
         continue;
       }
       const range = parseSourceRange(row.sourceRange);
       if (!range) {
-        unresolved.push({ lessonId: row.id, reason: '课时没有有效 sourceRange' });
+        unresolved.push({
+          lessonId: row.id,
+          reason: '课时没有有效 sourceRange',
+        });
         continue;
       }
       bodyUpdates.push({ id: row.id, body: sliceLessonBody(markdown, range) });
@@ -90,7 +112,13 @@ export class ContentModelBackfillService {
     const progressUpdates = (progresses as ProgressBackfillRow[]).flatMap(
       (row) =>
         row.currentLesson
-          ? [{ id: row.id, currentLessonId: row.currentLessonId, contentId: row.currentLesson.contentId }]
+          ? [
+              {
+                id: row.id,
+                currentLessonId: row.currentLessonId,
+                contentId: row.currentLesson.contentId,
+              },
+            ]
           : [],
     );
 
@@ -98,14 +126,19 @@ export class ContentModelBackfillService {
     const pendingBody: BackfillReport['content']['pendingBody'] = [];
     const conversionReports: BackfillReport['content']['reports'] = [];
     const contentUpdates: PreparedBackfill['contentUpdates'] = [];
-    const preparedBodyById = new Map(bodyUpdates.map(({ id, body }) => [id, body]));
+    const preparedBodyById = new Map(
+      bodyUpdates.map(({ id, body }) => [id, body]),
+    );
     const assetMapByCourse = new Map<string, Map<string, string>>();
     // Convert one lesson at a time: remark ASTs and intermediate blocks become collectible immediately.
     for (const row of lessons as unknown as LessonBackfillRow[]) {
       if (row.content !== null) continue;
-      const expectedBody = row.body === '' ? preparedBodyById.get(row.id) : row.body;
+      const expectedBody =
+        row.body === '' ? preparedBodyById.get(row.id) : row.body;
       if (expectedBody === undefined) {
-        const reason = unresolved.find(({ lessonId }) => lessonId === row.id)?.reason ?? '课时正文未能准备';
+        const reason =
+          unresolved.find(({ lessonId }) => lessonId === row.id)?.reason ??
+          '课时正文未能准备';
         pendingBody.push({ lessonId: row.id, reason });
         continue;
       }
@@ -116,32 +149,53 @@ export class ContentModelBackfillService {
           where: { courseId },
           select: { id: true, objectKey: true },
         });
-        assetIdsByFilename = new Map(assets.map((asset) => [basename(asset.objectKey), asset.id]));
+        assetIdsByFilename = new Map(
+          assets.map((asset) => [basename(asset.objectKey), asset.id]),
+        );
         assetMapByCourse.set(courseId, assetIdsByFilename);
       }
-      const converted = await convertMarkdownToBlocks(expectedBody, { assetIdsByFilename });
+      const converted = await convertMarkdownToBlocks(expectedBody, {
+        assetIdsByFilename,
+      });
       conversionReports.push({ lessonId: row.id, issues: converted.report });
       const errors = converted.report.filter(({ level }) => level === 'error');
       if (errors.length) {
         contentSkipped.push({
           lessonId: row.id,
-          reason: errors.map(({ code, message }) => `${code}: ${message}`).join('; '),
+          reason: errors
+            .map(({ code, message }) => `${code}: ${message}`)
+            .join('; '),
         });
         continue;
       }
-      const equivalence = await checkPlainTextEquivalence(expectedBody, converted);
+      const equivalence = await checkPlainTextEquivalence(
+        expectedBody,
+        converted,
+      );
       if (!equivalence.equal) {
-        contentSkipped.push({ lessonId: row.id, reason: '纯文本与 body 不一致' });
+        contentSkipped.push({
+          lessonId: row.id,
+          reason: '纯文本与 body 不一致',
+        });
         continue;
       }
-      contentUpdates.push({ id: row.id, expectedBody, content: converted.content as unknown as Prisma.InputJsonValue });
+      contentUpdates.push({
+        id: row.id,
+        expectedBody,
+        content: converted.content as unknown as Prisma.InputJsonValue,
+      });
     }
 
     return {
       report: {
         bodies: { filled: bodyUpdates.length, unresolved },
         progress: { filled: progressUpdates.length, total: progresses.length },
-        content: { filled: contentUpdates.length, skipped: contentSkipped, reports: conversionReports, pendingBody },
+        content: {
+          filled: contentUpdates.length,
+          skipped: contentSkipped,
+          reports: conversionReports,
+          pendingBody,
+        },
       },
       bodyUpdates,
       progressUpdates,
@@ -149,7 +203,10 @@ export class ContentModelBackfillService {
     };
   }
 
-  async apply(plan: PreparedBackfill, transaction: Prisma.TransactionClient): Promise<BackfillReport> {
+  async apply(
+    plan: PreparedBackfill,
+    transaction: Prisma.TransactionClient,
+  ): Promise<BackfillReport> {
     let bodyFilled = 0;
     for (const update of plan.bodyUpdates) {
       const result = await transaction.courseLesson.updateMany({
@@ -193,7 +250,9 @@ export class ContentModelBackfillService {
   async run(options: { execute: boolean }): Promise<BackfillReport> {
     const plan = await this.prepare();
     if (!options.execute) return plan.report;
-    return this.prisma.$transaction((transaction) => this.apply(plan, transaction));
+    return this.prisma.$transaction((transaction) =>
+      this.apply(plan, transaction),
+    );
   }
 }
 

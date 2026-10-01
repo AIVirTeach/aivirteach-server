@@ -1,7 +1,6 @@
 import { ConflictException, NotFoundException } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { AuditService } from '../../audit/audit.service';
-import { PrismaService } from '../../prisma/prisma.service';
 import { CourseDraftService } from './course-draft.service';
 import { CourseMetaPatchSchema, WelcomePatchSchema } from './draft.schemas';
 
@@ -108,16 +107,16 @@ describe('CourseDraftService', () => {
     return {
       prisma,
       audit,
-      service: new CourseDraftService(
-        prisma as unknown as PrismaService,
-        audit as unknown as AuditService,
-      ),
+      service: new CourseDraftService(prisma, audit as unknown as AuditService),
     };
   }
 
   it('clones nullable JSON as SQL NULL and records create audit', async () => {
     const { prisma, audit, service } = setup();
-    prisma.course.findUnique.mockResolvedValue({ id: 'course-1', slug: 'demo' });
+    prisma.course.findUnique.mockResolvedValue({
+      id: 'course-1',
+      slug: 'demo',
+    });
     prisma.courseVersion.findFirst
       .mockResolvedValueOnce(null)
       .mockResolvedValueOnce(published);
@@ -146,7 +145,9 @@ describe('CourseDraftService', () => {
                   body: 'lesson body',
                   assessmentIds: ['assessment-1'],
                   assessments: {
-                    create: [expect.objectContaining({ question: 'Question?' })],
+                    create: [
+                      expect.objectContaining({ question: 'Question?' }),
+                    ],
                   },
                 }),
               ]),
@@ -154,7 +155,9 @@ describe('CourseDraftService', () => {
           },
         ],
       },
-      welcome: { create: expect.objectContaining({ overviewHeading: 'Welcome' }) },
+      welcome: {
+        create: expect.objectContaining({ overviewHeading: 'Welcome' }),
+      },
     });
     const clonedLessons = createArg.data.modules.create[0].lessons.create;
     expect(clonedLessons[0].content).toEqual({ legacy: true });
@@ -178,7 +181,10 @@ describe('CourseDraftService', () => {
 
   it('returns an existing draft without creating a duplicate', async () => {
     const { prisma, service } = setup();
-    prisma.course.findUnique.mockResolvedValue({ id: 'course-1', slug: 'demo' });
+    prisma.course.findUnique.mockResolvedValue({
+      id: 'course-1',
+      slug: 'demo',
+    });
     prisma.courseVersion.findFirst.mockResolvedValue({ id: 'draft' });
     await expect(service.createDraft('demo', 'operator')).resolves.toEqual({
       draft: { id: 'draft' },
@@ -189,7 +195,10 @@ describe('CourseDraftService', () => {
 
   it('recovers a concurrent draft creation after P2002', async () => {
     const { prisma, service } = setup();
-    prisma.course.findUnique.mockResolvedValue({ id: 'course-1', slug: 'demo' });
+    prisma.course.findUnique.mockResolvedValue({
+      id: 'course-1',
+      slug: 'demo',
+    });
     prisma.courseVersion.findFirst
       .mockResolvedValueOnce(null)
       .mockResolvedValueOnce(published)
@@ -210,33 +219,41 @@ describe('CourseDraftService', () => {
     const { prisma, service } = setup();
     prisma.course.findUnique.mockResolvedValue({ id: 'course-1' });
     prisma.courseVersion.findFirst.mockResolvedValue(null);
-    await expect(service.createDraft('demo', 'operator')).rejects.toBeInstanceOf(
-      NotFoundException,
-    );
+    await expect(
+      service.createDraft('demo', 'operator'),
+    ).rejects.toBeInstanceOf(NotFoundException);
 
     prisma.course.findUnique.mockResolvedValue(null);
-    await expect(service.createDraft('missing', 'operator')).rejects.toBeInstanceOf(
-      NotFoundException,
-    );
+    await expect(
+      service.createDraft('missing', 'operator'),
+    ).rejects.toBeInstanceOf(NotFoundException);
   });
 
   it('requires an existing draft and records discard audit', async () => {
     const { prisma, audit, service } = setup();
-    prisma.course.findUnique.mockResolvedValue({ id: 'course-1', slug: 'demo' });
+    prisma.course.findUnique.mockResolvedValue({
+      id: 'course-1',
+      slug: 'demo',
+    });
     prisma.courseVersion.findFirst
       .mockResolvedValueOnce({ id: 'published', publishedAt: new Date() })
       .mockResolvedValueOnce({ id: 'draft' });
     prisma.courseVersion.delete.mockResolvedValue({});
     await service.discardDraft('demo', 'operator');
     expect(audit.record).toHaveBeenCalledWith(
-      expect.objectContaining({ action: 'admin.draft.discard', targetId: 'draft' }),
+      expect.objectContaining({
+        action: 'admin.draft.discard',
+        targetId: 'draft',
+      }),
       expect.anything(),
     );
 
     prisma.courseVersion.findFirst
       .mockResolvedValueOnce({ id: 'published', publishedAt: new Date() })
       .mockResolvedValueOnce(null);
-    await expect(service.discardDraft('demo', 'operator')).rejects.toBeInstanceOf(NotFoundException);
+    await expect(
+      service.discardDraft('demo', 'operator'),
+    ).rejects.toBeInstanceOf(NotFoundException);
   });
 
   it('does not discard the only draft of an unpublished course', async () => {
@@ -259,14 +276,21 @@ describe('CourseDraftService', () => {
       .mockResolvedValueOnce({ id: 'published', publishedAt: new Date() })
       .mockResolvedValueOnce({ id: 'draft' });
     prisma.courseVersion.delete.mockResolvedValue({});
-    await expect(service.discardDraft('demo', 'operator')).resolves.toBeUndefined();
-    expect(prisma.courseVersion.delete).toHaveBeenCalledWith({ where: { id: 'draft' } });
+    await expect(
+      service.discardDraft('demo', 'operator'),
+    ).resolves.toBeUndefined();
+    expect(prisma.courseVersion.delete).toHaveBeenCalledWith({
+      where: { id: 'draft' },
+    });
   });
 
   it('merges metadata on the draft and maps the level without touching Course', async () => {
     const { prisma, audit, service } = setup();
     const draft = { id: 'draft', meta: { title: 'Old', tags: ['one'] } };
-    prisma.course.findUnique.mockResolvedValue({ id: 'course-1', slug: 'demo' });
+    prisma.course.findUnique.mockResolvedValue({
+      id: 'course-1',
+      slug: 'demo',
+    });
     prisma.courseVersion.findFirst
       .mockResolvedValueOnce(draft)
       .mockResolvedValueOnce({
@@ -287,7 +311,11 @@ describe('CourseDraftService', () => {
           description: 'Added',
         },
       });
-    await service.updateCourse('demo', { title: 'New', level: 'Intermediate' }, 'operator');
+    await service.updateCourse(
+      'demo',
+      { title: 'New', level: 'Intermediate' },
+      'operator',
+    );
     await service.updateCourse('demo', { description: 'Added' }, 'operator');
     expect(prisma.courseVersion.update).toHaveBeenNthCalledWith(1, {
       where: { id: 'draft' },
@@ -308,25 +336,43 @@ describe('CourseDraftService', () => {
     });
     expect(prisma.course.update).not.toHaveBeenCalled();
     expect(audit.record).toHaveBeenCalledWith(
-      expect.objectContaining({ action: 'admin.draft.updateCourse', targetId: 'draft' }),
+      expect.objectContaining({
+        action: 'admin.draft.updateCourse',
+        targetId: 'draft',
+      }),
       expect.anything(),
     );
   });
 
   it('upserts welcome data for a draft and records audit', async () => {
     const { prisma, audit, service } = setup();
-    prisma.course.findUnique.mockResolvedValue({ id: 'course-1', slug: 'demo' });
+    prisma.course.findUnique.mockResolvedValue({
+      id: 'course-1',
+      slug: 'demo',
+    });
     prisma.courseVersion.findFirst.mockResolvedValue({ id: 'draft' });
-    prisma.courseWelcome.upsert.mockResolvedValue({ overviewHeading: 'Edited' });
-    prisma.courseVersion.findUnique.mockResolvedValue({ id: 'draft', welcome: { overviewHeading: 'Edited' } });
-    await service.updateWelcome('demo', { overviewHeading: 'Edited' }, 'operator');
+    prisma.courseWelcome.upsert.mockResolvedValue({
+      overviewHeading: 'Edited',
+    });
+    prisma.courseVersion.findUnique.mockResolvedValue({
+      id: 'draft',
+      welcome: { overviewHeading: 'Edited' },
+    });
+    await service.updateWelcome(
+      'demo',
+      { overviewHeading: 'Edited' },
+      'operator',
+    );
     expect(prisma.courseWelcome.upsert).toHaveBeenCalledWith({
       where: { courseVersionId: 'draft' },
       create: { courseVersionId: 'draft', overviewHeading: 'Edited' },
       update: { overviewHeading: 'Edited' },
     });
     expect(audit.record).toHaveBeenCalledWith(
-      expect.objectContaining({ action: 'admin.draft.updateWelcome', targetId: 'draft' }),
+      expect.objectContaining({
+        action: 'admin.draft.updateWelcome',
+        targetId: 'draft',
+      }),
       expect.anything(),
     );
   });

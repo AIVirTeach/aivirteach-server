@@ -17,7 +17,11 @@ import {
 } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { MulterError } from 'multer';
-import type { CallHandler, ExecutionContext, NestInterceptor } from '@nestjs/common';
+import type {
+  CallHandler,
+  ExecutionContext,
+  NestInterceptor,
+} from '@nestjs/common';
 import { catchError, throwError, type Observable } from 'rxjs';
 import type { Response } from 'express';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
@@ -55,13 +59,18 @@ const UploadFileInterceptor = FileInterceptor('file', {
 class ChineseAssetUploadInterceptor implements NestInterceptor {
   private readonly delegate = new UploadFileInterceptor();
 
-  async intercept(context: ExecutionContext, next: CallHandler): Promise<Observable<unknown>> {
+  async intercept(
+    context: ExecutionContext,
+    next: CallHandler,
+  ): Promise<Observable<unknown>> {
     try {
       const stream = await this.delegate.intercept(context, next);
       return stream.pipe(
         catchError((error: unknown) => {
           if (isFileSizeLimitError(error)) {
-            return throwError(() => new BadRequestException('图片大小不能超过 5 MiB'));
+            return throwError(
+              () => new BadRequestException('图片大小不能超过 5 MiB'),
+            );
           }
           return throwError(() => error);
         }),
@@ -83,7 +92,8 @@ function isFileSizeLimitError(error: unknown): boolean {
       'getStatus' in error &&
       typeof error.getStatus === 'function' &&
       error.getStatus() === 413) ||
-    (error instanceof BadRequestException && String(error.getResponse()).includes('File too large'))
+    (error instanceof BadRequestException &&
+      String(error.getResponse()).includes('File too large'))
   );
 }
 

@@ -146,6 +146,7 @@ export class DraftContentService {
           select: { position: true },
         });
         const { activity, content: _unused, ...lesson } = data;
+        void _unused;
         await tx.courseLesson.create({
           data: {
             ...lesson,
@@ -391,7 +392,7 @@ export class DraftContentService {
         },
         tx,
       );
-      return updated as DraftVersion;
+      return updated;
     });
   }
 }

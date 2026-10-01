@@ -71,7 +71,8 @@ export class CourseDraftService {
                     objectives: lesson.objectives,
                     sourceRange: lesson.sourceRange ?? undefined,
                     body: lesson.body,
-                    content: lesson.content === null ? Prisma.DbNull : lesson.content,
+                    content:
+                      lesson.content === null ? Prisma.DbNull : lesson.content,
                     activityType: lesson.activityType,
                     activityPrompt: lesson.activityPrompt,
                     activityCompletionType: lesson.activityCompletionType,
@@ -121,7 +122,7 @@ export class CourseDraftService {
           },
           tx,
         );
-        return created as DraftVersion;
+        return created;
       });
       return { draft, created: true };
     } catch (error) {
@@ -209,7 +210,7 @@ export class CourseDraftService {
         },
         tx,
       );
-      return updated as DraftVersion;
+      return updated;
     });
   }
 
@@ -229,7 +230,7 @@ export class CourseDraftService {
       patch.howItWorksSteps =
         parsed.howItWorksSteps === null
           ? Prisma.DbNull
-          : (parsed.howItWorksSteps as Prisma.InputJsonValue);
+          : parsed.howItWorksSteps;
     }
     const draft = await this.requireDraft(slug);
     await this.prisma.$transaction(async (tx) => {
@@ -264,10 +265,12 @@ export class CourseDraftService {
       where: { courseId, publishedAt: null },
       orderBy: { version: 'desc' },
       include: DRAFT_INCLUDE,
-    }) as Promise<DraftVersion | null>;
+    });
   }
 }
 
-function isJsonObject(value: Prisma.JsonValue | null): value is Prisma.JsonObject {
+function isJsonObject(
+  value: Prisma.JsonValue | null,
+): value is Prisma.JsonObject {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
 }

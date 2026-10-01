@@ -1,4 +1,3 @@
-import { UnprocessableEntityException } from '@nestjs/common';
 import { AuditActorType } from '@prisma/client';
 import { AuditService } from '../audit/audit.service';
 import { PrismaService } from '../prisma/prisma.service';
@@ -181,7 +180,7 @@ describe('CoursePublishService.publish', () => {
           props: { assetId: 'foreign', alt: 'Foreign' },
         },
       ],
-    } as unknown as typeof invalidDraft.modules[0]['lessons'][0]['content'];
+    } as unknown as (typeof invalidDraft.modules)[0]['lessons'][0]['content'];
     const { service, prisma, audit } = setup({ draft: invalidDraft });
 
     await expect(

@@ -2,7 +2,10 @@ import { sniffImageMime } from './image-sniff';
 
 describe('sniffImageMime', () => {
   it.each([
-    [Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), 'image/png'],
+    [
+      Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+      'image/png',
+    ],
     [Buffer.from([0xff, 0xd8, 0xff, 0x00]), 'image/jpeg'],
     [Buffer.from('GIF87a'), 'image/gif'],
     [Buffer.from('GIF89a'), 'image/gif'],
@@ -22,7 +25,9 @@ describe('sniffImageMime', () => {
   });
 
   it('uses bytes rather than a filename extension', () => {
-    const pngNamedJpg = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+    const pngNamedJpg = Buffer.from([
+      0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a,
+    ]);
     expect(sniffImageMime(pngNamedJpg)).toBe('image/png');
   });
 });

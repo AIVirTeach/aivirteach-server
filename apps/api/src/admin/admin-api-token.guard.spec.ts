@@ -17,9 +17,9 @@ describe('AdminApiTokenGuard', () => {
   const guard = new AdminApiTokenGuard(ENV_STUB);
 
   it('正确令牌放行', () => {
-    expect(guard.canActivate(contextWith(`Bearer ${ENV_STUB.ADMIN_API_TOKEN}`))).toBe(
-      true,
-    );
+    expect(
+      guard.canActivate(contextWith(`Bearer ${ENV_STUB.ADMIN_API_TOKEN}`)),
+    ).toBe(true);
   });
 
   it.each([

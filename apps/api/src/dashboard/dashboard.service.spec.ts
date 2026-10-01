@@ -77,10 +77,20 @@ describe('DashboardService.getDashboard', () => {
         lessonCount: 4,
         published: true,
         coverAssetId: null,
-        versions: [{ modules: [
-          { title: 'Module One', lessons: [{ contentId: 'lesson_1' }, { contentId: 'lesson_2' }] },
-          { title: 'Module Two', lessons: [{ contentId: 'lesson_3' }, { contentId: 'lesson_4' }] },
-        ] }],
+        versions: [
+          {
+            modules: [
+              {
+                title: 'Module One',
+                lessons: [{ contentId: 'lesson_1' }, { contentId: 'lesson_2' }],
+              },
+              {
+                title: 'Module Two',
+                lessons: [{ contentId: 'lesson_3' }, { contentId: 'lesson_4' }],
+              },
+            ],
+          },
+        ],
       },
       progress: { currentLessonContentId: 'lesson_3' },
       courseVersion: { modules: [] },
@@ -89,9 +99,13 @@ describe('DashboardService.getDashboard', () => {
 
     const dashboard = await service.getDashboard('user_1');
 
-    expect(prisma.enrollment.findFirst).toHaveBeenCalledWith(expect.objectContaining({
-      include: expect.objectContaining({ course: { include: { versions: LATEST_PUBLISHED_VERSION } } }),
-    }));
+    expect(prisma.enrollment.findFirst).toHaveBeenCalledWith(
+      expect.objectContaining({
+        include: expect.objectContaining({
+          course: { include: { versions: LATEST_PUBLISHED_VERSION } },
+        }),
+      }),
+    );
 
     expect(dashboard.activeCourse).not.toBeNull();
     expect(dashboard.activeCourse?.id).toBe('sample-course');
@@ -130,7 +144,15 @@ describe('DashboardService.getDashboard', () => {
         lessonCount: 2,
         published: true,
         coverAssetId: null,
-        versions: [{ modules: [{ lessons: [{ contentId: 'lesson_1' }, { contentId: 'lesson_2' }] }] }],
+        versions: [
+          {
+            modules: [
+              {
+                lessons: [{ contentId: 'lesson_1' }, { contentId: 'lesson_2' }],
+              },
+            ],
+          },
+        ],
       },
       progress: { currentLessonContentId: null },
       courseVersion: { modules: [] },

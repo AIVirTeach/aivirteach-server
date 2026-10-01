@@ -34,15 +34,22 @@ describe('LabsClient.createVm', () => {
 
   it('缺少 Labs 配置时抛出 ServiceUnavailableException', async () => {
     const client = await buildClient({});
-    await expect(client.createVm('workspace_1')).rejects.toBeInstanceOf(ServiceUnavailableException);
+    await expect(client.createVm('workspace_1')).rejects.toBeInstanceOf(
+      ServiceUnavailableException,
+    );
   });
 
   it('POST /v1/vms，带上 bearer token 和 CF Access header，解析成功响应', async () => {
     const fetchMock = jest.fn().mockResolvedValue({
       ok: true,
-      json: async () => ({ lab_id: 'workspace_1', username: 'learner', rdp_password: 'secret', rdp_port: 3389 }),
+      json: async () => ({
+        lab_id: 'workspace_1',
+        username: 'learner',
+        rdp_password: 'secret',
+        rdp_port: 3389,
+      }),
     });
-    global.fetch = fetchMock as unknown as typeof fetch;
+    global.fetch = fetchMock;
 
     const client = await buildClient({
       LABS_VM_BASE_URL: 'https://labs-vm.example.com',
@@ -53,7 +60,11 @@ describe('LabsClient.createVm', () => {
 
     const result = await client.createVm('workspace_1');
 
-    expect(result).toEqual({ labId: 'workspace_1', username: 'learner', rdpPort: 3389 });
+    expect(result).toEqual({
+      labId: 'workspace_1',
+      username: 'learner',
+      rdpPort: 3389,
+    });
     expect(fetchMock).toHaveBeenCalledWith(
       'https://labs-vm.example.com/v1/vms',
       expect.objectContaining({
@@ -73,14 +84,16 @@ describe('LabsClient.createVm', () => {
       status: 504,
       statusText: 'Gateway Timeout',
       text: async () => 'Command timed out after 180 seconds.',
-    }) as unknown as typeof fetch;
+    });
 
     const client = await buildClient({
       LABS_VM_BASE_URL: 'https://labs-vm.example.com',
       AIVIRTEACH_API_TOKEN: 'labs-token',
     });
 
-    await expect(client.createVm('workspace_1')).rejects.toThrow('学习环境暂时连接不上，请稍后重试。');
+    await expect(client.createVm('workspace_1')).rejects.toThrow(
+      '学习环境暂时连接不上，请稍后重试。',
+    );
   });
 
   it('Labs 返回 403（权限/配置问题）时提示联系客服，不透出原始响应内容', async () => {
@@ -88,26 +101,35 @@ describe('LabsClient.createVm', () => {
       ok: false,
       status: 403,
       statusText: 'Forbidden',
-      text: async () => '<!doctype html><html><body>DNS points to prohibited IP</body></html>',
-    }) as unknown as typeof fetch;
+      text: async () =>
+        '<!doctype html><html><body>DNS points to prohibited IP</body></html>',
+    });
 
     const client = await buildClient({
       LABS_VM_BASE_URL: 'https://labs-vm.example.com',
       AIVIRTEACH_API_TOKEN: 'labs-token',
     });
 
-    await expect(client.createVm('workspace_1')).rejects.toThrow('学习环境暂时无法使用，请稍后再试或联系客服。');
+    await expect(client.createVm('workspace_1')).rejects.toThrow(
+      '学习环境暂时无法使用，请稍后再试或联系客服。',
+    );
   });
 
   it('网络层失败（fetch 本身 reject，比如超时/DNS 失败）时提示重试', async () => {
-    global.fetch = jest.fn().mockRejectedValue(new DOMException('The operation was aborted.', 'AbortError'));
+    global.fetch = jest
+      .fn()
+      .mockRejectedValue(
+        new DOMException('The operation was aborted.', 'AbortError'),
+      );
 
     const client = await buildClient({
       LABS_VM_BASE_URL: 'https://labs-vm.example.com',
       AIVIRTEACH_API_TOKEN: 'labs-token',
     });
 
-    await expect(client.createVm('workspace_1')).rejects.toThrow('学习环境暂时连接不上，请稍后重试。');
+    await expect(client.createVm('workspace_1')).rejects.toThrow(
+      '学习环境暂时连接不上，请稍后重试。',
+    );
   });
 });
 
@@ -120,9 +142,9 @@ describe('LabsClient.createBrowserSession', () => {
 
   it('缺少 LABS_VM_BASE_URL 或 AIVIRTEACH_SESSION_TOKEN 时抛出 ServiceUnavailableException', async () => {
     const client = await buildClient({});
-    await expect(client.createBrowserSession('workspace_1', 'user_1')).rejects.toBeInstanceOf(
-      ServiceUnavailableException,
-    );
+    await expect(
+      client.createBrowserSession('workspace_1', 'user_1'),
+    ).rejects.toBeInstanceOf(ServiceUnavailableException);
   });
 
   it('AIVIRTEACH_SESSION_TOKEN 跟 AIVIRTEACH_API_TOKEN 相同时抛出 ServiceUnavailableException', async () => {
@@ -131,9 +153,9 @@ describe('LabsClient.createBrowserSession', () => {
       AIVIRTEACH_API_TOKEN: 'same-token',
       AIVIRTEACH_SESSION_TOKEN: 'same-token',
     });
-    await expect(client.createBrowserSession('workspace_1', 'user_1')).rejects.toBeInstanceOf(
-      ServiceUnavailableException,
-    );
+    await expect(
+      client.createBrowserSession('workspace_1', 'user_1'),
+    ).rejects.toBeInstanceOf(ServiceUnavailableException);
   });
 
   it('POST /v1/vms/:labId/browser-sessions，state=ready 时把 expires_at 转成 ISO 字符串', async () => {
@@ -146,7 +168,7 @@ describe('LabsClient.createBrowserSession', () => {
         expires_at: 1798329900000,
       }),
     });
-    global.fetch = fetchMock as unknown as typeof fetch;
+    global.fetch = fetchMock;
 
     const client = await buildClient({
       LABS_VM_BASE_URL: 'https://labs-vm.example.com',
@@ -165,7 +187,9 @@ describe('LabsClient.createBrowserSession', () => {
       'https://labs-vm.example.com/v1/vms/workspace_1/browser-sessions',
       expect.objectContaining({
         method: 'POST',
-        headers: expect.objectContaining({ Authorization: 'Bearer session-token' }),
+        headers: expect.objectContaining({
+          Authorization: 'Bearer session-token',
+        }),
         body: JSON.stringify({ subject: 'user_1' }),
       }),
     );
@@ -176,7 +200,7 @@ describe('LabsClient.createBrowserSession', () => {
       ok: true,
       json: async () => ({ lab_id: 'workspace_1', state: 'starting' }),
     });
-    global.fetch = fetchMock as unknown as typeof fetch;
+    global.fetch = fetchMock;
 
     const client = await buildClient({
       LABS_VM_BASE_URL: 'https://labs-vm.example.com',
@@ -202,7 +226,7 @@ describe('LabsClient.createBrowserSession', () => {
     global.fetch = jest.fn().mockResolvedValue({
       ok: true,
       json: async () => ({ lab_id: 'workspace_1', state: 'starting' }),
-    }) as unknown as typeof fetch;
+    });
 
     const client = await buildClient({
       LABS_VM_BASE_URL: 'https://labs-vm.example.com',
@@ -211,7 +235,12 @@ describe('LabsClient.createBrowserSession', () => {
 
     const result = await client.createBrowserSession('workspace_1', 'user_1');
 
-    expect(result).toEqual({ labId: 'workspace_1', state: 'starting', data: undefined, expiresAt: undefined });
+    expect(result).toEqual({
+      labId: 'workspace_1',
+      state: 'starting',
+      data: undefined,
+      expiresAt: undefined,
+    });
   });
 
   it('Labs 返回 5xx（瞬时性问题）时提示重试', async () => {
@@ -220,14 +249,16 @@ describe('LabsClient.createBrowserSession', () => {
       status: 502,
       statusText: 'Bad Gateway',
       text: async () => 'Command exited with 1.',
-    }) as unknown as typeof fetch;
+    });
 
     const client = await buildClient({
       LABS_VM_BASE_URL: 'https://labs-vm.example.com',
       AIVIRTEACH_SESSION_TOKEN: 'session-token',
     });
 
-    await expect(client.createBrowserSession('workspace_1', 'user_1')).rejects.toThrow('远程桌面连接失败，请稍后重试。');
+    await expect(
+      client.createBrowserSession('workspace_1', 'user_1'),
+    ).rejects.toThrow('远程桌面连接失败，请稍后重试。');
   });
 
   it('Labs 返回 404（权限/配置问题）时提示联系客服', async () => {
@@ -236,25 +267,33 @@ describe('LabsClient.createBrowserSession', () => {
       status: 404,
       statusText: 'Not Found',
       text: async () => 'no such lab',
-    }) as unknown as typeof fetch;
+    });
 
     const client = await buildClient({
       LABS_VM_BASE_URL: 'https://labs-vm.example.com',
       AIVIRTEACH_SESSION_TOKEN: 'session-token',
     });
 
-    await expect(client.createBrowserSession('workspace_1', 'user_1')).rejects.toThrow('远程桌面暂时无法使用，请联系客服。');
+    await expect(
+      client.createBrowserSession('workspace_1', 'user_1'),
+    ).rejects.toThrow('远程桌面暂时无法使用，请联系客服。');
   });
 
   it('网络层失败（fetch 本身 reject）时提示重试', async () => {
-    global.fetch = jest.fn().mockRejectedValue(new DOMException('The operation was aborted.', 'AbortError'));
+    global.fetch = jest
+      .fn()
+      .mockRejectedValue(
+        new DOMException('The operation was aborted.', 'AbortError'),
+      );
 
     const client = await buildClient({
       LABS_VM_BASE_URL: 'https://labs-vm.example.com',
       AIVIRTEACH_SESSION_TOKEN: 'session-token',
     });
 
-    await expect(client.createBrowserSession('workspace_1', 'user_1')).rejects.toThrow('远程桌面连接失败，请稍后重试。');
+    await expect(
+      client.createBrowserSession('workspace_1', 'user_1'),
+    ).rejects.toThrow('远程桌面连接失败，请稍后重试。');
   });
 });
 
@@ -267,15 +306,21 @@ describe('LabsClient.stopVm', () => {
 
   it('缺少 Labs 配置时抛出 ServiceUnavailableException', async () => {
     const client = await buildClient({});
-    await expect(client.stopVm('workspace_1')).rejects.toBeInstanceOf(ServiceUnavailableException);
+    await expect(client.stopVm('workspace_1')).rejects.toBeInstanceOf(
+      ServiceUnavailableException,
+    );
   });
 
   it('POST /v1/vms/:labId/actions/stop，带上 bearer token 和 CF Access header', async () => {
     const fetchMock = jest.fn().mockResolvedValue({
       ok: true,
-      json: async () => ({ lab_id: 'workspace_1', operation: 'stop', message: 'ok' }),
+      json: async () => ({
+        lab_id: 'workspace_1',
+        operation: 'stop',
+        message: 'ok',
+      }),
     });
-    global.fetch = fetchMock as unknown as typeof fetch;
+    global.fetch = fetchMock;
 
     const client = await buildClient({
       LABS_VM_BASE_URL: 'https://labs-vm.example.com',
@@ -305,14 +350,16 @@ describe('LabsClient.stopVm', () => {
       status: 502,
       statusText: 'Bad Gateway',
       text: async () => 'Command exited with 1.',
-    }) as unknown as typeof fetch;
+    });
 
     const client = await buildClient({
       LABS_VM_BASE_URL: 'https://labs-vm.example.com',
       AIVIRTEACH_API_TOKEN: 'labs-token',
     });
 
-    await expect(client.stopVm('workspace_1')).rejects.toThrow('学习环境暂时连接不上，请稍后重试。');
+    await expect(client.stopVm('workspace_1')).rejects.toThrow(
+      '学习环境暂时连接不上，请稍后重试。',
+    );
   });
 
   it('Labs 返回 403（权限/配置问题）时提示联系客服', async () => {
@@ -321,25 +368,33 @@ describe('LabsClient.stopVm', () => {
       status: 403,
       statusText: 'Forbidden',
       text: async () => 'forbidden',
-    }) as unknown as typeof fetch;
+    });
 
     const client = await buildClient({
       LABS_VM_BASE_URL: 'https://labs-vm.example.com',
       AIVIRTEACH_API_TOKEN: 'labs-token',
     });
 
-    await expect(client.stopVm('workspace_1')).rejects.toThrow('学习环境暂时无法使用，请稍后再试或联系客服。');
+    await expect(client.stopVm('workspace_1')).rejects.toThrow(
+      '学习环境暂时无法使用，请稍后再试或联系客服。',
+    );
   });
 
   it('网络层失败（fetch 本身 reject）时提示重试', async () => {
-    global.fetch = jest.fn().mockRejectedValue(new DOMException('The operation was aborted.', 'AbortError'));
+    global.fetch = jest
+      .fn()
+      .mockRejectedValue(
+        new DOMException('The operation was aborted.', 'AbortError'),
+      );
 
     const client = await buildClient({
       LABS_VM_BASE_URL: 'https://labs-vm.example.com',
       AIVIRTEACH_API_TOKEN: 'labs-token',
     });
 
-    await expect(client.stopVm('workspace_1')).rejects.toThrow('学习环境暂时连接不上，请稍后重试。');
+    await expect(client.stopVm('workspace_1')).rejects.toThrow(
+      '学习环境暂时连接不上，请稍后重试。',
+    );
   });
 });
 
@@ -351,21 +406,32 @@ describe('LabsClient.getVmState', () => {
   });
 
   const buildConfigured = () =>
-    buildClient({ LABS_VM_BASE_URL: 'https://labs-vm.example.com', AIVIRTEACH_API_TOKEN: 'labs-token' });
+    buildClient({
+      LABS_VM_BASE_URL: 'https://labs-vm.example.com',
+      AIVIRTEACH_API_TOKEN: 'labs-token',
+    });
 
   it('GET /v1/vms/:labId/status，返回 dominfo 里的 State', async () => {
     const fetchMock = jest.fn().mockResolvedValue({
       ok: true,
       json: async () => ({ Id: '-', Name: 'lab_1', State: 'shut off' }),
     });
-    global.fetch = fetchMock as unknown as typeof fetch;
+    global.fetch = fetchMock;
 
     const client = await buildConfigured();
 
-    await expect(client.getVmState('lab_1')).resolves.toEqual({ kind: 'present', state: 'shut off' });
+    await expect(client.getVmState('lab_1')).resolves.toEqual({
+      kind: 'present',
+      state: 'shut off',
+    });
     expect(fetchMock).toHaveBeenCalledWith(
       'https://labs-vm.example.com/v1/vms/lab_1/status',
-      expect.objectContaining({ method: 'GET', headers: expect.objectContaining({ Authorization: 'Bearer labs-token' }) }),
+      expect.objectContaining({
+        method: 'GET',
+        headers: expect.objectContaining({
+          Authorization: 'Bearer labs-token',
+        }),
+      }),
     );
   });
 
@@ -375,11 +441,13 @@ describe('LabsClient.getVmState', () => {
       status: 404,
       statusText: 'Not Found',
       text: async () => JSON.stringify({ detail: 'ERROR: VM not found' }),
-    }) as unknown as typeof fetch;
+    });
 
     const client = await buildConfigured();
 
-    await expect(client.getVmState('lab_1')).resolves.toEqual({ kind: 'missing' });
+    await expect(client.getVmState('lab_1')).resolves.toEqual({
+      kind: 'missing',
+    });
   });
 
   it('libvirt 的 "Domain not found" 措辞同样视为 missing', async () => {
@@ -387,20 +455,31 @@ describe('LabsClient.getVmState', () => {
       ok: false,
       status: 404,
       statusText: 'Not Found',
-      text: async () => JSON.stringify({ detail: "error: Domain not found: no domain with matching name 'lab_1'" }),
-    }) as unknown as typeof fetch;
+      text: async () =>
+        JSON.stringify({
+          detail:
+            "error: Domain not found: no domain with matching name 'lab_1'",
+        }),
+    });
 
     const client = await buildConfigured();
 
-    await expect(client.getVmState('lab_1')).resolves.toEqual({ kind: 'missing' });
+    await expect(client.getVmState('lab_1')).resolves.toEqual({
+      kind: 'missing',
+    });
   });
 
   it('200 但响应里没有 State 时返回 unknown，不当成已关机', async () => {
-    global.fetch = jest.fn().mockResolvedValue({ ok: true, json: async () => ({ Name: 'lab_1' }) }) as unknown as typeof fetch;
+    global.fetch = jest
+      .fn()
+      .mockResolvedValue({ ok: true, json: async () => ({ Name: 'lab_1' }) });
 
     const client = await buildConfigured();
 
-    await expect(client.getVmState('lab_1')).resolves.toEqual({ kind: 'present', state: 'unknown' });
+    await expect(client.getVmState('lab_1')).resolves.toEqual({
+      kind: 'present',
+      state: 'unknown',
+    });
   });
 
   it('Labs 返回 503（libvirt 不可用）时抛错，不能当成 VM 不存在', async () => {
@@ -408,12 +487,17 @@ describe('LabsClient.getVmState', () => {
       ok: false,
       status: 503,
       statusText: 'Service Unavailable',
-      text: async () => JSON.stringify({ detail: "ERROR: libvirt unavailable while checking 'lab_1'" }),
-    }) as unknown as typeof fetch;
+      text: async () =>
+        JSON.stringify({
+          detail: "ERROR: libvirt unavailable while checking 'lab_1'",
+        }),
+    });
 
     const client = await buildConfigured();
 
-    await expect(client.getVmState('lab_1')).rejects.toThrow('学习环境暂时连接不上，请稍后重试。');
+    await expect(client.getVmState('lab_1')).rejects.toThrow(
+      '学习环境暂时连接不上，请稍后重试。',
+    );
   });
 
   it('404 但不是 Labs 的 "VM not found"（例如路由/网关配错）时抛错，不能当成 VM 不存在', async () => {
@@ -422,11 +506,13 @@ describe('LabsClient.getVmState', () => {
       status: 404,
       statusText: 'Not Found',
       text: async () => JSON.stringify({ detail: 'Not Found' }),
-    }) as unknown as typeof fetch;
+    });
 
     const client = await buildConfigured();
 
-    await expect(client.getVmState('lab_1')).rejects.toThrow('学习环境暂时无法使用，请稍后再试或联系客服。');
+    await expect(client.getVmState('lab_1')).rejects.toThrow(
+      '学习环境暂时无法使用，请稍后再试或联系客服。',
+    );
   });
 
   it('403（鉴权/隧道配置问题）时抛错，不能当成 VM 不存在', async () => {
@@ -435,11 +521,13 @@ describe('LabsClient.getVmState', () => {
       status: 403,
       statusText: 'Forbidden',
       text: async () => '<html>Cloudflare Access</html>',
-    }) as unknown as typeof fetch;
+    });
 
     const client = await buildConfigured();
 
-    await expect(client.getVmState('lab_1')).rejects.toThrow('学习环境暂时无法使用，请稍后再试或联系客服。');
+    await expect(client.getVmState('lab_1')).rejects.toThrow(
+      '学习环境暂时无法使用，请稍后再试或联系客服。',
+    );
   });
 });
 
@@ -452,15 +540,21 @@ describe('LabsClient.startVm', () => {
 
   it('缺少 Labs 配置时抛出 ServiceUnavailableException', async () => {
     const client = await buildClient({});
-    await expect(client.startVm('workspace_1')).rejects.toBeInstanceOf(ServiceUnavailableException);
+    await expect(client.startVm('workspace_1')).rejects.toBeInstanceOf(
+      ServiceUnavailableException,
+    );
   });
 
   it('POST /v1/vms/:labId/actions/start，带上 bearer token', async () => {
     const fetchMock = jest.fn().mockResolvedValue({
       ok: true,
-      json: async () => ({ lab_id: 'workspace_1', operation: 'start', message: 'ok' }),
+      json: async () => ({
+        lab_id: 'workspace_1',
+        operation: 'start',
+        message: 'ok',
+      }),
     });
-    global.fetch = fetchMock as unknown as typeof fetch;
+    global.fetch = fetchMock;
 
     const client = await buildClient({
       LABS_VM_BASE_URL: 'https://labs-vm.example.com',
@@ -473,7 +567,9 @@ describe('LabsClient.startVm', () => {
       'https://labs-vm.example.com/v1/vms/workspace_1/actions/start',
       expect.objectContaining({
         method: 'POST',
-        headers: expect.objectContaining({ Authorization: 'Bearer labs-token' }),
+        headers: expect.objectContaining({
+          Authorization: 'Bearer labs-token',
+        }),
       }),
     );
   });
@@ -484,14 +580,16 @@ describe('LabsClient.startVm', () => {
       status: 504,
       statusText: 'Gateway Timeout',
       text: async () => 'Command timed out after 180 seconds.',
-    }) as unknown as typeof fetch;
+    });
 
     const client = await buildClient({
       LABS_VM_BASE_URL: 'https://labs-vm.example.com',
       AIVIRTEACH_API_TOKEN: 'labs-token',
     });
 
-    await expect(client.startVm('workspace_1')).rejects.toThrow('学习环境暂时连接不上，请稍后重试。');
+    await expect(client.startVm('workspace_1')).rejects.toThrow(
+      '学习环境暂时连接不上，请稍后重试。',
+    );
   });
 
   it('Labs 返回 403（权限/配置问题）时提示联系客服', async () => {
@@ -500,25 +598,33 @@ describe('LabsClient.startVm', () => {
       status: 403,
       statusText: 'Forbidden',
       text: async () => 'forbidden',
-    }) as unknown as typeof fetch;
+    });
 
     const client = await buildClient({
       LABS_VM_BASE_URL: 'https://labs-vm.example.com',
       AIVIRTEACH_API_TOKEN: 'labs-token',
     });
 
-    await expect(client.startVm('workspace_1')).rejects.toThrow('学习环境暂时无法使用，请稍后再试或联系客服。');
+    await expect(client.startVm('workspace_1')).rejects.toThrow(
+      '学习环境暂时无法使用，请稍后再试或联系客服。',
+    );
   });
 
   it('网络层失败（fetch 本身 reject）时提示重试', async () => {
-    global.fetch = jest.fn().mockRejectedValue(new DOMException('The operation was aborted.', 'AbortError'));
+    global.fetch = jest
+      .fn()
+      .mockRejectedValue(
+        new DOMException('The operation was aborted.', 'AbortError'),
+      );
 
     const client = await buildClient({
       LABS_VM_BASE_URL: 'https://labs-vm.example.com',
       AIVIRTEACH_API_TOKEN: 'labs-token',
     });
 
-    await expect(client.startVm('workspace_1')).rejects.toThrow('学习环境暂时连接不上，请稍后重试。');
+    await expect(client.startVm('workspace_1')).rejects.toThrow(
+      '学习环境暂时连接不上，请稍后重试。',
+    );
   });
 });
 
@@ -531,7 +637,9 @@ describe('LabsClient.exchangeGuacamoleToken', () => {
 
   it('缺少 LABS_GUACAMOLE_BASE_URL 时抛出 ServiceUnavailableException', async () => {
     const client = await buildClient({});
-    await expect(client.exchangeGuacamoleToken('ticket')).rejects.toBeInstanceOf(ServiceUnavailableException);
+    await expect(
+      client.exchangeGuacamoleToken('ticket'),
+    ).rejects.toBeInstanceOf(ServiceUnavailableException);
   });
 
   it('POST {base}api/tokens，表单编码 data，返回 authToken 和 websocketUrl（http 转 ws）', async () => {
@@ -539,9 +647,11 @@ describe('LabsClient.exchangeGuacamoleToken', () => {
       ok: true,
       json: async () => ({ authToken: 'real-auth-token' }),
     });
-    global.fetch = fetchMock as unknown as typeof fetch;
+    global.fetch = fetchMock;
 
-    const client = await buildClient({ LABS_GUACAMOLE_BASE_URL: 'http://localhost:8080/guacamole/' });
+    const client = await buildClient({
+      LABS_GUACAMOLE_BASE_URL: 'http://localhost:8080/guacamole/',
+    });
 
     const result = await client.exchangeGuacamoleToken('encrypted-ticket');
 
@@ -551,7 +661,10 @@ describe('LabsClient.exchangeGuacamoleToken', () => {
     });
     const [url, init] = fetchMock.mock.calls[0];
     expect(url).toBe('http://localhost:8080/guacamole/api/tokens');
-    expect(init).toMatchObject({ method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' } });
+    expect(init).toMatchObject({
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    });
     expect(String(init.body)).toBe('data=encrypted-ticket');
   });
 
@@ -559,13 +672,17 @@ describe('LabsClient.exchangeGuacamoleToken', () => {
     global.fetch = jest.fn().mockResolvedValue({
       ok: true,
       json: async () => ({ authToken: 'token' }),
-    }) as unknown as typeof fetch;
+    });
 
-    const client = await buildClient({ LABS_GUACAMOLE_BASE_URL: 'https://tunnel.trycloudflare.com/guacamole/' });
+    const client = await buildClient({
+      LABS_GUACAMOLE_BASE_URL: 'https://tunnel.trycloudflare.com/guacamole/',
+    });
 
     const result = await client.exchangeGuacamoleToken('ticket');
 
-    expect(result.websocketUrl).toBe('wss://tunnel.trycloudflare.com/guacamole/websocket-tunnel');
+    expect(result.websocketUrl).toBe(
+      'wss://tunnel.trycloudflare.com/guacamole/websocket-tunnel',
+    );
   });
 
   it('基址缺结尾斜杠也能正确拼接，不丢最后一段路径', async () => {
@@ -573,13 +690,17 @@ describe('LabsClient.exchangeGuacamoleToken', () => {
       ok: true,
       json: async () => ({ authToken: 'token' }),
     });
-    global.fetch = fetchMock as unknown as typeof fetch;
+    global.fetch = fetchMock;
 
-    const client = await buildClient({ LABS_GUACAMOLE_BASE_URL: 'https://tunnel.trycloudflare.com/guacamole' });
+    const client = await buildClient({
+      LABS_GUACAMOLE_BASE_URL: 'https://tunnel.trycloudflare.com/guacamole',
+    });
 
     await client.exchangeGuacamoleToken('ticket');
 
-    expect(fetchMock.mock.calls[0][0]).toBe('https://tunnel.trycloudflare.com/guacamole/api/tokens');
+    expect(fetchMock.mock.calls[0][0]).toBe(
+      'https://tunnel.trycloudflare.com/guacamole/api/tokens',
+    );
   });
 
   it('Guacamole 返回 403（权限/配置问题）时提示联系客服', async () => {
@@ -588,11 +709,15 @@ describe('LabsClient.exchangeGuacamoleToken', () => {
       status: 403,
       statusText: 'Forbidden',
       text: async () => 'Permission Denied.',
-    }) as unknown as typeof fetch;
+    });
 
-    const client = await buildClient({ LABS_GUACAMOLE_BASE_URL: 'http://localhost:8080/guacamole/' });
+    const client = await buildClient({
+      LABS_GUACAMOLE_BASE_URL: 'http://localhost:8080/guacamole/',
+    });
 
-    await expect(client.exchangeGuacamoleToken('bad-ticket')).rejects.toThrow('远程桌面暂时无法使用，请联系客服。');
+    await expect(client.exchangeGuacamoleToken('bad-ticket')).rejects.toThrow(
+      '远程桌面暂时无法使用，请联系客服。',
+    );
   });
 
   it('Guacamole 返回 5xx（瞬时性问题）时提示重试', async () => {
@@ -601,18 +726,30 @@ describe('LabsClient.exchangeGuacamoleToken', () => {
       status: 503,
       statusText: 'Service Unavailable',
       text: async () => 'unavailable',
-    }) as unknown as typeof fetch;
+    });
 
-    const client = await buildClient({ LABS_GUACAMOLE_BASE_URL: 'http://localhost:8080/guacamole/' });
+    const client = await buildClient({
+      LABS_GUACAMOLE_BASE_URL: 'http://localhost:8080/guacamole/',
+    });
 
-    await expect(client.exchangeGuacamoleToken('ticket')).rejects.toThrow('远程桌面连接失败，请稍后重试。');
+    await expect(client.exchangeGuacamoleToken('ticket')).rejects.toThrow(
+      '远程桌面连接失败，请稍后重试。',
+    );
   });
 
   it('网络层失败（fetch 本身 reject）时提示重试', async () => {
-    global.fetch = jest.fn().mockRejectedValue(new DOMException('The operation was aborted.', 'AbortError'));
+    global.fetch = jest
+      .fn()
+      .mockRejectedValue(
+        new DOMException('The operation was aborted.', 'AbortError'),
+      );
 
-    const client = await buildClient({ LABS_GUACAMOLE_BASE_URL: 'http://localhost:8080/guacamole/' });
+    const client = await buildClient({
+      LABS_GUACAMOLE_BASE_URL: 'http://localhost:8080/guacamole/',
+    });
 
-    await expect(client.exchangeGuacamoleToken('ticket')).rejects.toThrow('远程桌面连接失败，请稍后重试。');
+    await expect(client.exchangeGuacamoleToken('ticket')).rejects.toThrow(
+      '远程桌面连接失败，请稍后重试。',
+    );
   });
 });

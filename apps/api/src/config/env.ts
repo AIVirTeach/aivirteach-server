@@ -36,7 +36,11 @@ const EnvSchema = z.object({
   AIVIRTEACH_AGENT_TOKEN: z.string().min(1).optional(),
   // 心跳超时兜底：workspace RUNNING 且 lastSeenAt 超过这个分钟数没更新，就被
   // sweepIdle 判定为空闲并停止。关标签页时 sendBeacon 立即停是主路径，这个只是安全网。
-  WORKSPACE_IDLE_TIMEOUT_MINUTES: z.coerce.number().int().positive().default(15),
+  WORKSPACE_IDLE_TIMEOUT_MINUTES: z.coerce
+    .number()
+    .int()
+    .positive()
+    .default(15),
 });
 
 export type Env = z.infer<typeof EnvSchema>;

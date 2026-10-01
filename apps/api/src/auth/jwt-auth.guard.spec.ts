@@ -16,7 +16,10 @@ const ENV_STUB = {
   WORKSPACE_IDLE_TIMEOUT_MINUTES: 15,
 };
 
-const contextWith = (headers: Record<string, string>, query: Record<string, string> = {}) => {
+const contextWith = (
+  headers: Record<string, string>,
+  query: Record<string, string> = {},
+) => {
   const request: Record<string, unknown> = { headers, query };
   return {
     switchToHttp: () => ({ getRequest: () => request }),

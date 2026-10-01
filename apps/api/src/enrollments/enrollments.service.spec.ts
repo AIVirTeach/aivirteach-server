@@ -23,7 +23,9 @@ const buildPrisma = () => {
   };
   // enroll/restart 用 interactive transaction；测试里直接把同一个 prisma 当 tx 传回调用方，
   // 这样 jest 对 prisma.enrollment.xxx 的断言在事务内外都指向同一个 mock。
-  prisma.$transaction.mockImplementation((callback: (tx: typeof prisma) => unknown) => callback(prisma));
+  prisma.$transaction.mockImplementation(
+    (callback: (tx: typeof prisma) => unknown) => callback(prisma),
+  );
   return prisma;
 };
 
@@ -72,13 +74,17 @@ describe('EnrollmentsService.enroll', () => {
     );
     const { service } = await buildService(prisma, undefined, coursesService);
 
-    await expect(service.enroll(USER_ID, 'missing')).rejects.toThrow(NotFoundException);
+    await expect(service.enroll(USER_ID, 'missing')).rejects.toThrow(
+      NotFoundException,
+    );
   });
 
   it('先把其他课程的 enrollment 设成 active=false，再 upsert 这门课为 active=true 并绑定最新版本，记审计', async () => {
     const prisma = buildPrisma();
     const coursesService = buildCoursesService();
-    coursesService.requirePublishedCourseWithLatestVersion.mockResolvedValue(SAMPLE_COURSE);
+    coursesService.requirePublishedCourseWithLatestVersion.mockResolvedValue(
+      SAMPLE_COURSE,
+    );
     prisma.enrollment.upsert.mockResolvedValue({
       id: 'enrollment_1',
       userId: USER_ID,
@@ -87,7 +93,11 @@ describe('EnrollmentsService.enroll', () => {
       currentModule: null,
       createdAt: new Date('2026-08-20T00:00:00.000Z'),
     });
-    const { service, audit } = await buildService(prisma, undefined, coursesService);
+    const { service, audit } = await buildService(
+      prisma,
+      undefined,
+      coursesService,
+    );
 
     const result = await service.enroll(USER_ID, 'sample');
 
@@ -129,21 +139,37 @@ describe('EnrollmentsService.enroll', () => {
         { id: 'version_2', version: 2, modules: [] },
       ],
     });
-    prisma.enrollment.upsert.mockResolvedValue(upsertedEnrollment({ progress: null }));
+    prisma.enrollment.upsert.mockResolvedValue(
+      upsertedEnrollment({ progress: null }),
+    );
     const { service } = await buildService(prisma, undefined, coursesService);
 
     await service.enroll(USER_ID, 'sample');
 
-    expect(prisma.enrollment.upsert).toHaveBeenCalledWith(expect.objectContaining({
-      update: { active: true, courseVersionId: 'version_3' },
-      create: expect.objectContaining({ courseVersionId: 'version_3' }),
-    }));
+    expect(prisma.enrollment.upsert).toHaveBeenCalledWith(
+      expect.objectContaining({
+        update: { active: true, courseVersionId: 'version_3' },
+        create: expect.objectContaining({ courseVersionId: 'version_3' }),
+      }),
+    );
   });
 
   const COURSE_WITH_LESSONS = {
     ...SAMPLE_COURSE,
     versions: [
-      { id: 'version_1', version: 1, modules: [{ title: 'Module One', lessons: [{ contentId: 'lesson_cuid_1' }, { contentId: 'lesson_cuid_2' }] }] },
+      {
+        id: 'version_1',
+        version: 1,
+        modules: [
+          {
+            title: 'Module One',
+            lessons: [
+              { contentId: 'lesson_cuid_1' },
+              { contentId: 'lesson_cuid_2' },
+            ],
+          },
+        ],
+      },
     ],
   };
   const upsertedEnrollment = (overrides: Record<string, unknown>) => ({
@@ -160,27 +186,42 @@ describe('EnrollmentsService.enroll', () => {
   it('重新报名一门学到一半的课：status 是 in_progress，progressPercent 按进度算而不是写死 0', async () => {
     const prisma = buildPrisma();
     const coursesService = buildCoursesService();
-    coursesService.requirePublishedCourseWithLatestVersion.mockResolvedValue(COURSE_WITH_LESSONS);
-    prisma.enrollment.upsert.mockResolvedValue(upsertedEnrollment({ progress: { currentLessonContentId: 'lesson_cuid_1' } }));
-    const { service } = await buildService(prisma, undefined, coursesService);
-
-    const result = await service.enroll(USER_ID, 'sample');
-
-    expect(result).toEqual(expect.objectContaining({ status: 'in_progress', progressPercent: 50 }));
-  });
-
-  it('重新报名一门已完成的课：status 是 completed，progressPercent 是 100', async () => {
-    const prisma = buildPrisma();
-    const coursesService = buildCoursesService();
-    coursesService.requirePublishedCourseWithLatestVersion.mockResolvedValue(COURSE_WITH_LESSONS);
+    coursesService.requirePublishedCourseWithLatestVersion.mockResolvedValue(
+      COURSE_WITH_LESSONS,
+    );
     prisma.enrollment.upsert.mockResolvedValue(
-      upsertedEnrollment({ completedAt: new Date('2026-09-01T00:00:00Z'), progress: { currentLessonContentId: null } }),
+      upsertedEnrollment({
+        progress: { currentLessonContentId: 'lesson_cuid_1' },
+      }),
     );
     const { service } = await buildService(prisma, undefined, coursesService);
 
     const result = await service.enroll(USER_ID, 'sample');
 
-    expect(result).toEqual(expect.objectContaining({ status: 'completed', progressPercent: 100 }));
+    expect(result).toEqual(
+      expect.objectContaining({ status: 'in_progress', progressPercent: 50 }),
+    );
+  });
+
+  it('重新报名一门已完成的课：status 是 completed，progressPercent 是 100', async () => {
+    const prisma = buildPrisma();
+    const coursesService = buildCoursesService();
+    coursesService.requirePublishedCourseWithLatestVersion.mockResolvedValue(
+      COURSE_WITH_LESSONS,
+    );
+    prisma.enrollment.upsert.mockResolvedValue(
+      upsertedEnrollment({
+        completedAt: new Date('2026-09-01T00:00:00Z'),
+        progress: { currentLessonContentId: null },
+      }),
+    );
+    const { service } = await buildService(prisma, undefined, coursesService);
+
+    const result = await service.enroll(USER_ID, 'sample');
+
+    expect(result).toEqual(
+      expect.objectContaining({ status: 'completed', progressPercent: 100 }),
+    );
   });
 });
 
@@ -188,7 +229,9 @@ describe('EnrollmentsService.restart', () => {
   it('把 updateMany/upsert/progress.upsert 放进同一个事务，重置进度到第一课', async () => {
     const prisma = buildPrisma();
     const coursesService = buildCoursesService();
-    coursesService.requirePublishedCourseWithLatestVersion.mockResolvedValue(SAMPLE_COURSE);
+    coursesService.requirePublishedCourseWithLatestVersion.mockResolvedValue(
+      SAMPLE_COURSE,
+    );
     prisma.enrollment.upsert.mockResolvedValue({
       id: 'enrollment_1',
       userId: USER_ID,
@@ -208,14 +251,22 @@ describe('EnrollmentsService.restart', () => {
     });
     expect(prisma.enrollment.upsert).toHaveBeenCalledWith(
       expect.objectContaining({
-        update: { active: true, courseVersionId: 'version_1', completedAt: null },
+        update: {
+          active: true,
+          courseVersionId: 'version_1',
+          completedAt: null,
+        },
       }),
     );
     expect(prisma.progress.upsert).toHaveBeenCalledWith(
       expect.objectContaining({
         where: { enrollmentId: 'enrollment_1' },
         update: { currentLessonId: null, currentLessonContentId: null },
-        create: { enrollmentId: 'enrollment_1', currentLessonId: null, currentLessonContentId: null },
+        create: {
+          enrollmentId: 'enrollment_1',
+          currentLessonId: null,
+          currentLessonContentId: null,
+        },
       }),
     );
     expect(result.courseId).toBe('sample');
@@ -228,20 +279,29 @@ describe('EnrollmentsService.restart', () => {
     const coursesService = buildCoursesService();
     coursesService.requirePublishedCourseWithLatestVersion.mockResolvedValue({
       ...SAMPLE_COURSE,
-      versions: [{ id: 'version_2', version: 2, modules: [] }, { id: 'version_1', version: 1, modules: [] }],
+      versions: [
+        { id: 'version_2', version: 2, modules: [] },
+        { id: 'version_1', version: 1, modules: [] },
+      ],
     });
     prisma.enrollment.upsert.mockResolvedValue({
-      id: 'enrollment_1', userId: USER_ID, courseId: 'course_1', active: true,
-      createdAt: new Date('2026-08-20T00:00:00.000Z'), completedAt: null,
+      id: 'enrollment_1',
+      userId: USER_ID,
+      courseId: 'course_1',
+      active: true,
+      createdAt: new Date('2026-08-20T00:00:00.000Z'),
+      completedAt: null,
     });
     const { service } = await buildService(prisma, undefined, coursesService);
 
     await service.restart(USER_ID, 'sample');
 
-    expect(prisma.enrollment.upsert).toHaveBeenCalledWith(expect.objectContaining({
-      update: expect.objectContaining({ courseVersionId: 'version_2' }),
-      create: expect.objectContaining({ courseVersionId: 'version_2' }),
-    }));
+    expect(prisma.enrollment.upsert).toHaveBeenCalledWith(
+      expect.objectContaining({
+        update: expect.objectContaining({ courseVersionId: 'version_2' }),
+        create: expect.objectContaining({ courseVersionId: 'version_2' }),
+      }),
+    );
   });
 });
 
@@ -250,16 +310,28 @@ describe('EnrollmentsService.listForUser', () => {
     const prisma = buildPrisma();
     prisma.enrollment.findMany.mockResolvedValue([
       buildEnrollment({ id: 'fresh', progress: null, completedAt: null }),
-      buildEnrollment({ id: 'midway', progress: { currentLessonContentId: 'verify-network' }, completedAt: null }),
-      buildEnrollment({ id: 'done', progress: { currentLessonContentId: null }, completedAt: new Date() }),
+      buildEnrollment({
+        id: 'midway',
+        progress: { currentLessonContentId: 'verify-network' },
+        completedAt: null,
+      }),
+      buildEnrollment({
+        id: 'done',
+        progress: { currentLessonContentId: null },
+        completedAt: new Date(),
+      }),
     ]);
     const { service } = await buildService(prisma);
 
     const result = await service.listForUser(USER_ID);
 
-    expect(prisma.enrollment.findMany).toHaveBeenCalledWith(expect.objectContaining({
-      include: expect.objectContaining({ course: { include: { versions: LATEST_PUBLISHED_VERSION } } }),
-    }));
+    expect(prisma.enrollment.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        include: expect.objectContaining({
+          course: { include: { versions: LATEST_PUBLISHED_VERSION } },
+        }),
+      }),
+    );
 
     expect(result.map(({ id, status }) => ({ id, status }))).toEqual([
       { id: 'fresh', status: 'not_started' },
@@ -271,7 +343,11 @@ describe('EnrollmentsService.listForUser', () => {
   it('已完成的课程 progressPercent 为 100（学完后课时指针为空，不能按指针算成 0）', async () => {
     const prisma = buildPrisma();
     prisma.enrollment.findMany.mockResolvedValue([
-      buildEnrollment({ id: 'done', progress: { currentLessonContentId: null }, completedAt: new Date() }),
+      buildEnrollment({
+        id: 'done',
+        progress: { currentLessonContentId: null },
+        completedAt: new Date(),
+      }),
     ]);
     const { service } = await buildService(prisma);
 
@@ -288,12 +364,23 @@ const buildEnrollment = (overrides: Record<string, unknown>) => ({
   active: true,
   createdAt: new Date('2026-01-01T00:00:00.000Z'),
   ...overrides,
-  course: { slug: 'sample', versions: [{ id: 'version_1', modules: [
-    { lessons: [
-      { contentId: 'verify-virtual-machine', title: 'Lesson One' },
-      { contentId: 'verify-network', title: 'Lesson Two' },
-    ] },
-  ] }], ...(overrides.course as object | undefined) },
+  course: {
+    slug: 'sample',
+    versions: [
+      {
+        id: 'version_1',
+        modules: [
+          {
+            lessons: [
+              { contentId: 'verify-virtual-machine', title: 'Lesson One' },
+              { contentId: 'verify-network', title: 'Lesson Two' },
+            ],
+          },
+        ],
+      },
+    ],
+    ...(overrides.course as object | undefined),
+  },
 });
 
 describe('EnrollmentsService.completeLesson', () => {
@@ -302,7 +389,9 @@ describe('EnrollmentsService.completeLesson', () => {
     prisma.enrollment.findMany.mockResolvedValue([]);
     const { service } = await buildService(prisma);
 
-    await expect(service.completeLesson(USER_ID, 'missing')).rejects.toThrow(NotFoundException);
+    await expect(service.completeLesson(USER_ID, 'missing')).rejects.toThrow(
+      NotFoundException,
+    );
   });
 
   it('contentId 在用户已报名的所有课程里都找不到时抛 NotFoundException', async () => {
@@ -310,30 +399,51 @@ describe('EnrollmentsService.completeLesson', () => {
     prisma.enrollment.findMany.mockResolvedValue([buildEnrollment({})]);
     const { service } = await buildService(prisma);
 
-    await expect(service.completeLesson(USER_ID, 'missing')).rejects.toThrow(NotFoundException);
+    await expect(service.completeLesson(USER_ID, 'missing')).rejects.toThrow(
+      NotFoundException,
+    );
   });
 
   it('即使 enrollment.courseVersion 指向旧版，仍按最新发布版本查找和推进课时', async () => {
     const prisma = buildPrisma();
-    prisma.enrollment.findMany.mockResolvedValue([buildEnrollment({
-      courseVersion: { modules: [{ lessons: [{ contentId: 'old-only', title: 'Old lesson' }] }] },
-      course: {
-        slug: 'sample',
-        versions: [{ id: 'version_2', modules: [{ lessons: [
-          { contentId: 'latest-first', title: 'Latest first' },
-          { contentId: 'latest-next', title: 'Latest next' },
-        ] }] }],
-      },
-    })]);
+    prisma.enrollment.findMany.mockResolvedValue([
+      buildEnrollment({
+        courseVersion: {
+          modules: [
+            { lessons: [{ contentId: 'old-only', title: 'Old lesson' }] },
+          ],
+        },
+        course: {
+          slug: 'sample',
+          versions: [
+            {
+              id: 'version_2',
+              modules: [
+                {
+                  lessons: [
+                    { contentId: 'latest-first', title: 'Latest first' },
+                    { contentId: 'latest-next', title: 'Latest next' },
+                  ],
+                },
+              ],
+            },
+          ],
+        },
+      }),
+    ]);
     const { service } = await buildService(prisma);
 
     const result = await service.completeLesson(USER_ID, 'latest-first');
 
-    expect(prisma.progress.upsert).toHaveBeenCalledWith(expect.objectContaining({
-      update: { currentLessonContentId: 'latest-next' },
-    }));
+    expect(prisma.progress.upsert).toHaveBeenCalledWith(
+      expect.objectContaining({
+        update: { currentLessonContentId: 'latest-next' },
+      }),
+    );
     expect(result.progressPercent).toBe(100);
-    await expect(service.completeLesson(USER_ID, 'old-only')).rejects.toThrow(NotFoundException);
+    await expect(service.completeLesson(USER_ID, 'old-only')).rejects.toThrow(
+      NotFoundException,
+    );
   });
 
   it('写一行 Activity，并把 Progress 推进到下一课', async () => {
@@ -344,15 +454,26 @@ describe('EnrollmentsService.completeLesson', () => {
     // 路由参数是 content id（"verify-virtual-machine"），不是内部 cuid；
     // 同一个 contentId 在不同课程里可能重复，所以要在用户所有报名里查这个 contentId 属于哪门课，
     // 而不是只信任 active enrollment（否则一个过期的 active 指针会让完成请求记错课程）。
-    const result = await service.completeLesson(USER_ID, 'verify-virtual-machine');
+    const result = await service.completeLesson(
+      USER_ID,
+      'verify-virtual-machine',
+    );
 
-    expect(prisma.enrollment.findMany).toHaveBeenCalledWith(expect.objectContaining({
-      where: { userId: USER_ID },
-      include: expect.objectContaining({ course: { include: { versions: LATEST_PUBLISHED_VERSION } } }),
-    }));
+    expect(prisma.enrollment.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { userId: USER_ID },
+        include: expect.objectContaining({
+          course: { include: { versions: LATEST_PUBLISHED_VERSION } },
+        }),
+      }),
+    );
     expect(prisma.activity.create).toHaveBeenCalledWith(
       expect.objectContaining({
-        data: expect.objectContaining({ userId: USER_ID, enrollmentId: 'enrollment_1', kind: 'LESSON' }),
+        data: expect.objectContaining({
+          userId: USER_ID,
+          enrollmentId: 'enrollment_1',
+          kind: 'LESSON',
+        }),
       }),
     );
     // Progress.currentLessonContentId 与 lesson 的 contentId 使用同一个稳定标识。
@@ -360,13 +481,21 @@ describe('EnrollmentsService.completeLesson', () => {
       expect.objectContaining({
         where: { enrollmentId: 'enrollment_1' },
         update: { currentLessonContentId: 'verify-network' },
-        create: expect.objectContaining({ enrollmentId: 'enrollment_1', currentLessonContentId: 'verify-network' }),
+        create: expect.objectContaining({
+          enrollmentId: 'enrollment_1',
+          currentLessonContentId: 'verify-network',
+        }),
       }),
     );
     // currentLessonContentId 推进到 verify-network（第 2/2 课），返回值要带上更新后的 enrollment，
     // client 完成课时后靠这个更新本地状态。
     expect(result).toEqual(
-      expect.objectContaining({ id: 'enrollment_1', courseId: 'sample', progressPercent: 100, status: 'in_progress' }),
+      expect.objectContaining({
+        id: 'enrollment_1',
+        courseId: 'sample',
+        progressPercent: 100,
+        status: 'in_progress',
+      }),
     );
     // 还没学完最后一课，不能写 completedAt。
     expect(prisma.enrollment.updateMany).not.toHaveBeenCalled();
@@ -379,10 +508,12 @@ describe('EnrollmentsService.completeLesson', () => {
 
     const result = await service.completeLesson(USER_ID, 'verify-network');
 
-    expect(prisma.progress.upsert).toHaveBeenCalledWith(expect.objectContaining({
-      update: { currentLessonContentId: null },
-      create: expect.objectContaining({ currentLessonContentId: null }),
-    }));
+    expect(prisma.progress.upsert).toHaveBeenCalledWith(
+      expect.objectContaining({
+        update: { currentLessonContentId: null },
+        create: expect.objectContaining({ currentLessonContentId: null }),
+      }),
+    );
 
     expect(prisma.enrollment.updateMany).toHaveBeenCalledWith({
       where: { id: 'enrollment_1', completedAt: null },
@@ -401,7 +532,9 @@ describe('EnrollmentsService.completeLesson', () => {
       enrollment: { updateMany: jest.fn() },
       activity: { create: jest.fn() },
     };
-    prisma.$transaction.mockImplementation((callback: (client: typeof tx) => unknown) => callback(tx));
+    prisma.$transaction.mockImplementation(
+      (callback: (client: typeof tx) => unknown) => callback(tx),
+    );
     const { service } = await buildService(prisma);
 
     await service.completeLesson(USER_ID, 'verify-network');
@@ -421,7 +554,8 @@ describe('EnrollmentsService.completeLesson', () => {
 
     await service.completeLesson(USER_ID, 'verify-network');
 
-    const [enrollmentWrite] = prisma.enrollment.updateMany.mock.invocationCallOrder;
+    const [enrollmentWrite] =
+      prisma.enrollment.updateMany.mock.invocationCallOrder;
     const [progressWrite] = prisma.progress.upsert.mock.invocationCallOrder;
     expect(enrollmentWrite).toBeLessThan(progressWrite);
   });
@@ -432,7 +566,9 @@ describe('EnrollmentsService.completeLesson', () => {
     prisma.$transaction.mockRejectedValue(new Error('boom'));
     const { service } = await buildService(prisma);
 
-    await expect(service.completeLesson(USER_ID, 'verify-network')).rejects.toThrow('boom');
+    await expect(
+      service.completeLesson(USER_ID, 'verify-network'),
+    ).rejects.toThrow('boom');
 
     expect(prisma.activity.create).not.toHaveBeenCalled();
   });
@@ -444,29 +580,40 @@ describe('EnrollmentsService.completeLesson', () => {
     ]);
     const { service } = await buildService(prisma);
 
-    const result = await service.completeLesson(USER_ID, 'verify-virtual-machine');
+    const result = await service.completeLesson(
+      USER_ID,
+      'verify-virtual-machine',
+    );
 
     expect(prisma.enrollment.updateMany).not.toHaveBeenCalled();
-    expect(result).toEqual(expect.objectContaining({ status: 'completed', progressPercent: 100 }));
+    expect(result).toEqual(
+      expect.objectContaining({ status: 'completed', progressPercent: 100 }),
+    );
   });
 
   it('已完成的课再次完成最后一课时，只允许写入 completedAt 为空的行，保留首次完成时间', async () => {
     const prisma = buildPrisma();
     const firstCompletedAt = new Date('2026-01-01T00:00:00Z');
-    prisma.enrollment.findMany.mockResolvedValue([buildEnrollment({ completedAt: firstCompletedAt })]);
+    prisma.enrollment.findMany.mockResolvedValue([
+      buildEnrollment({ completedAt: firstCompletedAt }),
+    ]);
     const { service } = await buildService(prisma);
 
     const result = await service.completeLesson(USER_ID, 'verify-network');
 
     expect(prisma.enrollment.updateMany).toHaveBeenCalledWith(
-      expect.objectContaining({ where: { id: 'enrollment_1', completedAt: null } }),
+      expect.objectContaining({
+        where: { id: 'enrollment_1', completedAt: null },
+      }),
     );
     expect(result.status).toBe('completed');
   });
 
   it('并发完成：事务外读到 completedAt 为空、但库里已被抢先写入时，条件写入不覆盖，仍返回 completed', async () => {
     const prisma = buildPrisma();
-    prisma.enrollment.findMany.mockResolvedValue([buildEnrollment({ completedAt: null })]);
+    prisma.enrollment.findMany.mockResolvedValue([
+      buildEnrollment({ completedAt: null }),
+    ]);
     // 另一个请求已经写过 completedAt，这次带 completedAt: null 条件的写入命中 0 行。
     prisma.enrollment.updateMany.mockResolvedValue({ count: 0 });
     const { service } = await buildService(prisma);
@@ -474,7 +621,9 @@ describe('EnrollmentsService.completeLesson', () => {
     const result = await service.completeLesson(USER_ID, 'verify-network');
 
     expect(prisma.enrollment.updateMany).toHaveBeenCalledWith(
-      expect.objectContaining({ where: { id: 'enrollment_1', completedAt: null } }),
+      expect.objectContaining({
+        where: { id: 'enrollment_1', completedAt: null },
+      }),
     );
     expect(result.status).toBe('completed');
   });
@@ -482,29 +631,59 @@ describe('EnrollmentsService.completeLesson', () => {
   it('只有非 active 的报名里有这个课时时，仍然可以完成（不再要求这门课是当前 active 课程）', async () => {
     const prisma = buildPrisma();
     prisma.enrollment.findMany.mockResolvedValue([
-      buildEnrollment({ id: 'enrollment_inactive', active: false, course: { slug: 'old-course' } }),
+      buildEnrollment({
+        id: 'enrollment_inactive',
+        active: false,
+        course: { slug: 'old-course' },
+      }),
     ]);
     const { service } = await buildService(prisma);
 
-    const result = await service.completeLesson(USER_ID, 'verify-virtual-machine');
+    const result = await service.completeLesson(
+      USER_ID,
+      'verify-virtual-machine',
+    );
 
-    expect(result).toEqual(expect.objectContaining({ id: 'enrollment_inactive', courseId: 'old-course' }));
+    expect(result).toEqual(
+      expect.objectContaining({
+        id: 'enrollment_inactive',
+        courseId: 'old-course',
+      }),
+    );
   });
 
   it('contentId 同时存在于用户的多门已报名课程时，用 active 的那门并留审计记录', async () => {
     const prisma = buildPrisma();
     const audit = { record: jest.fn() };
     prisma.enrollment.findMany.mockResolvedValue([
-      buildEnrollment({ id: 'enrollment_inactive', active: false, course: { slug: 'course-a' } }),
-      buildEnrollment({ id: 'enrollment_active', active: true, course: { slug: 'course-b' } }),
+      buildEnrollment({
+        id: 'enrollment_inactive',
+        active: false,
+        course: { slug: 'course-a' },
+      }),
+      buildEnrollment({
+        id: 'enrollment_active',
+        active: true,
+        course: { slug: 'course-b' },
+      }),
     ]);
     const { service } = await buildService(prisma, audit);
 
-    const result = await service.completeLesson(USER_ID, 'verify-virtual-machine');
+    const result = await service.completeLesson(
+      USER_ID,
+      'verify-virtual-machine',
+    );
 
-    expect(result).toEqual(expect.objectContaining({ id: 'enrollment_active', courseId: 'course-b' }));
+    expect(result).toEqual(
+      expect.objectContaining({
+        id: 'enrollment_active',
+        courseId: 'course-b',
+      }),
+    );
     expect(prisma.activity.create).toHaveBeenCalledWith(
-      expect.objectContaining({ data: expect.objectContaining({ enrollmentId: 'enrollment_active' }) }),
+      expect.objectContaining({
+        data: expect.objectContaining({ enrollmentId: 'enrollment_active' }),
+      }),
     );
     expect(audit.record).toHaveBeenCalledWith(
       expect.objectContaining({

@@ -103,23 +103,40 @@ describe('buildLessonResponse', () => {
   it('returns validated blocks and only referenced course assets', () => {
     const withContent = modules.map((courseModule) => ({
       ...courseModule,
-      lessons: courseModule.lessons.map((lesson) => lesson.contentId === 'lesson-one'
-        ? {
-            ...lesson,
-            content: {
-              schemaVersion: 1,
-              blocks: [
-                { id: 'p1', type: 'paragraph', props: { text: 'hello' } },
-                { id: 'img-a', type: 'image', props: { assetId: 'asset-a', alt: 'Image A' } },
-                { id: 'img-b', type: 'image', props: { assetId: 'asset-b', alt: 'Image B' } },
-                { id: 'img-foreign', type: 'image', props: { assetId: 'foreign', alt: 'Foreign' } },
-              ],
-            },
-          }
-        : lesson),
+      lessons: courseModule.lessons.map((lesson) =>
+        lesson.contentId === 'lesson-one'
+          ? {
+              ...lesson,
+              content: {
+                schemaVersion: 1,
+                blocks: [
+                  { id: 'p1', type: 'paragraph', props: { text: 'hello' } },
+                  {
+                    id: 'img-a',
+                    type: 'image',
+                    props: { assetId: 'asset-a', alt: 'Image A' },
+                  },
+                  {
+                    id: 'img-b',
+                    type: 'image',
+                    props: { assetId: 'asset-b', alt: 'Image B' },
+                  },
+                  {
+                    id: 'img-foreign',
+                    type: 'image',
+                    props: { assetId: 'foreign', alt: 'Foreign' },
+                  },
+                ],
+              },
+            }
+          : lesson,
+      ),
     }));
     const result = buildLessonResponse({
-      courseSlug: 'course', modules: withContent, lessonId: 'lesson-one', courseAssets,
+      courseSlug: 'course',
+      modules: withContent,
+      lessonId: 'lesson-one',
+      courseAssets,
     });
 
     expect(result.blocks).toHaveLength(4);
@@ -133,12 +150,17 @@ describe('buildLessonResponse', () => {
   it('returns null blocks and no assets for an invalid content envelope', () => {
     const withInvalidContent = modules.map((courseModule) => ({
       ...courseModule,
-      lessons: courseModule.lessons.map((lesson) => lesson.contentId === 'lesson-one'
-        ? { ...lesson, content: { schemaVersion: 2, blocks: [] } }
-        : lesson),
+      lessons: courseModule.lessons.map((lesson) =>
+        lesson.contentId === 'lesson-one'
+          ? { ...lesson, content: { schemaVersion: 2, blocks: [] } }
+          : lesson,
+      ),
     }));
     const result = buildLessonResponse({
-      courseSlug: 'course', modules: withInvalidContent, lessonId: 'lesson-one', courseAssets,
+      courseSlug: 'course',
+      modules: withInvalidContent,
+      lessonId: 'lesson-one',
+      courseAssets,
     });
     expect(result.blocks).toBeNull();
     expect(result.assets).toEqual({});

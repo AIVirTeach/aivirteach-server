@@ -128,7 +128,11 @@ export class CoursesService {
       .flatMap((courseModule) => courseModule.lessons)
       .find((candidate) => candidate.contentId === lessonId);
     const assetIds = collectImageAssetIds(lesson?.content);
-    const courseAssets = await loadCourseAssets(this.prisma, course.id, assetIds);
+    const courseAssets = await loadCourseAssets(
+      this.prisma,
+      course.id,
+      assetIds,
+    );
     return buildLessonResponse({
       courseSlug: course.slug,
       modules: version.modules,

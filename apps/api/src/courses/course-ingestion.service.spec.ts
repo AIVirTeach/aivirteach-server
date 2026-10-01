@@ -141,13 +141,14 @@ describe('CourseIngestionService.ingestFromDirectory', () => {
     const service = await buildService(prisma);
 
     const result = await service.ingestFromDirectory(FIXTURE_DIR);
-    const lessons = (prisma.course.create.mock.calls[0][0].data as any).versions
-      .create.modules.create[0].lessons.create as any[];
+    const lessons = prisma.course.create.mock.calls[0][0].data.versions.create
+      .modules.create[0].lessons.create as any[];
 
     expect(lessons).toHaveLength(2);
-    const persistedAssetIds = (
-      prisma.course.create.mock.calls[0][0].data as any
-    ).assets.create.map((asset: { id: string }) => asset.id);
+    const persistedAssetIds =
+      prisma.course.create.mock.calls[0][0].data.assets.create.map(
+        (asset: { id: string }) => asset.id,
+      );
     for (const [index, lesson] of lessons.entries()) {
       expect(lesson.body).toBe(
         sliceLessonBody(SOURCE_MARKDOWN, {
@@ -194,7 +195,7 @@ describe('CourseIngestionService.ingestFromDirectory', () => {
 
     await service.ingestFromDirectory(FIXTURE_DIR);
 
-    const data = prisma.course.create.mock.calls[0][0].data as any;
+    const data = prisma.course.create.mock.calls[0][0].data;
     const assetId = data.assets.create[0].id;
     const lessonContent =
       data.versions.create.modules.create[0].lessons.create[0].content;
@@ -213,8 +214,8 @@ describe('CourseIngestionService.ingestFromDirectory', () => {
     await service.ingestFromDirectory(FIXTURE_DIR);
     await service.ingestFromDirectory(FIXTURE_DIR);
 
-    const firstData = prisma.course.create.mock.calls[0][0].data as any;
-    const secondData = prisma.course.create.mock.calls[1][0].data as any;
+    const firstData = prisma.course.create.mock.calls[0][0].data;
+    const secondData = prisma.course.create.mock.calls[1][0].data;
     const firstId = firstData.assets.create[0].id;
     const secondId = secondData.assets.create[0].id;
     expect(firstId).toMatch(/^[0-9a-f-]{36}$/i);
@@ -286,7 +287,7 @@ describe('CourseIngestionService.ingestFromDirectory', () => {
         });
       await ingestionService.ingestFromDirectory(contentDir);
 
-      const data = prisma.course.create.mock.calls[0][0].data as any;
+      const data = prisma.course.create.mock.calls[0][0].data;
       const assetId = data.assets.create[0].id;
       const imageAssetId =
         data.versions.create.modules.create[0].lessons.create[0].content
@@ -336,7 +337,7 @@ describe('CourseIngestionService.ingestFromDirectory', () => {
       const service = await buildService(prisma);
       const result = await service.ingestFromDirectory(contentDir);
 
-      const data = prisma.course.create.mock.calls[0][0].data as any;
+      const data = prisma.course.create.mock.calls[0][0].data;
       const asset = data.assets.create[0];
       const lesson = data.versions.create.modules.create[0].lessons.create[0];
 
@@ -394,8 +395,8 @@ describe('CourseIngestionService.ingestFromDirectory', () => {
       });
 
     const result = await service.ingestFromDirectory(FIXTURE_DIR);
-    const lessons = (prisma.course.create.mock.calls[0][0].data as any).versions
-      .create.modules.create[0].lessons.create as any[];
+    const lessons = prisma.course.create.mock.calls[0][0].data.versions.create
+      .modules.create[0].lessons.create as any[];
 
     expect(lessons[0].content).not.toBeNull();
     expect(lessons[1].body).toBe(

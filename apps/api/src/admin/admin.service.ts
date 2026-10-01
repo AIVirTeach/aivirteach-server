@@ -6,7 +6,6 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import type {
-  Course,
   CourseAsset,
   CourseVersion,
   Enrollment,

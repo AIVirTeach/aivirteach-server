@@ -1,6 +1,10 @@
 import { Injectable } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
-import { deriveCurrentModuleTitle, deriveEnrollmentView, type EnrollmentStatus } from '../enrollments/enrollment-view';
+import {
+  deriveCurrentModuleTitle,
+  deriveEnrollmentView,
+  type EnrollmentStatus,
+} from '../enrollments/enrollment-view';
 import { LATEST_PUBLISHED_VERSION } from '../courses/published-version';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -16,7 +20,9 @@ function dayKey(date: Date, timezone: string): string {
 
 function previousDayKey(key: string): string {
   const [year, month, day] = key.split('-').map(Number);
-  return new Date(Date.UTC(year, month - 1, day - 1)).toISOString().slice(0, 10);
+  return new Date(Date.UTC(year, month - 1, day - 1))
+    .toISOString()
+    .slice(0, 10);
 }
 
 export type DashboardResponse = {
@@ -63,7 +69,13 @@ export type DashboardResponse = {
     weeklyHours: number[];
   };
   unreadNotificationCount: number;
-  recentActivity: Array<{ id: string; title: string; detail: string; kind: string; occurredAt: string }>;
+  recentActivity: Array<{
+    id: string;
+    title: string;
+    detail: string;
+    kind: string;
+    occurredAt: string;
+  }>;
 };
 
 const LEVEL_TO_CLIENT: Record<string, string> = {
@@ -83,7 +95,9 @@ export class DashboardService {
   constructor(private readonly prisma: PrismaService) {}
 
   async getDashboard(userId: string): Promise<DashboardResponse> {
-    const user = await this.prisma.user.findUniqueOrThrow({ where: { id: userId } });
+    const user = await this.prisma.user.findUniqueOrThrow({
+      where: { id: userId },
+    });
 
     const activeEnrollment = await this.prisma.enrollment.findFirst({
       where: { userId, active: true },
@@ -93,19 +107,27 @@ export class DashboardService {
       },
     });
 
-    const [streakDays, tasksCompleted, totalPracticeMinutes, weeklyHours, unreadNotificationCount, recentActivity] =
-      await Promise.all([
-        this.computeStreakDays(userId, user.timezone),
-        this.prisma.attempt.count({ where: { status: 'PASS', enrollment: { userId } } }),
-        this.sumPracticeMinutes(userId),
-        this.computeWeeklyHours(userId, user.timezone),
-        this.prisma.notification.count({ where: { userId, readAt: null } }),
-        this.prisma.activity.findMany({
-          where: { userId },
-          orderBy: { occurredAt: 'desc' },
-          take: 10,
-        }),
-      ]);
+    const [
+      streakDays,
+      tasksCompleted,
+      totalPracticeMinutes,
+      weeklyHours,
+      unreadNotificationCount,
+      recentActivity,
+    ] = await Promise.all([
+      this.computeStreakDays(userId, user.timezone),
+      this.prisma.attempt.count({
+        where: { status: 'PASS', enrollment: { userId } },
+      }),
+      this.sumPracticeMinutes(userId),
+      this.computeWeeklyHours(userId, user.timezone),
+      this.prisma.notification.count({ where: { userId, readAt: null } }),
+      this.prisma.activity.findMany({
+        where: { userId },
+        orderBy: { occurredAt: 'desc' },
+        take: 10,
+      }),
+    ]);
 
     return {
       learner: {
@@ -127,7 +149,9 @@ export class DashboardService {
             title: activeEnrollment.course.title,
             category: activeEnrollment.course.category,
             description: activeEnrollment.course.description,
-            level: LEVEL_TO_CLIENT[activeEnrollment.course.level] ?? activeEnrollment.course.level,
+            level:
+              LEVEL_TO_CLIENT[activeEnrollment.course.level] ??
+              activeEnrollment.course.level,
             durationMinutes: activeEnrollment.course.durationMinutes,
             lessonCount: activeEnrollment.course.lessonCount,
             published: activeEnrollment.course.published,
@@ -195,13 +219,20 @@ export class DashboardService {
     await this.prisma.practiceSession.create({ data: { userId, minutes } });
   }
 
-  private async computeStreakDays(userId: string, timezone: string): Promise<number> {
+  private async computeStreakDays(
+    userId: string,
+    timezone: string,
+  ): Promise<number> {
     const activities = await this.prisma.activity.findMany({
       where: { userId },
       select: { occurredAt: true },
       orderBy: { occurredAt: 'desc' },
     });
-    const days = [...new Set(activities.map((activity) => dayKey(activity.occurredAt, timezone)))]
+    const days = [
+      ...new Set(
+        activities.map((activity) => dayKey(activity.occurredAt, timezone)),
+      ),
+    ]
       .sort()
       .reverse();
     if (days.length === 0) return 0;
@@ -224,7 +255,10 @@ export class DashboardService {
     return result._sum.minutes ?? 0;
   }
 
-  private async computeWeeklyHours(userId: string, timezone: string): Promise<number[]> {
+  private async computeWeeklyHours(
+    userId: string,
+    timezone: string,
+  ): Promise<number[]> {
     // 多缓冲 1 天，覆盖时区偏移（最大到 UTC+14/-12），避免边界会话被数据库查询提前滤掉。
     const since = new Date(Date.now() - 7 * DAY_MS);
 

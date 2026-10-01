@@ -31,7 +31,12 @@ export class CourseAssetUploadService {
     file: { buffer: Buffer; size: number },
     altText: string | undefined,
     operator: string,
-  ): Promise<{ id: string; url: string; altText: string | null; mimeType: string }> {
+  ): Promise<{
+    id: string;
+    url: string;
+    altText: string | null;
+    mimeType: string;
+  }> {
     if (
       file.size <= 0 ||
       file.size > MAX_IMAGE_BYTES ||
@@ -44,7 +49,8 @@ export class CourseAssetUploadService {
       throw new BadRequestException('图片替代文本不能超过 300 个字符');
     }
     const mimeType = sniffImageMime(file.buffer);
-    if (!mimeType) throw new BadRequestException('仅支持 PNG、JPEG、WebP 或 GIF 图片');
+    if (!mimeType)
+      throw new BadRequestException('仅支持 PNG、JPEG、WebP 或 GIF 图片');
 
     const course = await this.prisma.course.findUnique({
       where: { slug },

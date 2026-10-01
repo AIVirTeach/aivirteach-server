@@ -36,41 +36,52 @@ export class CourseBackfillCommand extends CommandRunner {
 
     if (execute) {
       // Conversion and asset reads are complete before opening the write-and-audit transaction.
-      report = await this.prisma.$transaction(async (transaction) => {
-        const result = await this.backfill.apply(plan, transaction);
-        const metadata: Prisma.InputJsonObject = {
-          report: {
-            bodies: {
-              filled: result.bodies.filled,
-              unresolved: result.bodies.unresolved.map(
-                ({ lessonId, reason }) => ({ lessonId, reason }),
-              ),
+      report = await this.prisma.$transaction(
+        async (transaction) => {
+          const result = await this.backfill.apply(plan, transaction);
+          const metadata: Prisma.InputJsonObject = {
+            report: {
+              bodies: {
+                filled: result.bodies.filled,
+                unresolved: result.bodies.unresolved.map(
+                  ({ lessonId, reason }) => ({ lessonId, reason }),
+                ),
+              },
+              progress: {
+                filled: result.progress.filled,
+                total: result.progress.total,
+              },
+              content: {
+                filled: result.content.filled,
+                skipped: result.content.skipped.map(({ lessonId, reason }) => ({
+                  lessonId,
+                  reason,
+                })),
+                reports: result.content.reports.map(({ lessonId, issues }) => ({
+                  lessonId,
+                  issues,
+                })),
+                pendingBody: result.content.pendingBody.map(
+                  ({ lessonId, reason }) => ({ lessonId, reason }),
+                ),
+              },
             },
-            progress: {
-              filled: result.progress.filled,
-              total: result.progress.total,
+          };
+          await this.audit.record(
+            {
+              actor: { type: AuditActorType.OPERATOR, id: operator },
+              action: 'admin.backfillContentModel',
+              success: true,
+              targetType: 'CourseVersion',
+              reason,
+              metadata,
             },
-            content: {
-              filled: result.content.filled,
-              skipped: result.content.skipped.map(({ lessonId, reason }) => ({ lessonId, reason })),
-              reports: result.content.reports.map(({ lessonId, issues }) => ({ lessonId, issues })),
-              pendingBody: result.content.pendingBody.map(({ lessonId, reason }) => ({ lessonId, reason })),
-            },
-          },
-        };
-        await this.audit.record(
-          {
-            actor: { type: AuditActorType.OPERATOR, id: operator },
-            action: 'admin.backfillContentModel',
-            success: true,
-            targetType: 'CourseVersion',
-            reason,
-            metadata,
-          },
-          transaction,
-        );
-        return result;
-      }, { maxWait: 10_000, timeout: 120_000 });
+            transaction,
+          );
+          return result;
+        },
+        { maxWait: 10_000, timeout: 120_000 },
+      );
     } else {
       report = plan.report;
     }

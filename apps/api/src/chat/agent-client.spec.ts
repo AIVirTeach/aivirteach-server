@@ -19,7 +19,12 @@ const PAYLOAD: DiagnoseRequestBody = {
   request_id: '11111111-1111-4111-8111-111111111111',
   lab_id: 'workspace_1',
   question: 'docker install 卡住了',
-  course: { course_id: 'linux-basics', version: 1, title: 'Linux 基础', summary: '' },
+  course: {
+    course_id: 'linux-basics',
+    version: 1,
+    title: 'Linux 基础',
+    summary: '',
+  },
   current_step: {
     module_id: 'module_1',
     lesson_id: 'verify-virtual-machine',
@@ -34,7 +39,10 @@ const PAYLOAD: DiagnoseRequestBody = {
 
 async function buildClient(envOverrides: Partial<Env>) {
   const moduleRef = await Test.createTestingModule({
-    providers: [AgentClient, { provide: ENV, useValue: { ...BASE_ENV, ...envOverrides } }],
+    providers: [
+      AgentClient,
+      { provide: ENV, useValue: { ...BASE_ENV, ...envOverrides } },
+    ],
   }).compile();
   return moduleRef.get(AgentClient);
 }
@@ -48,7 +56,9 @@ describe('AgentClient.diagnose', () => {
 
   it('缺少 LABS_AGENT_BASE_URL 或 AIVIRTEACH_AGENT_TOKEN 时抛出 ServiceUnavailableException', async () => {
     const client = await buildClient({});
-    await expect(client.diagnose(PAYLOAD)).rejects.toBeInstanceOf(ServiceUnavailableException);
+    await expect(client.diagnose(PAYLOAD)).rejects.toBeInstanceOf(
+      ServiceUnavailableException,
+    );
   });
 
   it('POST /v1/agent/diagnose，带 bearer token，原样透传 payload，解析成功响应', async () => {
@@ -66,7 +76,7 @@ describe('AgentClient.diagnose', () => {
         tool_trace: [],
       }),
     });
-    global.fetch = fetchMock as unknown as typeof fetch;
+    global.fetch = fetchMock;
 
     const client = await buildClient({
       LABS_AGENT_BASE_URL: 'https://labs-agent.example.com',
@@ -104,7 +114,7 @@ describe('AgentClient.diagnose', () => {
         limitations: ['GATEWAY_UNAVAILABLE'],
         tool_trace: [],
       }),
-    }) as unknown as typeof fetch;
+    });
 
     const client = await buildClient({
       LABS_AGENT_BASE_URL: 'https://labs-agent.example.com',
@@ -123,14 +133,16 @@ describe('AgentClient.diagnose', () => {
       status: 401,
       statusText: 'Unauthorized',
       text: async () => 'Invalid or missing bearer token.',
-    }) as unknown as typeof fetch;
+    });
 
     const client = await buildClient({
       LABS_AGENT_BASE_URL: 'https://labs-agent.example.com',
       AIVIRTEACH_AGENT_TOKEN: 'wrong-token',
     });
 
-    await expect(client.diagnose(PAYLOAD)).rejects.toThrow('助教服务暂时不可用，请联系客服。');
+    await expect(client.diagnose(PAYLOAD)).rejects.toThrow(
+      '助教服务暂时不可用，请联系客服。',
+    );
   });
 
   it('Agent 返回 5xx（瞬时性问题）时提示重试', async () => {
@@ -139,25 +151,33 @@ describe('AgentClient.diagnose', () => {
       status: 503,
       statusText: 'Service Unavailable',
       text: async () => 'Agent dependencies are not configured.',
-    }) as unknown as typeof fetch;
+    });
 
     const client = await buildClient({
       LABS_AGENT_BASE_URL: 'https://labs-agent.example.com',
       AIVIRTEACH_AGENT_TOKEN: 'agent-token',
     });
 
-    await expect(client.diagnose(PAYLOAD)).rejects.toThrow('助教暂时没有回应，请重试一次。');
+    await expect(client.diagnose(PAYLOAD)).rejects.toThrow(
+      '助教暂时没有回应，请重试一次。',
+    );
   });
 
   it('网络层失败（fetch 本身 reject）时提示重试', async () => {
-    global.fetch = jest.fn().mockRejectedValue(new DOMException('The operation was aborted.', 'AbortError'));
+    global.fetch = jest
+      .fn()
+      .mockRejectedValue(
+        new DOMException('The operation was aborted.', 'AbortError'),
+      );
 
     const client = await buildClient({
       LABS_AGENT_BASE_URL: 'https://labs-agent.example.com',
       AIVIRTEACH_AGENT_TOKEN: 'agent-token',
     });
 
-    await expect(client.diagnose(PAYLOAD)).rejects.toThrow('助教暂时没有回应，请重试一次。');
+    await expect(client.diagnose(PAYLOAD)).rejects.toThrow(
+      '助教暂时没有回应，请重试一次。',
+    );
   });
 
   it('Agent 返回 2xx 但响应体缺少必填字段（如 answer）时抛出错误，不会返回半成品对象', async () => {
@@ -173,28 +193,32 @@ describe('AgentClient.diagnose', () => {
         limitations: [],
         tool_trace: [],
       }),
-    }) as unknown as typeof fetch;
+    });
 
     const client = await buildClient({
       LABS_AGENT_BASE_URL: 'https://labs-agent.example.com',
       AIVIRTEACH_AGENT_TOKEN: 'agent-token',
     });
 
-    await expect(client.diagnose(PAYLOAD)).rejects.toThrow('Agent 响应格式不符合预期');
+    await expect(client.diagnose(PAYLOAD)).rejects.toThrow(
+      'Agent 响应格式不符合预期',
+    );
   });
 
   it('Agent 返回 2xx 但 body 不是对象（如 null）时抛出错误', async () => {
     global.fetch = jest.fn().mockResolvedValue({
       ok: true,
       json: async () => null,
-    }) as unknown as typeof fetch;
+    });
 
     const client = await buildClient({
       LABS_AGENT_BASE_URL: 'https://labs-agent.example.com',
       AIVIRTEACH_AGENT_TOKEN: 'agent-token',
     });
 
-    await expect(client.diagnose(PAYLOAD)).rejects.toThrow('Agent 响应格式不符合预期');
+    await expect(client.diagnose(PAYLOAD)).rejects.toThrow(
+      'Agent 响应格式不符合预期',
+    );
   });
 });
 
@@ -223,15 +247,19 @@ describe('AgentClient.diagnoseStream', () => {
 
   it('缺少 LABS_AGENT_BASE_URL 或 AIVIRTEACH_AGENT_TOKEN 时抛出 ServiceUnavailableException', async () => {
     const client = await buildClient({});
-    await expect(collect(client.diagnoseStream(PAYLOAD))).rejects.toBeInstanceOf(ServiceUnavailableException);
+    await expect(
+      collect(client.diagnoseStream(PAYLOAD)),
+    ).rejects.toBeInstanceOf(ServiceUnavailableException);
   });
 
   it('POST /v1/agent/diagnose/stream，带 bearer token，原样透传 payload，逐帧解析 SSE body', async () => {
     const fetchMock = jest.fn().mockResolvedValue({
       ok: true,
-      body: streamFromText('event: reasoning_started\ndata: {"turn":1}\n\nevent: result\ndata: {"response":{}}\n\n'),
+      body: streamFromText(
+        'event: reasoning_started\ndata: {"turn":1}\n\nevent: result\ndata: {"response":{}}\n\n',
+      ),
     });
-    global.fetch = fetchMock as unknown as typeof fetch;
+    global.fetch = fetchMock;
 
     const client = await buildClient({
       LABS_AGENT_BASE_URL: 'https://labs-agent.example.com',
@@ -263,14 +291,16 @@ describe('AgentClient.diagnoseStream', () => {
       status: 503,
       statusText: 'Service Unavailable',
       text: async () => 'Agent dependencies are not configured.',
-    }) as unknown as typeof fetch;
+    });
 
     const client = await buildClient({
       LABS_AGENT_BASE_URL: 'https://labs-agent.example.com',
       AIVIRTEACH_AGENT_TOKEN: 'agent-token',
     });
 
-    await expect(collect(client.diagnoseStream(PAYLOAD))).rejects.toThrow('助教暂时没有回应，请重试一次。');
+    await expect(collect(client.diagnoseStream(PAYLOAD))).rejects.toThrow(
+      '助教暂时没有回应，请重试一次。',
+    );
   });
 
   it('Agent 返回 401（权限/配置问题）时提示联系客服', async () => {
@@ -279,35 +309,45 @@ describe('AgentClient.diagnoseStream', () => {
       status: 401,
       statusText: 'Unauthorized',
       text: async () => 'Invalid or missing bearer token.',
-    }) as unknown as typeof fetch;
+    });
 
     const client = await buildClient({
       LABS_AGENT_BASE_URL: 'https://labs-agent.example.com',
       AIVIRTEACH_AGENT_TOKEN: 'wrong-token',
     });
 
-    await expect(collect(client.diagnoseStream(PAYLOAD))).rejects.toThrow('助教服务暂时不可用，请联系客服。');
+    await expect(collect(client.diagnoseStream(PAYLOAD))).rejects.toThrow(
+      '助教服务暂时不可用，请联系客服。',
+    );
   });
 
   it('网络层失败（fetch 本身 reject）时提示重试', async () => {
-    global.fetch = jest.fn().mockRejectedValue(new DOMException('The operation was aborted.', 'AbortError'));
+    global.fetch = jest
+      .fn()
+      .mockRejectedValue(
+        new DOMException('The operation was aborted.', 'AbortError'),
+      );
 
     const client = await buildClient({
       LABS_AGENT_BASE_URL: 'https://labs-agent.example.com',
       AIVIRTEACH_AGENT_TOKEN: 'agent-token',
     });
 
-    await expect(collect(client.diagnoseStream(PAYLOAD))).rejects.toThrow('助教暂时没有回应，请重试一次。');
+    await expect(collect(client.diagnoseStream(PAYLOAD))).rejects.toThrow(
+      '助教暂时没有回应，请重试一次。',
+    );
   });
 
   it('Agent 返回 2xx 但没有 body 时抛出错误', async () => {
-    global.fetch = jest.fn().mockResolvedValue({ ok: true, body: null }) as unknown as typeof fetch;
+    global.fetch = jest.fn().mockResolvedValue({ ok: true, body: null });
 
     const client = await buildClient({
       LABS_AGENT_BASE_URL: 'https://labs-agent.example.com',
       AIVIRTEACH_AGENT_TOKEN: 'agent-token',
     });
 
-    await expect(collect(client.diagnoseStream(PAYLOAD))).rejects.toThrow('Agent 响应没有 body');
+    await expect(collect(client.diagnoseStream(PAYLOAD))).rejects.toThrow(
+      'Agent 响应没有 body',
+    );
   });
 });

@@ -5,10 +5,16 @@ import { AuditService } from '../../audit/audit.service';
 import { PrismaService } from '../../prisma/prisma.service';
 import { DRAFT_INCLUDE, type DraftVersion } from './draft-version';
 
-export const CreateCourseSchema = z.object({
-  slug: z.string().min(3).max(60).regex(/^[a-z0-9]+(-[a-z0-9]+)*$/),
-  title: z.string().min(1).max(120),
-}).strict();
+export const CreateCourseSchema = z
+  .object({
+    slug: z
+      .string()
+      .min(3)
+      .max(60)
+      .regex(/^[a-z0-9]+(-[a-z0-9]+)*$/),
+    title: z.string().min(1).max(120),
+  })
+  .strict();
 
 export type CreateCourseInput = z.infer<typeof CreateCourseSchema>;
 
@@ -45,7 +51,7 @@ export class CourseCreateService {
           },
           include: DRAFT_INCLUDE,
         });
-        return { courseId: course.id, draft: created as DraftVersion };
+        return { courseId: course.id, draft: created };
       }));
     } catch (error) {
       if (isUniqueConstraintError(error)) {

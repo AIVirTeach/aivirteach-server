@@ -1,6 +1,9 @@
 import { NotFoundException } from '@nestjs/common';
 import type { Prisma } from '@prisma/client';
-import { LessonEnvelopeSchema, collectImageAssetIds } from '@aivirteach/lesson-blocks';
+import {
+  LessonEnvelopeSchema,
+  collectImageAssetIds,
+} from '@aivirteach/lesson-blocks';
 import type { LessonBlock } from '@aivirteach/lesson-blocks';
 
 type ModuleRow = Prisma.CourseModuleGetPayload<{
@@ -35,7 +38,11 @@ export function buildLessonResponse(input: {
   courseSlug: string;
   modules: ModuleRow[];
   lessonId: string;
-  courseAssets: Array<{ id: string; objectKey: string; altText: string | null }>;
+  courseAssets: Array<{
+    id: string;
+    objectKey: string;
+    altText: string | null;
+  }>;
 }): LessonResponse {
   const flattened = input.modules.flatMap((courseModule) =>
     courseModule.lessons.map((lesson) => ({ courseModule, lesson })),
@@ -56,10 +63,13 @@ export function buildLessonResponse(input: {
   const assets = Object.fromEntries(
     input.courseAssets
       .filter((asset) => referencedAssetIds.has(asset.id))
-      .map((asset) => [asset.id, {
-        url: asset.objectKey,
-        ...(asset.altText === null ? {} : { alt: asset.altText }),
-      }]),
+      .map((asset) => [
+        asset.id,
+        {
+          url: asset.objectKey,
+          ...(asset.altText === null ? {} : { alt: asset.altText }),
+        },
+      ]),
   );
   return {
     courseId: input.courseSlug,

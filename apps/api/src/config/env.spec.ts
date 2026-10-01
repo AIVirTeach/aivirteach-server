@@ -34,6 +34,7 @@ describe('loadEnv', () => {
 
   it('缺少 ADMIN_API_TOKEN 时抛错并指名字段', () => {
     const { ADMIN_API_TOKEN: _token, ...source } = validSource;
+    void _token;
     expect(() => loadEnv(source)).toThrow(/ADMIN_API_TOKEN/);
   });
 

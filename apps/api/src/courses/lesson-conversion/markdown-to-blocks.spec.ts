@@ -4,16 +4,24 @@ import { blocksToPlainText } from '@aivirteach/lesson-blocks';
 import { convertMarkdownToBlocks } from './markdown-to-blocks';
 
 const ctx = { assetIdsByFilename: new Map<string, string>() };
-const blocks = async (markdown: string) => (await convertMarkdownToBlocks(markdown, ctx)).content.blocks;
+const blocks = async (markdown: string) =>
+  (await convertMarkdownToBlocks(markdown, ctx)).content.blocks;
 
 describe('convertMarkdownToBlocks', () => {
   it('converts the sample lesson source into blocks without losing its paragraph text', async () => {
-    const source = await readFile(join(__dirname, '../__fixtures__/sample-course/lesson-source.md'), 'utf8');
+    const source = await readFile(
+      join(__dirname, '../__fixtures__/sample-course/lesson-source.md'),
+      'utf8',
+    );
     const result = await convertMarkdownToBlocks(source, ctx);
 
     expect(result.content.schemaVersion).toBe(1);
     expect(result.content.blocks.map((block) => block.type)).toEqual([
-      'paragraph', 'heading', 'paragraph', 'heading', 'paragraph',
+      'paragraph',
+      'heading',
+      'paragraph',
+      'heading',
+      'paragraph',
     ]);
     expect(result.dropped).toContain('Intro');
     expect(blocksToPlainText(result.content)).toContain('Welcome.');
@@ -30,36 +38,64 @@ describe('convertMarkdownToBlocks', () => {
   });
 
   it('drops H1 while reporting its plain text', async () => {
-    const result = await convertMarkdownToBlocks('Intro paragraph.\n\n# T', ctx);
-    expect(result.content.blocks.map(({ type }) => type)).toEqual(['paragraph']);
-    expect(result.report).toEqual(expect.arrayContaining([
-      expect.objectContaining({ level: 'warning', code: 'h1-dropped', line: 3 }),
-    ]));
+    const result = await convertMarkdownToBlocks(
+      'Intro paragraph.\n\n# T',
+      ctx,
+    );
+    expect(result.content.blocks.map(({ type }) => type)).toEqual([
+      'paragraph',
+    ]);
+    expect(result.report).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          level: 'warning',
+          code: 'h1-dropped',
+          line: 3,
+        }),
+      ]),
+    );
     expect(result.dropped).toContain('T');
   });
 
-  it.each(['bash', 'sh', 'shell', 'console', 'zsh'])('marks %s fences as terminal code', async (language) => {
-    const [block] = await blocks(`\`\`\`${language}\nrun\n\`\`\``);
-    expect(block.type).toBe('code');
-    expect(block.props).toMatchObject({ kind: 'terminal', language, code: 'run' });
-    expect(block.props).not.toHaveProperty('label');
-  });
-
-  it.each([['python', 'python'], ['ts', 'ts'], ['', undefined]])(
-    'keeps %s fences as plain code', async (fence, language) => {
-      const [block] = await blocks(`\`\`\`${fence}\nconst x = 1;\n\`\`\``);
+  it.each(['bash', 'sh', 'shell', 'console', 'zsh'])(
+    'marks %s fences as terminal code',
+    async (language) => {
+      const [block] = await blocks(`\`\`\`${language}\nrun\n\`\`\``);
       expect(block.type).toBe('code');
-      expect(block.props).toMatchObject({ kind: 'plain', code: 'const x = 1;' });
-      expect((block.props as { language?: string }).language).toBe(language);
+      expect(block.props).toMatchObject({
+        kind: 'terminal',
+        language,
+        code: 'run',
+      });
       expect(block.props).not.toHaveProperty('label');
     },
   );
 
+  it.each([
+    ['python', 'python'],
+    ['ts', 'ts'],
+    ['', undefined],
+  ])('keeps %s fences as plain code', async (fence, language) => {
+    const [block] = await blocks(`\`\`\`${fence}\nconst x = 1;\n\`\`\``);
+    expect(block.type).toBe('code');
+    expect(block.props).toMatchObject({ kind: 'plain', code: 'const x = 1;' });
+    expect((block.props as { language?: string }).language).toBe(language);
+    expect(block.props).not.toHaveProperty('label');
+  });
+
   it('converts a GFM table into columns and rows', async () => {
-    const [block] = await blocks('| Name | Count |\n| --- | --- |\n| A | 2 |\n| B | 3 |');
+    const [block] = await blocks(
+      '| Name | Count |\n| --- | --- |\n| A | 2 |\n| B | 3 |',
+    );
     expect(block).toMatchObject({
       type: 'table',
-      props: { columns: ['Name', 'Count'], rows: [['A', '2'], ['B', '3']] },
+      props: {
+        columns: ['Name', 'Count'],
+        rows: [
+          ['A', '2'],
+          ['B', '3'],
+        ],
+      },
     });
   });
 
@@ -68,27 +104,48 @@ describe('convertMarkdownToBlocks', () => {
   });
 
   it('flattens nested list items and reports the flattening', async () => {
-    const result = await convertMarkdownToBlocks('List intro.\n\n- one\n  - child\n- two', ctx);
+    const result = await convertMarkdownToBlocks(
+      'List intro.\n\n- one\n  - child\n- two',
+      ctx,
+    );
     expect(result.content.blocks).toMatchObject([
       { type: 'paragraph', props: { text: 'List intro.' } },
       { type: 'bulletList', props: { items: ['one', 'child', 'two'] } },
     ]);
-    expect(result.report).toEqual(expect.arrayContaining([
-      expect.objectContaining({ level: 'warning', code: 'nested-list-flattened', line: 3 }),
-    ]));
+    expect(result.report).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          level: 'warning',
+          code: 'nested-list-flattened',
+          line: 3,
+        }),
+      ]),
+    );
   });
 
   it('maps ordered lists and assigns unique source-order block ids', async () => {
-    const result = await convertMarkdownToBlocks('## A\n\n1. one\n2. two\n\n---\n\ntext', ctx);
+    const result = await convertMarkdownToBlocks(
+      '## A\n\n1. one\n2. two\n\n---\n\ntext',
+      ctx,
+    );
     const ids = result.content.blocks.map(({ id }) => id);
     expect(ids).toEqual(['b-001', 'b-002', 'b-003', 'b-004']);
     expect(new Set(ids).size).toBe(ids.length);
-    expect(result.content.blocks[1]).toMatchObject({ type: 'numberedList', props: { items: ['one', 'two'] } });
+    expect(result.content.blocks[1]).toMatchObject({
+      type: 'numberedList',
+      props: { items: ['one', 'two'] },
+    });
   });
 
   it('preserves the plain text of each source paragraph', async () => {
-    const sourceParagraphs = ['Alpha paragraph.', 'Beta paragraph with **formatting**.'];
-    const result = await convertMarkdownToBlocks(sourceParagraphs.join('\n\n'), ctx);
+    const sourceParagraphs = [
+      'Alpha paragraph.',
+      'Beta paragraph with **formatting**.',
+    ];
+    const result = await convertMarkdownToBlocks(
+      sourceParagraphs.join('\n\n'),
+      ctx,
+    );
     const plainText = blocksToPlainText(result.content).trim();
     for (const paragraph of sourceParagraphs) {
       expect(plainText).toContain(paragraph.replaceAll('**', ''));
@@ -102,36 +159,54 @@ describe('convertMarkdownToBlocks', () => {
     );
     expect(result.content.blocks).toMatchObject([
       { type: 'image', props: { assetId: 'asset-a', alt: 'Diagram' } },
-      { type: 'paragraph', props: { text: '[图片缺失：missing.png] No asset' } },
+      {
+        type: 'paragraph',
+        props: { text: '[图片缺失：missing.png] No asset' },
+      },
       { type: 'callout', props: { variant: 'note', body: '提示' } },
       { type: 'paragraph', props: { text: 'x' } },
     ]);
-    expect(result.report).toEqual(expect.arrayContaining([
-      expect.objectContaining({ level: 'warning', code: 'missing-asset' }),
-      expect.objectContaining({ level: 'warning', code: 'unmapped-node' }),
-    ]));
+    expect(result.report).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ level: 'warning', code: 'missing-asset' }),
+        expect.objectContaining({ level: 'warning', code: 'unmapped-node' }),
+      ]),
+    );
   });
 
   it('defaults an empty image alt to the resolved filename', async () => {
     const result = await convertMarkdownToBlocks('![](images/a.png)', {
       assetIdsByFilename: new Map([['a.png', 'asset-a']]),
     });
-    expect(result.content.blocks[0]).toMatchObject({ type: 'image', props: { assetId: 'asset-a', alt: 'a.png' } });
-    expect(result.report).toEqual(expect.arrayContaining([
-      expect.objectContaining({ level: 'warning', code: 'empty-alt-defaulted' }),
-    ]));
+    expect(result.content.blocks[0]).toMatchObject({
+      type: 'image',
+      props: { assetId: 'asset-a', alt: 'a.png' },
+    });
+    expect(result.report).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          level: 'warning',
+          code: 'empty-alt-defaulted',
+        }),
+      ]),
+    );
   });
 
   it('resolves reference-style image URLs through their definition', async () => {
-    const result = await convertMarkdownToBlocks('![Reference][diagram]\n\n[diagram]: folder/a.png', {
-      assetIdsByFilename: new Map([['a.png', 'asset-a']]),
-    });
+    const result = await convertMarkdownToBlocks(
+      '![Reference][diagram]\n\n[diagram]: folder/a.png',
+      {
+        assetIdsByFilename: new Map([['a.png', 'asset-a']]),
+      },
+    );
     expect(result.content.blocks).toMatchObject([
       { type: 'image', props: { assetId: 'asset-a', alt: 'Reference' } },
     ]);
-    expect(result.report).not.toEqual(expect.arrayContaining([
-      expect.objectContaining({ code: 'unmapped-node' }),
-    ]));
+    expect(result.report).not.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ code: 'unmapped-node' }),
+      ]),
+    );
   });
 
   it('keeps top-level paragraph images in source order between surrounding text', async () => {
@@ -146,37 +221,53 @@ describe('convertMarkdownToBlocks', () => {
   });
 
   it('splits phrasing wrappers around nested images without changing source order', async () => {
-    const result = await convertMarkdownToBlocks('before **x ![alt](a.png) y** after', {
-      assetIdsByFilename: new Map([['a.png', 'asset-a']]),
-    });
+    const result = await convertMarkdownToBlocks(
+      'before **x ![alt](a.png) y** after',
+      {
+        assetIdsByFilename: new Map([['a.png', 'asset-a']]),
+      },
+    );
     expect(result.content.blocks).toMatchObject([
       { type: 'paragraph', props: { text: 'before **x **' } },
       { type: 'image', props: { assetId: 'asset-a', alt: 'alt' } },
       { type: 'paragraph', props: { text: '** y** after' } },
     ]);
-    expect(result.content.blocks.map(({ type }) => type)).toEqual(['paragraph', 'image', 'paragraph']);
+    expect(result.content.blocks.map(({ type }) => type)).toEqual([
+      'paragraph',
+      'image',
+      'paragraph',
+    ]);
   });
 
   it('splits list and blockquote text around nested phrasing images', async () => {
-    const listResult = await convertMarkdownToBlocks('- before **x ![alt](a.png) y** after', {
-      assetIdsByFilename: new Map([['a.png', 'asset-a']]),
-    });
+    const listResult = await convertMarkdownToBlocks(
+      '- before **x ![alt](a.png) y** after',
+      {
+        assetIdsByFilename: new Map([['a.png', 'asset-a']]),
+      },
+    );
     expect(listResult.content.blocks).toMatchObject([
       { type: 'bulletList', props: { items: ['before **x **'] } },
       { type: 'image', props: { assetId: 'asset-a', alt: 'alt' } },
       { type: 'bulletList', props: { items: ['** y** after'] } },
     ]);
-    expect(listResult.report).toEqual(expect.arrayContaining([
-      expect.objectContaining({
-        level: 'warning',
-        code: 'list-image-split',
-        message: '列表中的图片无法嵌入列表项，将转换为独立图片块或缺图占位段落；列表结构可能变化。',
-      }),
-    ]));
+    expect(listResult.report).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          level: 'warning',
+          code: 'list-image-split',
+          message:
+            '列表中的图片无法嵌入列表项，将转换为独立图片块或缺图占位段落；列表结构可能变化。',
+        }),
+      ]),
+    );
 
-    const quoteResult = await convertMarkdownToBlocks('> before **x ![alt](a.png) y** after', {
-      assetIdsByFilename: new Map([['a.png', 'asset-a']]),
-    });
+    const quoteResult = await convertMarkdownToBlocks(
+      '> before **x ![alt](a.png) y** after',
+      {
+        assetIdsByFilename: new Map([['a.png', 'asset-a']]),
+      },
+    );
     expect(quoteResult.content.blocks).toMatchObject([
       { type: 'callout', props: { variant: 'note', body: 'before **x **' } },
       { type: 'image', props: { assetId: 'asset-a', alt: 'alt' } },
@@ -194,15 +285,23 @@ describe('convertMarkdownToBlocks', () => {
       { type: 'image', props: { assetId: 'asset-a', alt: 'alt' } },
       { type: 'paragraph', props: { text: 'Later paragraph.' } },
     ]);
-    expect(result.report).toEqual(expect.arrayContaining([
-      expect.objectContaining({ level: 'warning', code: 'image-relocated' }),
-    ]));
+    expect(result.report).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ level: 'warning', code: 'image-relocated' }),
+      ]),
+    );
   });
 
   it('resolves nested images in lists, tables, and blockquotes without losing missing-image diagnostics', async () => {
     const result = await convertMarkdownToBlocks(
       '- item ![Diagram](a.png)\n- missing ![absent](missing.png)\n\n| Header | Visual |\n| --- | --- |\n| row | ![Table image](b.png) |\n\n> quoted\n>\n> - ![Quote image](c.png)',
-      { assetIdsByFilename: new Map([['a.png', 'a'], ['b.png', 'b'], ['c.png', 'c']]) },
+      {
+        assetIdsByFilename: new Map([
+          ['a.png', 'a'],
+          ['b.png', 'b'],
+          ['c.png', 'c'],
+        ]),
+      },
     );
     expect(result.content.blocks).toMatchObject([
       { type: 'bulletList', props: { items: ['item'] } },
@@ -214,34 +313,53 @@ describe('convertMarkdownToBlocks', () => {
       { type: 'callout', props: { variant: 'note', body: 'quoted' } },
       { type: 'image', props: { assetId: 'c', alt: 'Quote image' } },
     ]);
-    expect(result.report).toEqual(expect.arrayContaining([
-      expect.objectContaining({ level: 'warning', code: 'missing-asset' }),
-      expect.objectContaining({
-        level: 'warning',
-        code: 'list-image-split',
-        message: '列表中的图片无法嵌入列表项，将转换为独立图片块或缺图占位段落；列表结构可能变化。',
-      }),
-    ]));
+    expect(result.report).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ level: 'warning', code: 'missing-asset' }),
+        expect.objectContaining({
+          level: 'warning',
+          code: 'list-image-split',
+          message:
+            '列表中的图片无法嵌入列表项，将转换为独立图片块或缺图占位段落；列表结构可能变化。',
+        }),
+      ]),
+    );
   });
 
   it('flattens quoted list and code content into the callout body', async () => {
-    const result = await convertMarkdownToBlocks('> intro\n>\n> - listed\n>\n> ```ts\n> const x = 1;\n> ```', ctx);
+    const result = await convertMarkdownToBlocks(
+      '> intro\n>\n> - listed\n>\n> ```ts\n> const x = 1;\n> ```',
+      ctx,
+    );
     expect(result.content.blocks[0]).toMatchObject({
-      type: 'callout', props: { variant: 'note', body: expect.stringContaining('intro') },
+      type: 'callout',
+      props: { variant: 'note', body: expect.stringContaining('intro') },
     });
-    expect((result.content.blocks[0].props as { body: string }).body).toContain('listed');
-    expect((result.content.blocks[0].props as { body: string }).body).toContain('const x = 1;');
+    expect((result.content.blocks[0].props as { body: string }).body).toContain(
+      'listed',
+    );
+    expect((result.content.blocks[0].props as { body: string }).body).toContain(
+      'const x = 1;',
+    );
   });
 
   it('validates converted content and reports invalid block properties', async () => {
     const code = `\`\`\`\n${'x'.repeat(21_000)}\n\`\`\``;
     const paragraph = 'y'.repeat(5_001);
-    const result = await convertMarkdownToBlocks(`${code}\n\n${paragraph}`, ctx);
-    expect(result.report.filter(({ code }) => code === 'invalid-output')).toHaveLength(2);
+    const result = await convertMarkdownToBlocks(
+      `${code}\n\n${paragraph}`,
+      ctx,
+    );
+    expect(
+      result.report.filter(({ code }) => code === 'invalid-output'),
+    ).toHaveLength(2);
   });
 
   it('has no validation errors for legal conversions', async () => {
-    const result = await convertMarkdownToBlocks('## Intro\n\nText\n\n- one\n- two\n\n> note', ctx);
+    const result = await convertMarkdownToBlocks(
+      '## Intro\n\nText\n\n- one\n- two\n\n> note',
+      ctx,
+    );
     expect(result.report.filter(({ level }) => level === 'error')).toEqual([]);
   });
 });

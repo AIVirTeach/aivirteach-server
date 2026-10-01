@@ -1,12 +1,19 @@
 import { Test } from '@nestjs/testing';
-import { INestApplication, NotFoundException, UnprocessableEntityException } from '@nestjs/common';
+import {
+  INestApplication,
+  NotFoundException,
+  UnprocessableEntityException,
+} from '@nestjs/common';
 import request from 'supertest';
 import { ENV, type Env } from '../config/env';
 import { CourseDraftService } from './draft/course-draft.service';
 import { DraftContentService } from './draft/draft-content.service';
 import { CoursePublishService } from './course-publish.service';
 import { PrismaService } from '../prisma/prisma.service';
-import { AdminCourseCreateController, AdminCoursesController } from './admin-courses.controller';
+import {
+  AdminCourseCreateController,
+  AdminCoursesController,
+} from './admin-courses.controller';
 import { CourseCreateService } from './draft/course-create.service';
 import { CourseAssetUploadService } from './assets/course-asset-upload.service';
 
@@ -181,7 +188,12 @@ describe('AdminCoursesController', () => {
     jest.clearAllMocks();
     drafts.createDraft.mockResolvedValue({ draft, created: true });
     courseCreation.create.mockResolvedValue(draft);
-    assetUploads.upload.mockResolvedValue({ id: 'asset-1', url: 'https://blob.test/a.png', altText: null, mimeType: 'image/png' });
+    assetUploads.upload.mockResolvedValue({
+      id: 'asset-1',
+      url: 'https://blob.test/a.png',
+      altText: null,
+      mimeType: 'image/png',
+    });
     drafts.requireDraft.mockResolvedValue(draft);
     prisma.courseAsset.findMany.mockResolvedValue([]);
     for (const route of routes) route.service.mockResolvedValue(draft);
@@ -191,12 +203,20 @@ describe('AdminCoursesController', () => {
   it('POST /admin/courses/:slug/assets requires the admin token and X-Operator', async () => {
     const noToken = await request(app.getHttpServer())
       .post('/admin/courses/demo/assets')
-      .attach('file', Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), 'anything.jpg');
+      .attach(
+        'file',
+        Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+        'anything.jpg',
+      );
     expect(noToken.status).toBe(401);
     const noOperator = await request(app.getHttpServer())
       .post('/admin/courses/demo/assets')
       .set('Authorization', `Bearer ${TOKEN}`)
-      .attach('file', Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), 'anything.jpg');
+      .attach(
+        'file',
+        Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+        'anything.jpg',
+      );
     expect(noOperator.status).toBe(400);
   });
 
@@ -213,10 +233,24 @@ describe('AdminCoursesController', () => {
       .set('Authorization', `Bearer ${TOKEN}`)
       .set('X-Operator', OPERATOR)
       .field('altText', 'A diagram')
-      .attach('file', Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), 'untrusted.jpg');
+      .attach(
+        'file',
+        Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+        'untrusted.jpg',
+      );
     expect(response.status).toBe(201);
-    expect(assetUploads.upload).toHaveBeenCalledWith('demo', expect.objectContaining({ size: 8, buffer: expect.any(Buffer) }), 'A diagram', OPERATOR);
-    expect(response.body).toEqual({ id: 'asset-1', url: 'https://blob.test/a.png', altText: null, mimeType: 'image/png' });
+    expect(assetUploads.upload).toHaveBeenCalledWith(
+      'demo',
+      expect.objectContaining({ size: 8, buffer: expect.any(Buffer) }),
+      'A diagram',
+      OPERATOR,
+    );
+    expect(response.body).toEqual({
+      id: 'asset-1',
+      url: 'https://blob.test/a.png',
+      altText: null,
+      mimeType: 'image/png',
+    });
   });
 
   it('POST /admin/courses/:slug/assets maps file-size overflow to Chinese 400', async () => {
@@ -224,7 +258,14 @@ describe('AdminCoursesController', () => {
       .post('/admin/courses/demo/assets')
       .set('Authorization', `Bearer ${TOKEN}`)
       .set('X-Operator', OPERATOR)
-      .attach('file', Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), Buffer.alloc(5 * 1024 * 1024)]), 'large.png');
+      .attach(
+        'file',
+        Buffer.concat([
+          Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+          Buffer.alloc(5 * 1024 * 1024),
+        ]),
+        'large.png',
+      );
     expect(response.status).toBe(400);
     expect(response.body.message).toContain('5 MiB');
     expect(assetUploads.upload).not.toHaveBeenCalled();
@@ -273,22 +314,32 @@ describe('AdminCoursesController', () => {
 
   it('creates a course at POST /admin/courses with required token and operator', async () => {
     const missingToken = await request(app.getHttpServer())
-      .post('/admin/courses').set('X-Operator', OPERATOR).send({ slug: 'demo-course', title: 'Demo' });
+      .post('/admin/courses')
+      .set('X-Operator', OPERATOR)
+      .send({ slug: 'demo-course', title: 'Demo' });
     expect(missingToken.status).toBe(401);
     const missingOperator = await request(app.getHttpServer())
-      .post('/admin/courses').set('Authorization', `Bearer ${TOKEN}`).send({ slug: 'demo-course', title: 'Demo' });
+      .post('/admin/courses')
+      .set('Authorization', `Bearer ${TOKEN}`)
+      .send({ slug: 'demo-course', title: 'Demo' });
     expect(missingOperator.status).toBe(400);
     const response = await request(app.getHttpServer())
-      .post('/admin/courses').set('Authorization', `Bearer ${TOKEN}`).set('X-Operator', OPERATOR)
+      .post('/admin/courses')
+      .set('Authorization', `Bearer ${TOKEN}`)
+      .set('X-Operator', OPERATOR)
       .send({ slug: 'demo-course', title: 'Demo' });
     expect(response.status).toBe(201);
-    expect(courseCreation.create).toHaveBeenCalledWith({ slug: 'demo-course', title: 'Demo' }, OPERATOR);
+    expect(courseCreation.create).toHaveBeenCalledWith(
+      { slug: 'demo-course', title: 'Demo' },
+      OPERATOR,
+    );
   });
 
   it('GET draft returns 404 when there is no draft', async () => {
     drafts.requireDraft.mockRejectedValueOnce(new NotFoundException());
     const response = await request(app.getHttpServer())
-      .get('/admin/courses/demo/draft').set('Authorization', `Bearer ${TOKEN}`);
+      .get('/admin/courses/demo/draft')
+      .set('Authorization', `Bearer ${TOKEN}`);
     expect(response.status).toBe(404);
   });
 

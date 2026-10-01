@@ -3,7 +3,11 @@ import { AuditActorType } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { AuditService } from '../audit/audit.service';
 import { CoursesService } from '../courses/courses.service';
-import { deriveCurrentModuleTitle, deriveEnrollmentView, type EnrollmentStatus } from './enrollment-view';
+import {
+  deriveCurrentModuleTitle,
+  deriveEnrollmentView,
+  type EnrollmentStatus,
+} from './enrollment-view';
 import { LATEST_PUBLISHED_VERSION } from '../courses/published-version';
 
 export type EnrollmentResponse = {
@@ -26,7 +30,8 @@ export class EnrollmentsService {
   ) {}
 
   async enroll(userId: string, slug: string): Promise<EnrollmentResponse> {
-    const course = await this.coursesService.requirePublishedCourseWithLatestVersion(slug);
+    const course =
+      await this.coursesService.requirePublishedCourseWithLatestVersion(slug);
     const latestVersionId = course.versions[0].id;
 
     const enrollment = await this.prisma.$transaction(async (tx) => {
@@ -38,7 +43,12 @@ export class EnrollmentsService {
       return tx.enrollment.upsert({
         where: { userId_courseId: { userId, courseId: course.id } },
         update: { active: true, courseVersionId: latestVersionId },
-        create: { userId, courseId: course.id, courseVersionId: latestVersionId, active: true },
+        create: {
+          userId,
+          courseId: course.id,
+          courseVersionId: latestVersionId,
+          active: true,
+        },
         include: { progress: true },
       });
     });
@@ -59,12 +69,16 @@ export class EnrollmentsService {
         progress: enrollment.progress,
         modules: course.versions[0].modules,
       }),
-      deriveCurrentModuleTitle({ progress: enrollment.progress, modules: course.versions[0].modules }),
+      deriveCurrentModuleTitle({
+        progress: enrollment.progress,
+        modules: course.versions[0].modules,
+      }),
     );
   }
 
   async restart(userId: string, slug: string): Promise<EnrollmentResponse> {
-    const course = await this.coursesService.requirePublishedCourseWithLatestVersion(slug);
+    const course =
+      await this.coursesService.requirePublishedCourseWithLatestVersion(slug);
     const latestVersionId = course.versions[0].id;
 
     const enrollment = await this.prisma.$transaction(async (tx) => {
@@ -75,19 +89,34 @@ export class EnrollmentsService {
 
       const upserted = await tx.enrollment.upsert({
         where: { userId_courseId: { userId, courseId: course.id } },
-        update: { active: true, courseVersionId: latestVersionId, completedAt: null },
-        create: { userId, courseId: course.id, courseVersionId: latestVersionId, active: true },
+        update: {
+          active: true,
+          courseVersionId: latestVersionId,
+          completedAt: null,
+        },
+        create: {
+          userId,
+          courseId: course.id,
+          courseVersionId: latestVersionId,
+          active: true,
+        },
       });
 
       await tx.progress.upsert({
         where: { enrollmentId: upserted.id },
         update: { currentLessonId: null, currentLessonContentId: null },
-        create: { enrollmentId: upserted.id, currentLessonId: null, currentLessonContentId: null },
+        create: {
+          enrollmentId: upserted.id,
+          currentLessonId: null,
+          currentLessonContentId: null,
+        },
       });
 
       // 全新 restart：清空聊天记录和 Learning Lab，让用户像第一次报名一样重新走一遍。
       // 保留 Attempt/EnrollmentCompletion（评测与结课审计记录），不清空。
-      await tx.conversation.deleteMany({ where: { enrollmentId: upserted.id } });
+      await tx.conversation.deleteMany({
+        where: { enrollmentId: upserted.id },
+      });
       await tx.workspace.deleteMany({ where: { enrollmentId: upserted.id } });
 
       return upserted;
@@ -105,7 +134,11 @@ export class EnrollmentsService {
     return this.toResponse(
       enrollment,
       course.slug,
-      deriveEnrollmentView({ completedAt: enrollment.completedAt, progress: null, modules: [] }),
+      deriveEnrollmentView({
+        completedAt: enrollment.completedAt,
+        progress: null,
+        modules: [],
+      }),
       '',
     );
   }
@@ -136,7 +169,10 @@ export class EnrollmentsService {
     );
   }
 
-  async completeLesson(userId: string, lessonId: string): Promise<EnrollmentResponse> {
+  async completeLesson(
+    userId: string,
+    lessonId: string,
+  ): Promise<EnrollmentResponse> {
     // contentId 只在同一模块内唯一，不同课程会复用同一套课时命名（比如环境搭建步骤），
     // 所以不能只查 active enrollment——过期的 active 指针会让完成请求记错课程。
     // 要在用户所有已报名的课程里找出哪门课有这个 contentId，跟 CoursesService.getLesson 一样按 contentId 定位。
@@ -151,8 +187,12 @@ export class EnrollmentsService {
     const matches = enrollments.flatMap((candidate) => {
       const modules = candidate.course.versions[0]?.modules ?? [];
       const flattened = modules.flatMap((courseModule) => courseModule.lessons);
-      const index = flattened.findIndex((entry) => entry.contentId === lessonId);
-      return index === -1 ? [] : [{ enrollment: candidate, modules, flattened, index }];
+      const index = flattened.findIndex(
+        (entry) => entry.contentId === lessonId,
+      );
+      return index === -1
+        ? []
+        : [{ enrollment: candidate, modules, flattened, index }];
     });
 
     if (matches.length === 0) {
@@ -193,7 +233,10 @@ export class EnrollmentsService {
       await tx.progress.upsert({
         where: { enrollmentId: enrollment.id },
         update: { currentLessonContentId: nextLessonContentId },
-        create: { enrollmentId: enrollment.id, currentLessonContentId: nextLessonContentId },
+        create: {
+          enrollmentId: enrollment.id,
+          currentLessonContentId: nextLessonContentId,
+        },
       });
       await tx.activity.create({
         data: {
@@ -214,7 +257,10 @@ export class EnrollmentsService {
         progress: { currentLessonContentId: nextLessonContentId },
         modules,
       }),
-      deriveCurrentModuleTitle({ progress: { currentLessonContentId: nextLessonContentId }, modules }),
+      deriveCurrentModuleTitle({
+        progress: { currentLessonContentId: nextLessonContentId },
+        modules,
+      }),
     );
   }
 

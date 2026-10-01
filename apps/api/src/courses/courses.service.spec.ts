@@ -261,10 +261,19 @@ describe('CoursesService.getLesson', () => {
     const version = structuredClone(versionWithTwoLessons);
     version.modules[0].lessons[0].content = {
       schemaVersion: 1,
-      blocks: [{ id: 'image', type: 'image', props: { assetId: 'owned', alt: 'owned' } }],
+      blocks: [
+        {
+          id: 'image',
+          type: 'image',
+          props: { assetId: 'owned', alt: 'owned' },
+        },
+      ],
     };
     prisma.course.findUnique.mockResolvedValue({
-      id: 'course_cuid_1', slug: 'sample', published: true, versions: [version],
+      id: 'course_cuid_1',
+      slug: 'sample',
+      published: true,
+      versions: [version],
     });
     prisma.courseAsset.findMany.mockResolvedValue([
       { id: 'owned', objectKey: 'https://cdn.test/owned.png', altText: null },
@@ -276,7 +285,9 @@ describe('CoursesService.getLesson', () => {
     expect(prisma.courseAsset.findMany).toHaveBeenCalledWith({
       where: { courseId: 'course_cuid_1', id: { in: ['owned'] } },
     });
-    expect(lesson.assets).toEqual({ owned: { url: 'https://cdn.test/owned.png' } });
+    expect(lesson.assets).toEqual({
+      owned: { url: 'https://cdn.test/owned.png' },
+    });
   });
 
   it('第二课的 navigation 指回第一课，且没有 next', async () => {
