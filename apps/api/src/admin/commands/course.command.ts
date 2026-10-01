@@ -25,6 +25,8 @@ export class CourseCreateCommand extends CommandRunner {
     const [contentDir] = inputs;
 
     if (!options.execute) {
+      const conversionReports =
+        await this.admin.previewCourseConversions(contentDir);
       console.log(
         JSON.stringify({
           command: 'course:create',
@@ -33,6 +35,21 @@ export class CourseCreateCommand extends CommandRunner {
           reason,
           contentDir,
           imageDigest: options.imageDigest ?? null,
+          conversionReports,
+          warningCount: conversionReports.reduce(
+            (count, report) =>
+              count +
+              report.issues.filter((issue) => issue.level === 'warning').length,
+            0,
+          ),
+          lessonErrors: conversionReports.flatMap((report) =>
+            report.issues
+              .filter((issue) => issue.level === 'error')
+              .map((issue) => ({
+                lessonContentId: report.lessonContentId,
+                ...issue,
+              })),
+          ),
           note: '加 --execute 才会真正写库',
         }),
       );
@@ -45,6 +62,7 @@ export class CourseCreateCommand extends CommandRunner {
       reason,
       options.imageDigest,
     );
+    const conversionReports = course.conversionReports;
 
     console.log(
       JSON.stringify({
@@ -55,6 +73,21 @@ export class CourseCreateCommand extends CommandRunner {
         slug: course.slug,
         title: course.title,
         version: course.versions[0]?.version,
+        conversionReports,
+        warningCount: conversionReports.reduce(
+          (count, report) =>
+            count +
+            report.issues.filter((issue) => issue.level === 'warning').length,
+          0,
+        ),
+        lessonErrors: conversionReports.flatMap((report) =>
+          report.issues
+            .filter((issue) => issue.level === 'error')
+            .map((issue) => ({
+              lessonContentId: report.lessonContentId,
+              ...issue,
+            })),
+        ),
       }),
     );
   }

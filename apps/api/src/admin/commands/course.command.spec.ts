@@ -34,7 +34,19 @@ describe('CourseCreateCommand', () => {
 
   it('dry-run 不调用 AdminService', async () => {
     const createCourse = jest.fn();
-    const command = await buildCommand(CourseCreateCommand, { createCourse });
+    const conversionReports = [
+      {
+        lessonContentId: 'lesson-1',
+        issues: [{ level: 'warning', code: 'h1-dropped', message: 'dropped' }],
+      },
+    ];
+    const previewCourseConversions = jest
+      .fn()
+      .mockResolvedValue(conversionReports);
+    const command = await buildCommand(CourseCreateCommand, {
+      createCourse,
+      previewCourseConversions,
+    });
 
     await command.run(['/content/n8n'], {
       operator: OPERATOR,
@@ -42,6 +54,7 @@ describe('CourseCreateCommand', () => {
     });
 
     expect(createCourse).not.toHaveBeenCalled();
+    expect(previewCourseConversions).toHaveBeenCalledWith('/content/n8n');
     expect(logSpy).toHaveBeenCalledWith(
       JSON.stringify({
         command: 'course:create',
@@ -50,16 +63,26 @@ describe('CourseCreateCommand', () => {
         reason: REASON,
         contentDir: '/content/n8n',
         imageDigest: null,
+        conversionReports,
+        warningCount: 1,
+        lessonErrors: [],
         note: '加 --execute 才会真正写库',
       }),
     );
   });
 
   it('--execute 会调用 AdminService 并透传 imageDigest', async () => {
+    const conversionReports = [
+      {
+        lessonContentId: 'lesson-1',
+        issues: [{ level: 'error', code: 'invalid-output', message: 'broken' }],
+      },
+    ];
     const createCourse = jest.fn().mockResolvedValue({
       slug: 'n8n',
       title: 'n8n 自动化工作流',
       versions: [{ version: 1 }],
+      conversionReports,
     });
     const command = await buildCommand(CourseCreateCommand, { createCourse });
 
@@ -85,6 +108,16 @@ describe('CourseCreateCommand', () => {
         slug: 'n8n',
         title: 'n8n 自动化工作流',
         version: 1,
+        conversionReports,
+        warningCount: 0,
+        lessonErrors: [
+          {
+            lessonContentId: 'lesson-1',
+            level: 'error',
+            code: 'invalid-output',
+            message: 'broken',
+          },
+        ],
       }),
     );
   });

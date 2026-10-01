@@ -82,6 +82,9 @@
     "typescript-eslint": "^8.20.0"
   },
   "jest": {
+    "moduleNameMapper": {
+      "^(\\.{1,2}/.*)\\.js$": "$1"
+    },
     "moduleFileExtensions": [
       "js",
       "json",

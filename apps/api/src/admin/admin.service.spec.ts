@@ -41,6 +41,7 @@ const buildPrisma = () => ({
 
 const buildCourseIngestion = () => ({
   ingestFromDirectory: jest.fn(),
+  previewConversions: jest.fn(),
 });
 
 const buildCourseAssetStorage = () => ({
@@ -159,6 +160,28 @@ describe('AdminService.createCourse', () => {
         targetId: 'course_1',
       }),
     );
+  });
+});
+
+describe('AdminService.previewCourseConversions', () => {
+  it('委托摄取服务生成 dry-run 转换报告，不写库也不记审计', async () => {
+    const courseIngestion = buildCourseIngestion();
+    const reports = [{ lessonContentId: 'lesson-1', issues: [] }];
+    courseIngestion.previewConversions.mockResolvedValue(reports);
+    const { service, audit } = await buildService(
+      buildPrisma(),
+      undefined,
+      courseIngestion,
+    );
+
+    await expect(
+      service.previewCourseConversions('/content/n8n'),
+    ).resolves.toEqual(reports);
+
+    expect(courseIngestion.previewConversions).toHaveBeenCalledWith(
+      '/content/n8n',
+    );
+    expect(audit.record).not.toHaveBeenCalled();
   });
 });
 

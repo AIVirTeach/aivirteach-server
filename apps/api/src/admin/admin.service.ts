@@ -18,7 +18,10 @@ import { generateOpaqueToken, hashOpaqueToken } from '../auth/tokens';
 import { ENV, type Env } from '../config/env';
 import { PrismaService } from '../prisma/prisma.service';
 import { CourseAssetStorageService } from '../courses/course-asset-storage.service';
-import { CourseIngestionService } from '../courses/course-ingestion.service';
+import {
+  CourseIngestionService,
+  type IngestedCourse,
+} from '../courses/course-ingestion.service';
 import {
   detectImageExtension,
   MAX_COVER_IMAGE_BYTES,
@@ -88,7 +91,7 @@ export class AdminService {
     operator: string,
     reason: string,
     imageDigest?: string,
-  ): Promise<Course & { versions: CourseVersion[] }> {
+  ): Promise<IngestedCourse> {
     const course = await this.courseIngestion.ingestFromDirectory(
       contentDir,
       imageDigest,
@@ -104,6 +107,10 @@ export class AdminService {
     });
 
     return course;
+  }
+
+  async previewCourseConversions(contentDir: string) {
+    return this.courseIngestion.previewConversions(contentDir);
   }
 
   async setCourseCover(
