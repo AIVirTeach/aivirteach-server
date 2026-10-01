@@ -9,6 +9,8 @@ import {
 import { EnrollCommand } from './commands/enroll.command';
 import { QuotaGrantCommand } from './commands/quota.command';
 import { CoursesModule } from '../courses/courses.module';
+import { ContentModelBackfillService } from './backfill/content-model-backfill.service';
+import { CourseBackfillCommand } from './commands/course-backfill.command';
 
 @Module({
   imports: [CoursesModule],
@@ -20,6 +22,8 @@ import { CoursesModule } from '../courses/courses.module';
     CourseSetCoverCommand,
     EnrollCommand,
     QuotaGrantCommand,
+    ContentModelBackfillService,
+    CourseBackfillCommand,
   ],
   exports: [AdminService],
 })
