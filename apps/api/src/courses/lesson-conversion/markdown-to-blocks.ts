@@ -2,6 +2,7 @@ import type { Nodes, Root, PhrasingContent } from 'mdast';
 import type { LessonContent, LessonBlock } from '@aivirteach/lesson-blocks';
 import { validateLessonContent } from '@aivirteach/lesson-blocks';
 import { inlineToMarkdownSubset } from './inline';
+import { storeConversionComparisonMetadata } from './comparison-metadata';
 
 export type ConversionIssue = {
   level: 'warning' | 'error';
@@ -14,8 +15,6 @@ export type ConversionResult = {
   content: LessonContent;
   report: ConversionIssue[];
   dropped: string[];
-  /** Comparison-only generated text, keyed by block id; never applied to content. */
-  equivalenceIgnoredTextByBlockId?: Readonly<Record<string, readonly string[]>>;
 };
 
 type Context = { assetIdsByFilename: ReadonlyMap<string, string> };
@@ -34,7 +33,7 @@ export async function convertMarkdownToBlocks(
   const tree = unified().use(remarkParse).use(remarkGfm).parse(markdown) as Root;
   const report: ConversionIssue[] = [];
   const dropped: string[] = [];
-  const equivalenceIgnoredTextByBlockId: Record<string, string[]> = {};
+  const generatedTextByBlockId: Record<string, string[]> = {};
   const blocks: LessonBlock[] = [];
   const append = (type: string, props: unknown) => {
     const id = `b-${String(blocks.length + 1).padStart(3, '0')}`;
@@ -68,16 +67,39 @@ export async function convertMarkdownToBlocks(
       report.push({ level: 'warning', code: 'missing-asset', message: `找不到图片素材：${filename}`, line: node.position?.start.line });
       const label = `[图片缺失：${filename}]`;
       const placeholderId = append('paragraph', { text: `${label}${alt ? ` ${alt}` : ''}` });
-      equivalenceIgnoredTextByBlockId[placeholderId] = [label, ...(generatedAlt ? [` ${alt}`] : [])];
+      generatedTextByBlockId[placeholderId] = [label, ...(generatedAlt ? [` ${alt}`] : [])];
       return;
     }
     const imageId = append('image', { assetId, alt });
-    if (generatedAlt) equivalenceIgnoredTextByBlockId[imageId] = [alt];
+    if (generatedAlt) generatedTextByBlockId[imageId] = [alt];
   };
   const nestedImages = (node: Nodes): ImageNode[] => {
     if (node.type === 'image' || node.type === 'imageReference') return [node];
     if ('children' in node) return node.children.flatMap((child) => nestedImages(child as Nodes));
     return [];
+  };
+  type PhrasingUnit = { kind: 'inline'; node: PhrasingContent } | { kind: 'image'; node: ImageNode };
+  const splitPhrasing = (node: PhrasingContent): PhrasingUnit[] => {
+    if (node.type === 'image' || node.type === 'imageReference') return [{ kind: 'image', node }];
+    if (!('children' in node)) return [{ kind: 'inline', node }];
+    const units: PhrasingUnit[] = [];
+    let segment: PhrasingContent[] = [];
+    const flush = () => {
+      if (segment.length) units.push({ kind: 'inline', node: { ...node, children: segment } as PhrasingContent });
+      segment = [];
+    };
+    for (const child of node.children) {
+      for (const unit of splitPhrasing(child as PhrasingContent)) {
+        if (unit.kind === 'image') {
+          flush();
+          units.push(unit);
+        } else {
+          segment.push(unit.node);
+        }
+      }
+    }
+    flush();
+    return units;
   };
   const emitNestedImages = (node: Nodes) => nestedImages(node).forEach(imageBlock);
   const quotedText = (node: Nodes): string[] => {
@@ -139,22 +161,18 @@ export async function convertMarkdownToBlocks(
       }
     } else if (node.type === 'paragraph') {
       let phrasing: PhrasingContent[] = [];
-      const flush = () => {
-        const text = inline(phrasing).trim();
-        if (text) append('paragraph', { text });
+      const flush = (preserveBoundaryWhitespace = false) => {
+        const inlineText = inline(phrasing);
+        const text = preserveBoundaryWhitespace ? inlineText : inlineText.trim();
+        if (text.trim()) append('paragraph', { text });
         phrasing = [];
       };
-      for (const child of node.children) {
-        if (child.type === 'image' || child.type === 'imageReference') {
-          flush();
-          imageBlock(child);
-          continue;
-        }
-        phrasing.push(child);
-        const images = nestedImages(child as Nodes);
-        if (images.length) {
-          flush();
-          images.forEach(imageBlock);
+      for (const unit of node.children.flatMap(splitPhrasing)) {
+        if (unit.kind === 'image') {
+          flush(true);
+          imageBlock(unit.node);
+        } else {
+          phrasing.push(unit.node);
         }
       }
       flush();
@@ -175,6 +193,6 @@ export async function convertMarkdownToBlocks(
   const validation = validateLessonContent(content, { courseAssetIds: new Set(ctx.assetIdsByFilename.values()) });
   for (const problem of validation.errors) report.push({ level: 'error', code: 'invalid-output', message: problem.message });
   const result: ConversionResult = { content, report, dropped };
-  Object.defineProperty(result, 'equivalenceIgnoredTextByBlockId', { value: equivalenceIgnoredTextByBlockId });
+  storeConversionComparisonMetadata(result, generatedTextByBlockId);
   return result;
 }

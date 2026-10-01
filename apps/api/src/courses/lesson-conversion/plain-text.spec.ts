@@ -70,7 +70,7 @@ describe('checkPlainTextEquivalence', () => {
     expect(missingResult.content.blocks).toMatchObject([
       { type: 'paragraph', props: { text: '[图片缺失：missing.png] missing.png' } },
     ]);
-    expect(JSON.stringify(missingResult)).not.toContain('equivalenceIgnoredTextByBlockId');
+    expect(Object.keys(missingResult)).toEqual(['content', 'report', 'dropped']);
     expect((await checkPlainTextEquivalence(missingMarkdown, missingResult)).equal).toBe(true);
 
     const resolvedMarkdown = '![](resolved.png)\n\nBody repeats resolved.png.';

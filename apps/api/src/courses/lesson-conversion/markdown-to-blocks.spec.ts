@@ -139,10 +139,22 @@ describe('convertMarkdownToBlocks', () => {
       assetIdsByFilename: new Map([['a.png', 'asset-a']]),
     });
     expect(result.content.blocks).toMatchObject([
-      { type: 'paragraph', props: { text: 'before' } },
+      { type: 'paragraph', props: { text: 'before ' } },
       { type: 'image', props: { assetId: 'asset-a', alt: 'alt' } },
       { type: 'paragraph', props: { text: 'after' } },
     ]);
+  });
+
+  it('splits phrasing wrappers around nested images without changing source order', async () => {
+    const result = await convertMarkdownToBlocks('before **x ![alt](a.png) y** after', {
+      assetIdsByFilename: new Map([['a.png', 'asset-a']]),
+    });
+    expect(result.content.blocks).toMatchObject([
+      { type: 'paragraph', props: { text: 'before **x **' } },
+      { type: 'image', props: { assetId: 'asset-a', alt: 'alt' } },
+      { type: 'paragraph', props: { text: '** y** after' } },
+    ]);
+    expect(result.content.blocks.map(({ type }) => type)).toEqual(['paragraph', 'image', 'paragraph']);
   });
 
   it('resolves nested images in lists, tables, and blockquotes without losing missing-image diagnostics', async () => {

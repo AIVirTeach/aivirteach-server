@@ -2,6 +2,7 @@ import { blocksToPlainText } from '@aivirteach/lesson-blocks';
 import type { Nodes, Root } from 'mdast';
 import type { ConversionResult } from './markdown-to-blocks';
 import { inlineToMarkdownSubset } from './inline';
+import { getConversionComparisonMetadata, withoutGeneratedComparisonText } from './comparison-metadata';
 
 async function parseMarkdown(markdown: string): Promise<{ tree: Root; toString: (node: Nodes | Root) => string }> {
   const [{ unified }, { default: remarkParse }, { default: remarkGfm }, { toString }] = await Promise.all([
@@ -36,19 +37,7 @@ export async function checkPlainTextEquivalence(
     else droppedCounts.set(plainHeading, remaining - 1);
     return false;
   }).map(toString).join('\n');
-  const ignoredTextByBlockId = result.equivalenceIgnoredTextByBlockId ?? {};
-  const comparableContent = {
-    ...result.content,
-    blocks: result.content.blocks.map((block) => {
-      const ignoredText = ignoredTextByBlockId[block.id];
-      if (!ignoredText?.length || typeof block.props !== 'object' || block.props === null) return block;
-      const props = block.props as Record<string, unknown>;
-      const textProperty = block.type === 'paragraph' ? 'text' : block.type === 'image' ? 'alt' : undefined;
-      if (!textProperty || typeof props[textProperty] !== 'string') return block;
-      const comparableText = ignoredText.reduce((value, ignored) => value.replace(ignored, ''), props[textProperty] as string);
-      return { ...block, props: { ...props, [textProperty]: comparableText } };
-    }),
-  };
+  const comparableContent = withoutGeneratedComparisonText(result.content, getConversionComparisonMetadata(result));
   const actual = blocksToPlainText(comparableContent);
   const normalize = (value: string) => value.replace(/\s/gu, '');
   return { equal: normalize(expected) === normalize(actual), expected, actual };
