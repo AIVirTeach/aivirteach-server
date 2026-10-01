@@ -62,22 +62,24 @@ function findInlineCodeEnd(value: string, start: number, delimiterLength: number
   return -1;
 }
 
-function findUnescaped(value: string, char: string, start: number): number {
-  for (let index = start; index < value.length;) {
+function findLinkEnd(value: string, start: number): { labelEnd: number; end: number } | undefined {
+  let labelEnd = -1;
+  for (let index = start + 1; index < value.length;) {
     if (value[index] === '\\') {
       const runLength = countRun(value, index, '\\');
       index += runLength;
       if (runLength % 2 === 1) index++;
       continue;
     }
-    if (value[index] === char) return index;
+    if (value[index] === '`') {
+      const runLength = countRun(value, index, '`');
+      const codeEnd = findInlineCodeEnd(value, index + runLength, runLength);
+      index = codeEnd < 0 ? index + runLength : codeEnd + runLength;
+      continue;
+    }
+    if (value[index] === ']') { labelEnd = index; break; }
     index++;
   }
-  return -1;
-}
-
-function findLinkEnd(value: string, start: number): { labelEnd: number; end: number } | undefined {
-  const labelEnd = findUnescaped(value, ']', start + 1);
   if (labelEnd < 0 || value[labelEnd + 1] !== '(') return undefined;
   let depth = 1;
   for (let index = labelEnd + 2; index < value.length;) {

@@ -30,7 +30,8 @@ describe('lesson content derived helpers', () => {
       block('c', 'code', { kind: 'plain', code }),
       block('a', 'annotatedCode', { steps: [{ label: 'Step', code, terms: [] }] }),
       block('p', 'paragraph', { text: '[x](https://a.test/a_(b))' }),
-    ]))).toBe(`${code}\nStep\n${code}\nx`);
+      block('label', 'paragraph', { text: '[a `]` b](url)' }),
+    ]))).toBe(`${code}\nStep\n${code}\nx\na ] b`);
   });
 
   it('keeps inline code contents literal and handles bracket escapes by parity', () => {
