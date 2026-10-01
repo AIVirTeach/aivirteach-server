@@ -70,7 +70,7 @@ export class CourseDraftService {
                     objectives: lesson.objectives,
                     sourceRange: lesson.sourceRange ?? undefined,
                     body: lesson.body,
-                    content: lesson.content === null ? Prisma.JsonNull : lesson.content,
+                    content: lesson.content === null ? Prisma.DbNull : lesson.content,
                     activityType: lesson.activityType,
                     activityPrompt: lesson.activityPrompt,
                     activityCompletionType: lesson.activityCompletionType,
@@ -99,7 +99,7 @@ export class CourseDraftService {
                       overviewParagraphs: source.welcome.overviewParagraphs,
                       howItWorksSteps:
                         source.welcome.howItWorksSteps === null
-                          ? Prisma.JsonNull
+                          ? Prisma.DbNull
                           : source.welcome.howItWorksSteps,
                       finalOutcome: source.welcome.finalOutcome,
                     },

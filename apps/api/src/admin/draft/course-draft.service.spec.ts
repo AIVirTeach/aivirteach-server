@@ -61,6 +61,21 @@ describe('CourseDraftService', () => {
               },
             ],
           },
+          {
+            contentId: 'lesson-legacy-null',
+            position: 2,
+            title: 'Legacy lesson',
+            estimatedMinutes: 1,
+            objectives: [],
+            sourceRange: null,
+            body: '',
+            content: null,
+            activityType: 'guided',
+            activityPrompt: 'Do it',
+            activityCompletionType: 'manual',
+            assessmentIds: [],
+            assessments: [],
+          },
         ],
       },
     ],
@@ -68,7 +83,7 @@ describe('CourseDraftService', () => {
       overviewAssetId: 'asset-1',
       overviewHeading: 'Welcome',
       overviewParagraphs: ['Hello'],
-      howItWorksSteps: [{ title: 'Step' }],
+      howItWorksSteps: null,
       finalOutcome: 'Outcome',
     },
   };
@@ -100,7 +115,7 @@ describe('CourseDraftService', () => {
     };
   }
 
-  it('clones the latest published version and records create audit', async () => {
+  it('clones nullable JSON as SQL NULL and records create audit', async () => {
     const { prisma, audit, service } = setup();
     prisma.course.findUnique.mockResolvedValue({ id: 'course-1', slug: 'demo' });
     prisma.courseVersion.findFirst
@@ -125,7 +140,7 @@ describe('CourseDraftService', () => {
         create: [
           {
             lessons: {
-              create: [
+              create: expect.arrayContaining([
                 expect.objectContaining({
                   contentId: 'lesson-1',
                   body: 'lesson body',
@@ -134,13 +149,17 @@ describe('CourseDraftService', () => {
                     create: [expect.objectContaining({ question: 'Question?' })],
                   },
                 }),
-              ],
+              ]),
             },
           },
         ],
       },
       welcome: { create: expect.objectContaining({ overviewHeading: 'Welcome' }) },
     });
+    const clonedLessons = createArg.data.modules.create[0].lessons.create;
+    expect(clonedLessons[0].content).toEqual({ legacy: true });
+    expect(clonedLessons[1].content).toBe(Prisma.DbNull);
+    expect(createArg.data.welcome.create.howItWorksSteps).toBe(Prisma.DbNull);
     expect(createArg.data).not.toHaveProperty('sourceMarkdown');
     expect(createArg.data).not.toHaveProperty('meta');
     expect(createArg.data).not.toHaveProperty('publishedAt');
