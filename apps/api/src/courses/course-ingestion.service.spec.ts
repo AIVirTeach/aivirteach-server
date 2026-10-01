@@ -226,18 +226,22 @@ describe('CourseIngestionService.ingestFromDirectory', () => {
 
   it('dry-run and ingestion use the upload filename when source asset id differs from source filename', async () => {
     const contentDir = await mkdtemp(join(tmpdir(), 'lesson-ingestion-'));
-    const courseContent = JSON.parse(
-      readFileSync(join(FIXTURE_DIR, 'course.json'), 'utf8'),
-    );
-    courseContent.assets[0].id = 'manifest-cover-id';
-    courseContent.introduction.featuredAssetIds = ['manifest-cover-id'];
-    await writeFile(
-      join(contentDir, 'course.json'),
-      JSON.stringify(courseContent),
-    );
-    await writeFile(join(contentDir, 'lesson-source.md'), SOURCE_MARKDOWN);
-
     try {
+      const courseContent = JSON.parse(
+        readFileSync(join(FIXTURE_DIR, 'course.json'), 'utf8'),
+      );
+      courseContent.assets[0].id = 'manifest-cover-id';
+      courseContent.introduction.featuredAssetIds = ['manifest-cover-id'];
+      await writeFile(
+        join(contentDir, 'course.json'),
+        JSON.stringify(courseContent),
+      );
+      await writeFile(join(contentDir, 'lesson-source.md'), SOURCE_MARKDOWN);
+      await copyFile(
+        join(FIXTURE_DIR, 'cover.png'),
+        join(contentDir, 'cover.png'),
+      );
+
       const previewService = await buildService(buildPrisma());
       const previewMaps: Map<string, string>[] = [];
       jest
