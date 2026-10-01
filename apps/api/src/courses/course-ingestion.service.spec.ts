@@ -3,7 +3,7 @@ import { Test } from '@nestjs/testing';
 import { ConflictException } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { readFileSync } from 'node:fs';
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { copyFile, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { PrismaService } from '../prisma/prisma.service';
 import { CourseAssetStorageService } from './course-asset-storage.service';
@@ -306,24 +306,28 @@ describe('CourseIngestionService.ingestFromDirectory', () => {
 
   it('real converter resolves an image by the generated upload basename to the persisted asset UUID', async () => {
     const contentDir = await mkdtemp(join(tmpdir(), 'lesson-image-ingestion-'));
-    const courseContent = JSON.parse(
-      readFileSync(join(FIXTURE_DIR, 'course.json'), 'utf8'),
-    );
-    courseContent.assets[0].id = 'manifest-cover-id';
-    courseContent.assets[0].path = 'cover.png';
-    courseContent.modules[0].lessons.forEach((lesson: any) => {
-      lesson.sourceRange = { startLine: 1, endLine: 1 };
-    });
-    await writeFile(
-      join(contentDir, 'course.json'),
-      JSON.stringify(courseContent),
-    );
-    await writeFile(
-      join(contentDir, 'lesson-source.md'),
-      '![Course cover](manifest-cover-id.png)\n',
-    );
-
     try {
+      const courseContent = JSON.parse(
+        readFileSync(join(FIXTURE_DIR, 'course.json'), 'utf8'),
+      );
+      courseContent.assets[0].id = 'manifest-cover-id';
+      courseContent.assets[0].path = 'cover.png';
+      courseContent.modules[0].lessons.forEach((lesson: any) => {
+        lesson.sourceRange = { startLine: 1, endLine: 1 };
+      });
+      await writeFile(
+        join(contentDir, 'course.json'),
+        JSON.stringify(courseContent),
+      );
+      await writeFile(
+        join(contentDir, 'lesson-source.md'),
+        '![Course cover](manifest-cover-id.png)\n',
+      );
+      await copyFile(
+        join(FIXTURE_DIR, 'cover.png'),
+        join(contentDir, 'cover.png'),
+      );
+
       const prisma = buildPrisma();
       const service = await buildService(prisma);
       const result = await service.ingestFromDirectory(contentDir);
