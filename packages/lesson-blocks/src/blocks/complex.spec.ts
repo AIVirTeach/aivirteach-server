@@ -34,6 +34,7 @@ describe('complex lesson block schemas', () => {
 
   it('accepts the maximum image alt length', () => {
     expect(ImagePropsSchema.safeParse({ assetId: 'asset-1', alt: repeated(300) }).success).toBe(true);
+    expect(ImagePropsSchema.safeParse({ assetId: 'asset-1', alt: repeated(301) }).success).toBe(false);
   });
 
   it('only accepts resource URLs with allowed protocols', () => {
@@ -100,9 +101,9 @@ describe('complex lesson block schemas', () => {
     };
     expect(DiagramPropsSchema.safeParse(maximum).success).toBe(true);
     expect(DiagramPropsSchema.safeParse({ ...maximum, title: repeated(121) }).success).toBe(false);
-    expect(DiagramPropsSchema.safeParse({ ...maximum, nodes: [{ ...validDiagramNode(), id: repeated(65) }, validDiagramNode('other')] }).success).toBe(false);
-    expect(DiagramPropsSchema.safeParse({ ...maximum, nodes: [{ ...validDiagramNode(), title: repeated(61) }, validDiagramNode('other')] }).success).toBe(false);
-    expect(DiagramPropsSchema.safeParse({ ...maximum, nodes: [{ ...validDiagramNode(), description: repeated(201) }, validDiagramNode('other')] }).success).toBe(false);
+    expect(DiagramPropsSchema.safeParse({ ...maximum, nodes: [{ ...validDiagramNode(), id: repeated(65) }, validDiagramNode('other')], connections: [] }).success).toBe(false);
+    expect(DiagramPropsSchema.safeParse({ ...maximum, nodes: [{ ...validDiagramNode(), title: repeated(61) }, validDiagramNode('other')], connections: [] }).success).toBe(false);
+    expect(DiagramPropsSchema.safeParse({ ...maximum, nodes: [{ ...validDiagramNode(), description: repeated(201) }, validDiagramNode('other')], connections: [] }).success).toBe(false);
     expect(DiagramPropsSchema.safeParse({ ...maximum, connections: [{ from: maximum.nodes[0].id, to: maximum.nodes[1].id, label: repeated(41) }] }).success).toBe(false);
   });
 });
