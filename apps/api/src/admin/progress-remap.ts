@@ -1,10 +1,12 @@
 export function remapRemovedLessons(
   oldOrder: readonly string[],
   newOrder: readonly string[],
-): Map<string, string | null> {
+): Map<string, string> {
+  if (newOrder.length === 0) return new Map();
+
   const retained = new Set(newOrder);
-  const fallback = newOrder.at(-1) ?? null;
-  const remap = new Map<string, string | null>();
+  const fallback = newOrder.at(-1)!;
+  const remap = new Map<string, string>();
 
   oldOrder.forEach((contentId, index) => {
     if (retained.has(contentId) || remap.has(contentId)) return;

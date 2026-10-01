@@ -13,13 +13,8 @@ describe('remapRemovedLessons', () => {
     );
   });
 
-  it('maps all removed lessons to none when the new course is empty', () => {
-    expect(remapRemovedLessons(['a', 'b'], [])).toEqual(
-      new Map([
-        ['a', null],
-        ['b', null],
-      ]),
-    );
+  it('does not remap pointers when the new course is empty', () => {
+    expect(remapRemovedLessons(['a', 'b'], [])).toEqual(new Map());
   });
 
   it('does not remap retained lesson IDs', () => {
