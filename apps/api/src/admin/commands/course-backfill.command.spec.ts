@@ -9,15 +9,28 @@ describe('CourseBackfillCommand', () => {
   let audit: { record: jest.Mock };
   let prisma: { $transaction: jest.Mock };
   let transaction: object;
+  let persistedWrites: string[];
   let command: CourseBackfillCommand;
   let log: jest.SpyInstance;
 
   beforeEach(() => {
-    service = { run: jest.fn().mockResolvedValue(report) };
+    service = {
+      run: jest.fn(async (options: { execute: boolean }, tx?: { writes: string[] }) => {
+        if (options.execute) tx?.writes.push('backfill write');
+        return report;
+      }),
+    };
     audit = { record: jest.fn().mockResolvedValue(undefined) };
     transaction = {};
+    persistedWrites = [];
     prisma = {
-      $transaction: jest.fn(async (callback: (tx: object) => unknown) => callback(transaction)),
+      $transaction: jest.fn(async (callback: (tx: object) => unknown) => {
+        const tx = { writes: [] as string[] };
+        transaction = tx;
+        const result = await callback(tx);
+        persistedWrites.push(...tx.writes);
+        return result;
+      }),
     };
     command = new CourseBackfillCommand(
       service as unknown as ContentModelBackfillService,
@@ -48,6 +61,7 @@ describe('CourseBackfillCommand', () => {
       reason: '迁移回填',
       metadata: { report },
     }, transaction);
+    expect(persistedWrites).toEqual(['backfill write']);
     expect(log).toHaveBeenCalledWith(JSON.stringify({ command: 'course:backfill-content-model', dryRun: false, operator: 'ops@example.com', reason: '迁移回填', ...report }));
   });
 
@@ -63,6 +77,7 @@ describe('CourseBackfillCommand', () => {
     expect(service.run).toHaveBeenCalledWith({ execute: true }, transaction);
     expect(audit.record).toHaveBeenCalledWith(expect.any(Object), transaction);
     expect(log).not.toHaveBeenCalled();
+    expect(persistedWrites).toEqual([]);
   });
 
   it('operator 和 reason 沿用 schema 校验', async () => {
