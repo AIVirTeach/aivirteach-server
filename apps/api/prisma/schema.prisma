@@ -165,6 +165,8 @@ model CourseVersion {
   sourcePath            String?
   sourceEncoding        String?
   sourceMarkdown        String?   @db.Text
+  // 草稿里的课程元信息，发版时应用到 Course。
+  meta                  Json?
   introSourceRange      Json?
   introFeaturedAssetIds String[]  @default([])
   publishedAt           DateTime?
@@ -206,7 +208,9 @@ model CourseLesson {
   title                  String
   estimatedMinutes       Int
   objectives             String[]     @default([])
-  sourceRange            Json
+  sourceRange            Json?
+  body                   String       @default("") @db.Text
+  content                Json?
   activityType           String
   activityPrompt         String
   activityCompletionType String
@@ -303,12 +307,13 @@ model Workspace {
 }
 
 model Progress {
-  id              String        @id @default(cuid())
-  enrollmentId    String        @unique
-  enrollment      Enrollment    @relation(fields: [enrollmentId], references: [id], onDelete: Cascade)
-  currentLessonId String?
-  currentLesson   CourseLesson? @relation(fields: [currentLessonId], references: [id])
-  updatedAt       DateTime      @updatedAt
+  id                     String        @id @default(cuid())
+  enrollmentId           String        @unique
+  enrollment             Enrollment    @relation(fields: [enrollmentId], references: [id], onDelete: Cascade)
+  currentLessonId        String?
+  currentLesson          CourseLesson? @relation(fields: [currentLessonId], references: [id])
+  currentLessonContentId String?
+  updatedAt              DateTime      @updatedAt
 
   @@index([currentLessonId])
 }
