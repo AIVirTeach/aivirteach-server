@@ -88,10 +88,19 @@ export class DraftContentService {
       });
       if (!module) throw new NotFoundException(`草稿模块 ${moduleId} 不存在`);
       await tx.courseModule.delete({ where: { id: moduleId } });
+      const remaining = draft.modules
+        .filter((item) => item.position > module.position)
+        .sort((a, b) => a.position - b.position);
       await tx.courseModule.updateMany({
         where: { courseVersionId: draft.id, position: { gt: module.position } },
-        data: { position: { decrement: 1 } },
+        data: { position: { increment: POSITION_OFFSET } },
       });
+      for (const sibling of remaining) {
+        await tx.courseModule.update({
+          where: { id: sibling.id },
+          data: { position: sibling.position - 1 },
+        });
+      }
     });
   }
 
@@ -172,10 +181,20 @@ export class DraftContentService {
     const lesson = this.findLesson(draft, contentId);
     return this.mutate(slug, draft, operator, 'deleteLesson', async (tx) => {
       await tx.courseLesson.delete({ where: { id: lesson.id } });
+      const remaining = draft.modules
+        .find((module) => module.id === lesson.moduleId)!
+        .lessons.filter((item) => item.position > lesson.position)
+        .sort((a, b) => a.position - b.position);
       await tx.courseLesson.updateMany({
         where: { moduleId: lesson.moduleId, position: { gt: lesson.position } },
-        data: { position: { decrement: 1 } },
+        data: { position: { increment: POSITION_OFFSET } },
       });
+      for (const sibling of remaining) {
+        await tx.courseLesson.update({
+          where: { id: sibling.id },
+          data: { position: sibling.position - 1 },
+        });
+      }
     });
   }
 

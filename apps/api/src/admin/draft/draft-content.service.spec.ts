@@ -184,6 +184,27 @@ describe('DraftContentService', () => {
     expect(prisma.courseLesson.updateMany).not.toHaveBeenCalled();
   });
 
+  it('rejects ambiguous deleteLesson before opening a write transaction', async () => {
+    const dup = {
+      id: 'draft',
+      modules: [
+        {
+          id: 'm1',
+          title: 'Alpha',
+          lessons: [{ id: 'l1', contentId: 'same' }],
+        },
+        { id: 'm2', title: 'Beta', lessons: [{ id: 'l2', contentId: 'same' }] },
+      ],
+    };
+    const { service, prisma } = setup(dup);
+    await expect(
+      service.deleteLesson('demo', 'same', 'op'),
+    ).rejects.toBeInstanceOf(ConflictException);
+    expect(prisma.$transaction).not.toHaveBeenCalled();
+    expect(prisma.courseLesson.delete).not.toHaveBeenCalled();
+    expect(prisma.courseLesson.updateMany).not.toHaveBeenCalled();
+  });
+
   it('requires exact reorder permutations and performs collision-safe positional shifts', async () => {
     const { service, prisma } = setup();
     await expect(
@@ -220,16 +241,66 @@ describe('DraftContentService', () => {
     prisma.courseModule.delete.mockResolvedValue({});
     prisma.courseModule.updateMany.mockResolvedValue({ count: 1 });
     await service.deleteModule('demo', 'm1', 'op');
-    expect(prisma.courseModule.updateMany).toHaveBeenCalled();
-    prisma.courseLesson.findFirst.mockResolvedValue({
+    expect(prisma.$transaction).toHaveBeenCalledTimes(1);
+    expect(prisma.courseModule.updateMany).toHaveBeenCalledWith({
+      where: { courseVersionId: 'draft', position: { gt: 1 } },
+      data: { position: { increment: 1_000_000 } },
+    });
+    expect(prisma.courseModule.update).toHaveBeenCalledWith({
+      where: { id: 'm2' },
+      data: { position: 1 },
+    });
+    expect(
+      prisma.courseModule.updateMany.mock.invocationCallOrder[0],
+    ).toBeLessThan(prisma.courseModule.update.mock.invocationCallOrder[0]);
+    expect(prisma.courseModule.delete.mock.invocationCallOrder[0]).toBeLessThan(
+      prisma.courseModule.updateMany.mock.invocationCallOrder[0],
+    );
+
+    const lessonDraft = {
+      id: 'draft',
+      modules: [
+        {
+          id: 'm1',
+          title: 'Module 1',
+          position: 1,
+          lessons: [
+            { id: 'l1', contentId: 'one', position: 1, assessments: [] },
+            { id: 'l1b', contentId: 'one-b', position: 2, assessments: [] },
+          ],
+        },
+        { id: 'm2', title: 'Module 2', position: 2, lessons: [] },
+      ],
+    };
+    const lessonSetup = setup(lessonDraft);
+    lessonSetup.prisma.courseLesson.findFirst.mockResolvedValue({
       id: 'l1',
       moduleId: 'm1',
       position: 1,
     });
-    prisma.courseLesson.delete.mockResolvedValue({});
-    prisma.courseLesson.updateMany.mockResolvedValue({ count: 0 });
-    await service.deleteLesson('demo', 'one', 'op');
-    expect(prisma.courseLesson.updateMany).toHaveBeenCalled();
+    lessonSetup.prisma.courseLesson.delete.mockResolvedValue({});
+    lessonSetup.prisma.courseLesson.updateMany.mockResolvedValue({ count: 1 });
+    await lessonSetup.service.deleteLesson('demo', 'one', 'op');
+    expect(lessonSetup.prisma.$transaction).toHaveBeenCalledTimes(1);
+    expect(lessonSetup.prisma.courseLesson.updateMany).toHaveBeenCalledWith({
+      where: { moduleId: 'm1', position: { gt: 1 } },
+      data: { position: { increment: 1_000_000 } },
+    });
+    expect(lessonSetup.prisma.courseLesson.update).toHaveBeenCalledWith({
+      where: { id: 'l1b' },
+      data: { position: 1 },
+    });
+    expect(
+      lessonSetup.prisma.courseLesson.updateMany.mock.invocationCallOrder[0],
+    ).toBeLessThan(
+      lessonSetup.prisma.courseLesson.update.mock.invocationCallOrder[0],
+    );
+    expect(
+      lessonSetup.prisma.courseLesson.delete.mock.invocationCallOrder[0],
+    ).toBeLessThan(
+      lessonSetup.prisma.courseLesson.updateMany.mock.invocationCallOrder[0],
+    );
+
     prisma.lessonAssessment.updateMany.mockResolvedValue({ count: 1 });
     await service.updateAssessment(
       'demo',
