@@ -20,6 +20,7 @@ type LessonBackfillRow = {
 
 type ProgressBackfillRow = {
   id: string;
+  currentLessonId: string;
   currentLesson: { contentId: string } | null;
 };
 
@@ -27,9 +28,16 @@ type ProgressBackfillRow = {
 export class ContentModelBackfillService {
   constructor(private readonly prisma: PrismaService) {}
 
-  async run(options: { execute: boolean }): Promise<BackfillReport> {
+  async run(
+    options: { execute: boolean },
+    transaction?: Prisma.TransactionClient,
+  ): Promise<BackfillReport> {
+    if (options.execute && !transaction) {
+      return this.prisma.$transaction((tx) => this.run(options, tx));
+    }
+    const client = transaction ?? this.prisma;
     const [lessons, progresses] = await Promise.all([
-      this.prisma.courseLesson.findMany({
+      client.courseLesson.findMany({
         where: { body: '' },
         select: {
           id: true,
@@ -38,10 +46,11 @@ export class ContentModelBackfillService {
           module: { select: { courseVersion: { select: { sourceMarkdown: true } } } },
         },
       }),
-      this.prisma.progress.findMany({
+      client.progress.findMany({
         where: { currentLessonContentId: null, currentLessonId: { not: null } },
         select: {
           id: true,
+          currentLessonId: true,
           currentLesson: { select: { contentId: true } },
         },
       }),
@@ -72,24 +81,38 @@ export class ContentModelBackfillService {
           : [],
     );
 
+    let bodyFilled = bodyUpdates.length;
+    let progressFilled = progressUpdates.length;
     if (options.execute) {
+      bodyFilled = 0;
       for (const update of bodyUpdates) {
-        await this.prisma.courseLesson.update({
-          where: { id: update.id },
+        const result = await client.courseLesson.updateMany({
+          where: { id: update.id, body: '' },
           data: { body: update.body },
         });
+        bodyFilled += result.count;
       }
+      progressFilled = 0;
       for (const update of progressUpdates) {
-        await this.prisma.progress.update({
-          where: { id: update.id },
+        const row = (progresses as ProgressBackfillRow[]).find(
+          (candidate) => candidate.id === update.id,
+        );
+        if (!row) continue;
+        const result = await client.progress.updateMany({
+          where: {
+            id: update.id,
+            currentLessonContentId: null,
+            currentLessonId: row.currentLessonId,
+          },
           data: { currentLessonContentId: update.contentId },
         });
+        progressFilled += result.count;
       }
     }
 
     return {
-      bodies: { filled: bodyUpdates.length, unresolved },
-      progress: { filled: progressUpdates.length, total: progresses.length },
+      bodies: { filled: bodyFilled, unresolved },
+      progress: { filled: progressFilled, total: progresses.length },
     };
   }
 }

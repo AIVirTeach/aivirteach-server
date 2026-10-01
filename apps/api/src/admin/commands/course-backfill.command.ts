@@ -1,8 +1,12 @@
 import { Command, CommandRunner, Option } from 'nest-commander';
 import { AuditActorType, type Prisma } from '@prisma/client';
 import { AuditService } from '../../audit/audit.service';
+import { PrismaService } from '../../prisma/prisma.service';
 import { OperatorSchema, ReasonSchema } from '../admin.schemas';
-import { ContentModelBackfillService } from '../backfill/content-model-backfill.service';
+import {
+  ContentModelBackfillService,
+  type BackfillReport,
+} from '../backfill/content-model-backfill.service';
 
 interface CourseBackfillOptions {
   operator: string;
@@ -18,6 +22,7 @@ export class CourseBackfillCommand extends CommandRunner {
   constructor(
     private readonly backfill: ContentModelBackfillService,
     private readonly audit: AuditService,
+    private readonly prisma: PrismaService,
   ) {
     super();
   }
@@ -26,32 +31,40 @@ export class CourseBackfillCommand extends CommandRunner {
     const operator = OperatorSchema.parse(options.operator);
     const reason = ReasonSchema.parse(options.reason);
     const execute = Boolean(options.execute);
-    const report = await this.backfill.run({ execute });
+    let report: BackfillReport;
 
     if (execute) {
-      const metadata: Prisma.InputJsonObject = {
-        report: {
-          bodies: {
-            filled: report.bodies.filled,
-            unresolved: report.bodies.unresolved.map(({ lessonId, reason }) => ({
-              lessonId,
-              reason,
-            })),
+      report = await this.prisma.$transaction(async (transaction) => {
+        const result = await this.backfill.run({ execute: true }, transaction);
+        const metadata: Prisma.InputJsonObject = {
+          report: {
+            bodies: {
+              filled: result.bodies.filled,
+              unresolved: result.bodies.unresolved.map(
+                ({ lessonId, reason }) => ({ lessonId, reason }),
+              ),
+            },
+            progress: {
+              filled: result.progress.filled,
+              total: result.progress.total,
+            },
           },
-          progress: {
-            filled: report.progress.filled,
-            total: report.progress.total,
+        };
+        await this.audit.record(
+          {
+            actor: { type: AuditActorType.OPERATOR, id: operator },
+            action: 'admin.backfillContentModel',
+            success: true,
+            targetType: 'CourseVersion',
+            reason,
+            metadata,
           },
-        },
-      };
-      await this.audit.record({
-        actor: { type: AuditActorType.OPERATOR, id: operator },
-        action: 'admin.backfillContentModel',
-        success: true,
-        targetType: 'CourseVersion',
-        reason,
-        metadata,
+          transaction,
+        );
+        return result;
       });
+    } else {
+      report = await this.backfill.run({ execute: false });
     }
 
     console.log(

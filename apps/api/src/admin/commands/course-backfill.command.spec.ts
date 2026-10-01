@@ -1,18 +1,29 @@
 import { ContentModelBackfillService } from '../backfill/content-model-backfill.service';
 import { AuditService } from '../../audit/audit.service';
+import { PrismaService } from '../../prisma/prisma.service';
 import { CourseBackfillCommand } from './course-backfill.command';
 
 describe('CourseBackfillCommand', () => {
   const report = { bodies: { filled: 2, unresolved: [] }, progress: { filled: 1, total: 1 } };
   let service: { run: jest.Mock };
   let audit: { record: jest.Mock };
+  let prisma: { $transaction: jest.Mock };
+  let transaction: object;
   let command: CourseBackfillCommand;
   let log: jest.SpyInstance;
 
   beforeEach(() => {
     service = { run: jest.fn().mockResolvedValue(report) };
     audit = { record: jest.fn().mockResolvedValue(undefined) };
-    command = new CourseBackfillCommand(service as unknown as ContentModelBackfillService, audit as unknown as AuditService);
+    transaction = {};
+    prisma = {
+      $transaction: jest.fn(async (callback: (tx: object) => unknown) => callback(transaction)),
+    };
+    command = new CourseBackfillCommand(
+      service as unknown as ContentModelBackfillService,
+      audit as unknown as AuditService,
+      prisma as unknown as PrismaService,
+    );
     log = jest.spyOn(console, 'log').mockImplementation(() => undefined);
   });
 
@@ -27,7 +38,8 @@ describe('CourseBackfillCommand', () => {
 
   it('仅 execute 时执行写库并记审计', async () => {
     await command.run([], { operator: 'ops@example.com', reason: '迁移回填', execute: true });
-    expect(service.run).toHaveBeenCalledWith({ execute: true });
+    expect(prisma.$transaction).toHaveBeenCalledTimes(1);
+    expect(service.run).toHaveBeenCalledWith({ execute: true }, transaction);
     expect(audit.record).toHaveBeenCalledWith({
       actor: { type: 'OPERATOR', id: 'ops@example.com' },
       action: 'admin.backfillContentModel',
@@ -35,8 +47,22 @@ describe('CourseBackfillCommand', () => {
       targetType: 'CourseVersion',
       reason: '迁移回填',
       metadata: { report },
-    });
+    }, transaction);
     expect(log).toHaveBeenCalledWith(JSON.stringify({ command: 'course:backfill-content-model', dryRun: false, operator: 'ops@example.com', reason: '迁移回填', ...report }));
+  });
+
+  it('审计失败会使事务失败并阻止成功报告输出', async () => {
+    const failure = new Error('audit write failed');
+    audit.record.mockRejectedValue(failure);
+
+    await expect(
+      command.run([], { operator: 'ops@example.com', reason: '迁移回填', execute: true }),
+    ).rejects.toBe(failure);
+
+    expect(prisma.$transaction).toHaveBeenCalledTimes(1);
+    expect(service.run).toHaveBeenCalledWith({ execute: true }, transaction);
+    expect(audit.record).toHaveBeenCalledWith(expect.any(Object), transaction);
+    expect(log).not.toHaveBeenCalled();
   });
 
   it('operator 和 reason 沿用 schema 校验', async () => {
