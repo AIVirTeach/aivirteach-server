@@ -29,8 +29,8 @@
     "precli": "npm run build -w @aivirteach/lesson-blocks"
   },
   "dependencies": {
-    "@nestjs/common": "^11.0.1",
     "@aivirteach/lesson-blocks": "*",
+    "@nestjs/common": "^11.0.1",
     "@nestjs/core": "^11.0.1",
     "@nestjs/platform-express": "^11.0.1",
     "@nestjs/platform-socket.io": "^11.2.3",
@@ -43,9 +43,13 @@
     "@vercel/functions": "^3.9.5",
     "dotenv": "^17.4.2",
     "jose": "^6.2.8",
+    "mdast-util-to-string": "^4.0.0",
     "nest-commander": "^3.20.1",
     "reflect-metadata": "^0.2.2",
+    "remark-gfm": "^4.0.1",
+    "remark-parse": "^11.0.0",
     "rxjs": "^7.8.1",
+    "unified": "^11.0.5",
     "ws": "^8.21.3",
     "zod": "^4.4.3"
   },
@@ -57,6 +61,7 @@
     "@nestjs/testing": "^11.0.1",
     "@types/express": "^5.0.0",
     "@types/jest": "^30.0.0",
+    "@types/mdast": "^4.0.4",
     "@types/node": "^24.0.0",
     "@types/supertest": "^7.0.0",
     "@types/ws": "^8.18.1",
