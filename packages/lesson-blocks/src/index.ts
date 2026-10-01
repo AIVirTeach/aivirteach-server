@@ -37,3 +37,6 @@ export {
   TablePropsSchema,
 } from './blocks/complex';
 export { BLOCK_REGISTRY } from './registry';
+export { validateLessonContent } from './validate';
+export type { Problem, ProblemCode, ValidationReport } from './validate';
+export { blocksToPlainText, collectImageAssetIds, countRenderableBlocks } from './derive';
