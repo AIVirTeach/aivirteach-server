@@ -11,6 +11,12 @@ const lesson = (contentId: string, position: number, minutes = 10) => ({
   position,
   title: `课时 ${contentId}`,
   body: 'lesson body',
+  content: {
+    schemaVersion: 1,
+    blocks: [
+      { id: `p-${contentId}`, type: 'paragraph', props: { text: 'body' } },
+    ],
+  },
   estimatedMinutes: minutes,
 });
 const makeDraft = (overrides: Record<string, unknown> = {}) => ({
@@ -31,7 +37,11 @@ const makeDraft = (overrides: Record<string, unknown> = {}) => ({
   ...overrides,
 });
 
-function setup({ published = false, draft = makeDraft() } = {}) {
+function setup({
+  published = false,
+  hasPriorPublished = true,
+  draft = makeDraft(),
+} = {}) {
   const tx = {
     courseVersion: {
       updateMany: jest.fn().mockResolvedValue({ count: 1 }),
@@ -45,23 +55,27 @@ function setup({ published = false, draft = makeDraft() } = {}) {
   let transactionCommitted = false;
   const prisma = {
     course: {
-      findUnique: jest
-        .fn()
-        .mockResolvedValue({
-          id: 'course-1',
-          slug: 'demo',
-          published: published,
-          coverAssetId: null,
-        }),
+      findUnique: jest.fn().mockResolvedValue({
+        id: 'course-1',
+        slug: 'demo',
+        published: published,
+        coverAssetId: null,
+      }),
     },
     courseVersion: {
       findFirst: jest.fn((args: { where: Record<string, unknown> }) => {
         if (args.where.publishedAt) {
-          return Promise.resolve({
-            modules: [
-              { lessons: [lesson('a', 1), lesson('b', 2), lesson('c', 3)] },
-            ],
-          });
+          return Promise.resolve(
+            hasPriorPublished
+              ? {
+                  modules: [
+                    {
+                      lessons: [lesson('a', 1), lesson('b', 2), lesson('c', 3)],
+                    },
+                  ],
+                }
+              : null,
+          );
         }
         return Promise.resolve(
           published
@@ -94,6 +108,16 @@ function setup({ published = false, draft = makeDraft() } = {}) {
 }
 
 describe('CoursePublishService.publish', () => {
+  it('sets Course.published true on successful first publish', async () => {
+    const { service, tx } = setup({ hasPriorPublished: false });
+    await service.publish('demo', 'ops@example.com', 'first release');
+    expect(tx.course.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ published: true }),
+      }),
+    );
+  });
+
   it('publishes atomically, recomputes course summary, remaps only active removed pointers, then audits', async () => {
     const { service, prisma, tx, audit } = setup();
     const result = await service.publish('demo', 'ops@example.com', 'release');
@@ -147,7 +171,13 @@ describe('CoursePublishService.publish', () => {
         },
       ],
     });
-    invalidDraft.modules[0].lessons[0].body = '  ';
+    invalidDraft.modules[0].lessons[0].content = {
+      schemaVersion: 1,
+      blocks: [
+        { id: 'unknown', type: 'madeUp', props: {} },
+        { id: 'foreign-image', type: 'image', props: { assetId: 'foreign' } },
+      ],
+    };
     const { service, prisma, audit } = setup({ draft: invalidDraft });
 
     await expect(
@@ -156,7 +186,9 @@ describe('CoursePublishService.publish', () => {
       response: {
         message: '草稿校验未通过',
         problems: expect.arrayContaining([
-          expect.stringContaining('课时内容不能为空'),
+          expect.stringContaining('未知内容块类型'),
+          expect.stringContaining('图片资源不存在'),
+          expect.stringContaining('没有可渲染内容块'),
         ]),
       },
     });

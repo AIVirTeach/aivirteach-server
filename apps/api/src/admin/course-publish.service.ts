@@ -43,10 +43,21 @@ export class CoursePublishService {
       where: { courseId: course.id },
       select: { id: true },
     });
+    const previousPublished = await this.prisma.courseVersion.findFirst({
+      where: { courseId: course.id, publishedAt: { not: null } },
+      orderBy: { version: 'desc' },
+      include: {
+        modules: {
+          orderBy: { position: 'asc' },
+          include: { lessons: { orderBy: { position: 'asc' } } },
+        },
+      },
+    });
     const problems = validateDraftForPublish({
       draft,
       courseAssetIds: new Set(assets.map((asset) => asset.id)),
       coverAssetId: course.coverAssetId,
+      isFirstPublish: previousPublished === null,
     });
     if (problems.length) {
       throw new UnprocessableEntityException({
@@ -55,7 +66,10 @@ export class CoursePublishService {
       });
     }
 
-    const oldOrder = await this.latestPublishedLessonOrder(course.id);
+    const oldOrder =
+      previousPublished?.modules.flatMap((module) =>
+        module.lessons.map((lesson) => lesson.contentId),
+      ) ?? [];
     const newOrder = draft.modules
       .slice()
       .sort((a, b) => a.position - b.position)
@@ -143,26 +157,6 @@ export class CoursePublishService {
     });
 
     return published;
-  }
-
-  private async latestPublishedLessonOrder(
-    courseId: string,
-  ): Promise<string[]> {
-    const published = await this.prisma.courseVersion.findFirst({
-      where: { courseId, publishedAt: { not: null } },
-      orderBy: { version: 'desc' },
-      include: {
-        modules: {
-          orderBy: { position: 'asc' },
-          include: { lessons: { orderBy: { position: 'asc' } } },
-        },
-      },
-    });
-    return (
-      published?.modules.flatMap((module) =>
-        module.lessons.map((lesson) => lesson.contentId),
-      ) ?? []
-    );
   }
 }
 
