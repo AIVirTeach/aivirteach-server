@@ -29,3 +29,11 @@ export {
   ParagraphPropsSchema,
   StepPropsSchema,
 } from './blocks/simple';
+export {
+  AnnotatedCodePropsSchema,
+  DiagramPropsSchema,
+  ImagePropsSchema,
+  ResourceLinkPropsSchema,
+  TablePropsSchema,
+} from './blocks/complex';
+export { BLOCK_REGISTRY } from './registry';
