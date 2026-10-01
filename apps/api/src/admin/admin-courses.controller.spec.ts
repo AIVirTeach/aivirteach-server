@@ -42,7 +42,7 @@ describe('AdminCoursesController', () => {
   const routes: Array<{
     method: 'post' | 'delete' | 'patch' | 'put' | 'get';
     path: string;
-    body?: unknown;
+    body?: Record<string, unknown>;
     service: jest.Mock;
     args?: unknown[];
   }> = [

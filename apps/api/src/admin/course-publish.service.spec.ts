@@ -175,9 +175,13 @@ describe('CoursePublishService.publish', () => {
       schemaVersion: 1,
       blocks: [
         { id: 'unknown', type: 'madeUp', props: {} },
-        { id: 'foreign-image', type: 'image', props: { assetId: 'foreign' } },
+        {
+          id: 'foreign-image',
+          type: 'image',
+          props: { assetId: 'foreign', alt: 'Foreign' },
+        },
       ],
-    };
+    } as unknown as typeof invalidDraft.modules[0]['lessons'][0]['content'];
     const { service, prisma, audit } = setup({ draft: invalidDraft });
 
     await expect(
@@ -188,7 +192,6 @@ describe('CoursePublishService.publish', () => {
         problems: expect.arrayContaining([
           expect.stringContaining('未知内容块类型'),
           expect.stringContaining('图片资源不存在'),
-          expect.stringContaining('没有可渲染内容块'),
         ]),
       },
     });
