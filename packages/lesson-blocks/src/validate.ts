@@ -63,7 +63,7 @@ export function validateLessonContent(input: unknown, ctx: { courseAssetIds: Rea
     const result = BLOCK_REGISTRY[type].schema.safeParse(props);
     if (!result.success) {
       for (const issue of result.error.issues) {
-        const path = issue.path.length ? issue.path.join('.') : 'props';
+        const path = issue.path.length ? `props.${issue.path.join('.')}` : 'props';
         errors.push(problem('error', 'invalid-props', `${path}：${issue.message}`, id, blockIndex));
       }
     } else {

@@ -32,7 +32,7 @@ describe('validateLessonContent', () => {
     ]), { courseAssetIds: new Set() });
     expect(result.errors).toEqual(expect.arrayContaining([
       expect.objectContaining({ code: 'unknown-type', blockId: 'quiz', blockIndex: 0 }),
-      expect.objectContaining({ code: 'invalid-props', blockId: 'image', blockIndex: 1, message: expect.stringContaining('alt') }),
+      expect.objectContaining({ code: 'invalid-props', blockId: 'image', blockIndex: 1, message: expect.stringMatching(/^props\.alt：.*不能为空$/) }),
     ]));
   });
 

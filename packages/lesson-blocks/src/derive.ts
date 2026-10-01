@@ -37,7 +37,7 @@ export function collectImageAssetIds(content: unknown): string[] {
 
 function plain(value: string): string {
   const escaped: string[] = [];
-  const protectedValue = value.replace(/\\([\\`*{}\[\]()#+\-.!_>])/g, (_match, char: string) => {
+  const protectedValue = value.replace(/\\([\\`*{}\[\]()#+\-.!_>=])/g, (_match, char: string) => {
     const token = `\u0000${escaped.length}\u0000`;
     escaped.push(char);
     return token;
@@ -60,7 +60,7 @@ export function blocksToPlainText(content: unknown): string {
       case 'bulletList': case 'numberedList':
         if (Array.isArray(props.items)) props.items.forEach(add);
         break;
-      case 'code': add(props.code); break;
+      case 'code': add(props.code); add(props.description); break;
       case 'step': add(props.title); add(props.body); break;
       case 'callout': add(props.title); add(props.body); break;
       case 'table':

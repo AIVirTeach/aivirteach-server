@@ -20,8 +20,13 @@ describe('lesson content derived helpers', () => {
   });
 
   it('extracts plain text from inline marks and links', () => {
-    expect(blocksToPlainText(content([block('p', 'paragraph', { text: '**a** *b* ==c== `d` [e](https://x.y) \\*f\\*' })])))
-      .toBe('a b c d e *f*');
+    expect(blocksToPlainText(content([block('p', 'paragraph', { text: '**a** *b* ==c== `d` [e](https://x.y) \\*f\\* \\=g\\=' })])))
+      .toBe('a b c d e *f* =g=');
+  });
+
+  it('includes code descriptions in visible plain text', () => {
+    expect(blocksToPlainText(content([block('c', 'code', { kind: 'plain', code: 'const x = 1', description: 'Example code' })])))
+      .toBe('const x = 1\nExample code');
   });
 
   it('includes table cells and image alt text', () => {
