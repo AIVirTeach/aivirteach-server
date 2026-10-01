@@ -3,7 +3,8 @@ import { AuditActorType } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { AuditService } from '../audit/audit.service';
 import { CoursesService } from '../courses/courses.service';
-import { deriveEnrollmentView, type EnrollmentStatus } from './enrollment-view';
+import { deriveCurrentModuleTitle, deriveEnrollmentView, type EnrollmentStatus } from './enrollment-view';
+import { LATEST_PUBLISHED_VERSION } from '../courses/published-version';
 
 export type EnrollmentResponse = {
   id: string;
@@ -38,7 +39,7 @@ export class EnrollmentsService {
         where: { userId_courseId: { userId, courseId: course.id } },
         update: { active: true, courseVersionId: latestVersionId },
         create: { userId, courseId: course.id, courseVersionId: latestVersionId, active: true },
-        include: { currentModule: true, progress: true },
+        include: { progress: true },
       });
     });
 
@@ -58,6 +59,7 @@ export class EnrollmentsService {
         progress: enrollment.progress,
         modules: course.versions[0].modules,
       }),
+      deriveCurrentModuleTitle({ progress: enrollment.progress, modules: course.versions[0].modules }),
     );
   }
 
@@ -73,15 +75,14 @@ export class EnrollmentsService {
 
       const upserted = await tx.enrollment.upsert({
         where: { userId_courseId: { userId, courseId: course.id } },
-        update: { active: true, currentModuleId: null, courseVersionId: latestVersionId, completedAt: null },
+        update: { active: true, courseVersionId: latestVersionId, completedAt: null },
         create: { userId, courseId: course.id, courseVersionId: latestVersionId, active: true },
-        include: { currentModule: true },
       });
 
       await tx.progress.upsert({
         where: { enrollmentId: upserted.id },
-        update: { currentLessonId: null },
-        create: { enrollmentId: upserted.id },
+        update: { currentLessonContentId: null },
+        create: { enrollmentId: upserted.id, currentLessonContentId: null },
       });
 
       // 全新 restart：清空聊天记录和 Learning Lab，让用户像第一次报名一样重新走一遍。
@@ -105,6 +106,7 @@ export class EnrollmentsService {
       enrollment,
       course.slug,
       deriveEnrollmentView({ completedAt: enrollment.completedAt, progress: null, modules: [] }),
+      '',
     );
   }
 
@@ -112,10 +114,8 @@ export class EnrollmentsService {
     const enrollments = await this.prisma.enrollment.findMany({
       where: { userId },
       include: {
-        course: true,
-        currentModule: true,
+        course: { include: { versions: LATEST_PUBLISHED_VERSION } },
         progress: true,
-        courseVersion: { include: { modules: { include: { lessons: true } } } },
       },
       orderBy: { createdAt: 'asc' },
     });
@@ -126,7 +126,11 @@ export class EnrollmentsService {
         deriveEnrollmentView({
           completedAt: enrollment.completedAt,
           progress: enrollment.progress,
-          modules: enrollment.courseVersion?.modules ?? [],
+          modules: enrollment.course.versions[0]?.modules ?? [],
+        }),
+        deriveCurrentModuleTitle({
+          progress: enrollment.progress,
+          modules: enrollment.course.versions[0]?.modules ?? [],
         }),
       ),
     );
@@ -139,24 +143,13 @@ export class EnrollmentsService {
     const enrollments = await this.prisma.enrollment.findMany({
       where: { userId },
       include: {
-        course: true,
-        currentModule: true,
-        courseVersion: {
-          include: {
-            modules: {
-              orderBy: { position: 'asc' },
-              include: { lessons: { orderBy: { position: 'asc' } } },
-            },
-          },
-        },
+        course: { include: { versions: LATEST_PUBLISHED_VERSION } },
+        progress: true,
       },
     });
 
     const matches = enrollments.flatMap((candidate) => {
-      if (!candidate.courseVersion) {
-        return [];
-      }
-      const modules = candidate.courseVersion.modules;
+      const modules = candidate.course.versions[0]?.modules ?? [];
       const flattened = modules.flatMap((courseModule) => courseModule.lessons);
       const index = flattened.findIndex((entry) => entry.contentId === lessonId);
       return index === -1 ? [] : [{ enrollment: candidate, modules, flattened, index }];
@@ -182,11 +175,11 @@ export class EnrollmentsService {
       matches.find((candidate) => candidate.enrollment.active) ?? matches[0];
     const lesson = flattened[index];
 
-    const nextLessonId = flattened[index + 1]?.id ?? null;
-    const completedNow = nextLessonId === null ? new Date() : null;
+    const nextLessonContentId = flattened[index + 1]?.contentId ?? null;
+    const completedNow = nextLessonContentId === null ? new Date() : null;
 
     // Activity、completedAt、Progress 放进同一个事务：任何一步失败都不会留下孤立的完成记录，
-    // 学完最后一课时 currentLessonId 置空，completedAt 必须同时写入，否则这门课会被判成 not_started。
+    // 学完最后一课时 currentLessonContentId 置空，completedAt 必须同时写入，否则这门课会被判成 not_started。
     // 首次完成时间由数据库保证：只写 completedAt 仍为空的行，并发请求或已完成的课再次完成都不会覆盖
     // （enrollment.completedAt 是事务外读的旧值，不能拿来判断）。
     // 加锁顺序和 restart 一致（先 Enrollment 再 Progress），避免两者并发时互相死锁。
@@ -199,8 +192,8 @@ export class EnrollmentsService {
       }
       await tx.progress.upsert({
         where: { enrollmentId: enrollment.id },
-        update: { currentLessonId: nextLessonId },
-        create: { enrollmentId: enrollment.id, currentLessonId: nextLessonId },
+        update: { currentLessonContentId: nextLessonContentId },
+        create: { enrollmentId: enrollment.id, currentLessonContentId: nextLessonContentId },
       });
       await tx.activity.create({
         data: {
@@ -218,9 +211,10 @@ export class EnrollmentsService {
       enrollment.course.slug,
       deriveEnrollmentView({
         completedAt: enrollment.completedAt ?? completedNow,
-        progress: { currentLessonId: nextLessonId },
+        progress: { currentLessonContentId: nextLessonContentId },
         modules,
       }),
+      deriveCurrentModuleTitle({ progress: { currentLessonContentId: nextLessonContentId }, modules }),
     );
   }
 
@@ -230,11 +224,11 @@ export class EnrollmentsService {
       userId: string;
       courseId: string;
       active: boolean;
-      currentModule: { title: string } | null;
       createdAt: Date;
     },
     courseSlug: string,
     view: { status: EnrollmentStatus; progressPercent: number },
+    currentModule = '',
   ): EnrollmentResponse {
     return {
       id: enrollment.id,
@@ -243,7 +237,7 @@ export class EnrollmentsService {
       active: enrollment.active,
       progressPercent: view.progressPercent,
       status: view.status,
-      currentModule: enrollment.currentModule?.title ?? '',
+      currentModule,
       enrolledAt: enrollment.createdAt.toISOString(),
     };
   }

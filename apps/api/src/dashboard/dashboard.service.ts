@@ -1,6 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
-import { deriveEnrollmentView, type EnrollmentStatus } from '../enrollments/enrollment-view';
+import { deriveCurrentModuleTitle, deriveEnrollmentView, type EnrollmentStatus } from '../enrollments/enrollment-view';
+import { LATEST_PUBLISHED_VERSION } from '../courses/published-version';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -87,9 +88,8 @@ export class DashboardService {
     const activeEnrollment = await this.prisma.enrollment.findFirst({
       where: { userId, active: true },
       include: {
-        course: true,
+        course: { include: { versions: LATEST_PUBLISHED_VERSION } },
         progress: true,
-        courseVersion: { include: { modules: { include: { lessons: true } } } },
       },
     });
 
@@ -140,9 +140,12 @@ export class DashboardService {
               ...deriveEnrollmentView({
                 completedAt: activeEnrollment.completedAt,
                 progress: activeEnrollment.progress,
-                modules: activeEnrollment.courseVersion?.modules ?? [],
+                modules: activeEnrollment.course.versions[0]?.modules ?? [],
               }),
-              currentModule: '',
+              currentModule: deriveCurrentModuleTitle({
+                progress: activeEnrollment.progress,
+                modules: activeEnrollment.course.versions[0]?.modules ?? [],
+              }),
               enrolledAt: activeEnrollment.createdAt.toISOString(),
             },
           }

@@ -1,5 +1,6 @@
 import { Test } from '@nestjs/testing';
 import { PrismaService } from '../prisma/prisma.service';
+import { LATEST_PUBLISHED_VERSION } from '../courses/published-version';
 import { DashboardService } from './dashboard.service';
 
 const buildPrisma = () => ({
@@ -76,25 +77,29 @@ describe('DashboardService.getDashboard', () => {
         lessonCount: 4,
         published: true,
         coverAssetId: null,
+        versions: [{ modules: [
+          { title: 'Module One', lessons: [{ contentId: 'lesson_1' }, { contentId: 'lesson_2' }] },
+          { title: 'Module Two', lessons: [{ contentId: 'lesson_3' }, { contentId: 'lesson_4' }] },
+        ] }],
       },
-      progress: { currentLessonId: 'lesson_2' },
-      courseVersion: {
-        modules: [
-          { lessons: [{ id: 'lesson_1' }, { id: 'lesson_2' }] },
-          { lessons: [{ id: 'lesson_3' }, { id: 'lesson_4' }] },
-        ],
-      },
+      progress: { currentLessonContentId: 'lesson_3' },
+      courseVersion: { modules: [] },
     });
     const service = await buildService(prisma);
 
     const dashboard = await service.getDashboard('user_1');
 
+    expect(prisma.enrollment.findFirst).toHaveBeenCalledWith(expect.objectContaining({
+      include: expect.objectContaining({ course: { include: { versions: LATEST_PUBLISHED_VERSION } } }),
+    }));
+
     expect(dashboard.activeCourse).not.toBeNull();
     expect(dashboard.activeCourse?.id).toBe('sample-course');
     expect(dashboard.activeCourse?.level).toBe('Beginner');
     expect(dashboard.activeCourse?.enrollment.courseId).toBe('sample-course');
-    expect(dashboard.activeCourse?.enrollment.progressPercent).toBe(50);
+    expect(dashboard.activeCourse?.enrollment.progressPercent).toBe(75);
     expect(dashboard.activeCourse?.enrollment.status).toBe('in_progress');
+    expect(dashboard.activeCourse?.enrollment.currentModule).toBe('Module Two');
   });
 
   it('active enrollment 已完成时 status 为 completed、progressPercent 为 100（学完后课时指针为空）', async () => {
@@ -125,9 +130,10 @@ describe('DashboardService.getDashboard', () => {
         lessonCount: 2,
         published: true,
         coverAssetId: null,
+        versions: [{ modules: [{ lessons: [{ contentId: 'lesson_1' }, { contentId: 'lesson_2' }] }] }],
       },
-      progress: { currentLessonId: null },
-      courseVersion: { modules: [{ lessons: [{ id: 'lesson_1' }, { id: 'lesson_2' }] }] },
+      progress: { currentLessonContentId: null },
+      courseVersion: { modules: [] },
     });
     const service = await buildService(prisma);
 
@@ -165,9 +171,9 @@ describe('DashboardService.getDashboard', () => {
         lessonCount: 2,
         published: true,
         coverAssetId: null,
+        versions: [],
       },
       progress: null,
-      courseVersion: null,
     });
     const service = await buildService(prisma);
 
