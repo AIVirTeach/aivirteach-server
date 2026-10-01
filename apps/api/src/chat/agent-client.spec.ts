@@ -64,17 +64,18 @@ describe('AgentClient.diagnose', () => {
   it('POST /v1/agent/diagnose，带 bearer token，原样透传 payload，解析成功响应', async () => {
     const fetchMock = jest.fn().mockResolvedValue({
       ok: true,
-      json: async () => ({
-        request_id: PAYLOAD.request_id,
-        status: 'completed',
-        answer: '看起来是网络问题，试试重启 docker 服务。',
-        diagnosis: {},
-        course_alignment: {},
-        evidence: [],
-        suggested_actions: [],
-        limitations: [],
-        tool_trace: [],
-      }),
+      json: () =>
+        Promise.resolve({
+          request_id: PAYLOAD.request_id,
+          status: 'completed',
+          answer: '看起来是网络问题，试试重启 docker 服务。',
+          diagnosis: {},
+          course_alignment: {},
+          evidence: [],
+          suggested_actions: [],
+          limitations: [],
+          tool_trace: [],
+        }),
     });
     global.fetch = fetchMock;
 
@@ -103,17 +104,18 @@ describe('AgentClient.diagnose', () => {
   it('status: "partial" 也正常解析，不当错误处理', async () => {
     global.fetch = jest.fn().mockResolvedValue({
       ok: true,
-      json: async () => ({
-        request_id: PAYLOAD.request_id,
-        status: 'partial',
-        answer: '工具调用失败，但根据已知信息给出回答。',
-        diagnosis: {},
-        course_alignment: {},
-        evidence: [],
-        suggested_actions: [],
-        limitations: ['GATEWAY_UNAVAILABLE'],
-        tool_trace: [],
-      }),
+      json: () =>
+        Promise.resolve({
+          request_id: PAYLOAD.request_id,
+          status: 'partial',
+          answer: '工具调用失败，但根据已知信息给出回答。',
+          diagnosis: {},
+          course_alignment: {},
+          evidence: [],
+          suggested_actions: [],
+          limitations: ['GATEWAY_UNAVAILABLE'],
+          tool_trace: [],
+        }),
     });
 
     const client = await buildClient({
@@ -132,7 +134,7 @@ describe('AgentClient.diagnose', () => {
       ok: false,
       status: 401,
       statusText: 'Unauthorized',
-      text: async () => 'Invalid or missing bearer token.',
+      text: () => Promise.resolve('Invalid or missing bearer token.'),
     });
 
     const client = await buildClient({
@@ -150,7 +152,7 @@ describe('AgentClient.diagnose', () => {
       ok: false,
       status: 503,
       statusText: 'Service Unavailable',
-      text: async () => 'Agent dependencies are not configured.',
+      text: () => Promise.resolve('Agent dependencies are not configured.'),
     });
 
     const client = await buildClient({
@@ -183,16 +185,17 @@ describe('AgentClient.diagnose', () => {
   it('Agent 返回 2xx 但响应体缺少必填字段（如 answer）时抛出错误，不会返回半成品对象', async () => {
     global.fetch = jest.fn().mockResolvedValue({
       ok: true,
-      json: async () => ({
-        request_id: PAYLOAD.request_id,
-        status: 'completed',
-        diagnosis: {},
-        course_alignment: {},
-        evidence: [],
-        suggested_actions: [],
-        limitations: [],
-        tool_trace: [],
-      }),
+      json: () =>
+        Promise.resolve({
+          request_id: PAYLOAD.request_id,
+          status: 'completed',
+          diagnosis: {},
+          course_alignment: {},
+          evidence: [],
+          suggested_actions: [],
+          limitations: [],
+          tool_trace: [],
+        }),
     });
 
     const client = await buildClient({
@@ -208,7 +211,7 @@ describe('AgentClient.diagnose', () => {
   it('Agent 返回 2xx 但 body 不是对象（如 null）时抛出错误', async () => {
     global.fetch = jest.fn().mockResolvedValue({
       ok: true,
-      json: async () => null,
+      json: () => Promise.resolve(null),
     });
 
     const client = await buildClient({
@@ -290,7 +293,7 @@ describe('AgentClient.diagnoseStream', () => {
       ok: false,
       status: 503,
       statusText: 'Service Unavailable',
-      text: async () => 'Agent dependencies are not configured.',
+      text: () => Promise.resolve('Agent dependencies are not configured.'),
     });
 
     const client = await buildClient({
@@ -308,7 +311,7 @@ describe('AgentClient.diagnoseStream', () => {
       ok: false,
       status: 401,
       statusText: 'Unauthorized',
-      text: async () => 'Invalid or missing bearer token.',
+      text: () => Promise.resolve('Invalid or missing bearer token.'),
     });
 
     const client = await buildClient({

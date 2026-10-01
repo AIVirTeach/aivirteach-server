@@ -29,7 +29,13 @@ function buildSocket() {
     send: jest.fn(),
     close: jest.fn(),
     on: jest.fn(),
-  } as any;
+  };
+}
+
+function asWorkspaceSocket(socket: ReturnType<typeof buildSocket>) {
+  return socket as unknown as Parameters<
+    WorkspaceGateway['handleConnection']
+  >[0];
 }
 
 function buildPrisma() {
@@ -55,7 +61,7 @@ describe('WorkspaceGateway', () => {
   it('缺少 token 或 enrollmentId 时直接关闭连接', async () => {
     const { gateway } = await buildGateway();
     const socket = buildSocket();
-    await gateway.handleConnection(socket, {
+    await gateway.handleConnection(asWorkspaceSocket(socket), {
       url: '/api/v1/workspaces/socket?enrollmentId=e1',
     } as any);
     expect(socket.close).toHaveBeenCalled();
@@ -66,7 +72,7 @@ describe('WorkspaceGateway', () => {
     mockedVerify.mockRejectedValue(new Error('invalid'));
     const { gateway } = await buildGateway();
     const socket = buildSocket();
-    await gateway.handleConnection(socket, {
+    await gateway.handleConnection(asWorkspaceSocket(socket), {
       url: '/api/v1/workspaces/socket?token=bad&enrollmentId=e1',
     } as any);
     expect(socket.close).toHaveBeenCalled();
@@ -82,7 +88,7 @@ describe('WorkspaceGateway', () => {
     const { gateway } = await buildGateway(prisma);
     const socket = buildSocket();
 
-    await gateway.handleConnection(socket, {
+    await gateway.handleConnection(asWorkspaceSocket(socket), {
       url: '/api/v1/workspaces/socket?token=good&enrollmentId=e1',
     } as any);
 
@@ -105,7 +111,7 @@ describe('WorkspaceGateway', () => {
     const { gateway } = await buildGateway(prisma);
     const socket = buildSocket();
 
-    await gateway.handleConnection(socket, {
+    await gateway.handleConnection(asWorkspaceSocket(socket), {
       url: '/api/v1/workspaces/socket?token=good&enrollmentId=e1',
     } as any);
 
@@ -123,10 +129,10 @@ describe('WorkspaceGateway', () => {
     const matching = buildSocket();
     const other = buildSocket();
 
-    await gateway.handleConnection(matching, {
+    await gateway.handleConnection(asWorkspaceSocket(matching), {
       url: '/api/v1/workspaces/socket?token=good&enrollmentId=e1',
     } as any);
-    await gateway.handleConnection(other, {
+    await gateway.handleConnection(asWorkspaceSocket(other), {
       url: '/api/v1/workspaces/socket?token=good&enrollmentId=e2',
     } as any);
 

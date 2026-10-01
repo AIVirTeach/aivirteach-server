@@ -104,7 +104,7 @@ describe('DraftContentService', () => {
         findMany: jest.fn(),
         findFirst: jest
           .fn()
-          .mockImplementation((args: any) =>
+          .mockImplementation((args: { where: { contentId?: string } }) =>
             Promise.resolve(args.where.contentId ? null : { position: 1 }),
           ),
         create: jest.fn().mockResolvedValue({ id: 'l3' }),
@@ -116,7 +116,9 @@ describe('DraftContentService', () => {
         update: jest.fn(),
         updateMany: jest.fn().mockResolvedValue({ count: 1 }),
       },
-      $transaction: jest.fn(async (fn: any) => fn(prisma)),
+      $transaction: jest.fn(async (fn: (tx: unknown) => Promise<unknown>) =>
+        fn(prisma),
+      ),
     };
     const audit: any = { record: jest.fn().mockResolvedValue(undefined) };
     const drafts = new CourseDraftService(

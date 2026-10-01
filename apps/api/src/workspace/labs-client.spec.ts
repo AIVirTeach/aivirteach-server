@@ -42,12 +42,13 @@ describe('LabsClient.createVm', () => {
   it('POST /v1/vms，带上 bearer token 和 CF Access header，解析成功响应', async () => {
     const fetchMock = jest.fn().mockResolvedValue({
       ok: true,
-      json: async () => ({
-        lab_id: 'workspace_1',
-        username: 'learner',
-        rdp_password: 'secret',
-        rdp_port: 3389,
-      }),
+      json: () =>
+        Promise.resolve({
+          lab_id: 'workspace_1',
+          username: 'learner',
+          rdp_password: 'secret',
+          rdp_port: 3389,
+        }),
     });
     global.fetch = fetchMock;
 
@@ -83,7 +84,7 @@ describe('LabsClient.createVm', () => {
       ok: false,
       status: 504,
       statusText: 'Gateway Timeout',
-      text: async () => 'Command timed out after 180 seconds.',
+      text: () => Promise.resolve('Command timed out after 180 seconds.'),
     });
 
     const client = await buildClient({
@@ -101,8 +102,10 @@ describe('LabsClient.createVm', () => {
       ok: false,
       status: 403,
       statusText: 'Forbidden',
-      text: async () =>
-        '<!doctype html><html><body>DNS points to prohibited IP</body></html>',
+      text: () =>
+        Promise.resolve(
+          '<!doctype html><html><body>DNS points to prohibited IP</body></html>',
+        ),
     });
 
     const client = await buildClient({
@@ -161,12 +164,13 @@ describe('LabsClient.createBrowserSession', () => {
   it('POST /v1/vms/:labId/browser-sessions，state=ready 时把 expires_at 转成 ISO 字符串', async () => {
     const fetchMock = jest.fn().mockResolvedValue({
       ok: true,
-      json: async () => ({
-        lab_id: 'workspace_1',
-        state: 'ready',
-        data: 'encrypted-ticket',
-        expires_at: 1798329900000,
-      }),
+      json: () =>
+        Promise.resolve({
+          lab_id: 'workspace_1',
+          state: 'ready',
+          data: 'encrypted-ticket',
+          expires_at: 1798329900000,
+        }),
     });
     global.fetch = fetchMock;
 
@@ -198,7 +202,7 @@ describe('LabsClient.createBrowserSession', () => {
   it('配置了 CF Access 时带上 CF-Access 请求头（跟 createVm 一致）', async () => {
     const fetchMock = jest.fn().mockResolvedValue({
       ok: true,
-      json: async () => ({ lab_id: 'workspace_1', state: 'starting' }),
+      json: () => Promise.resolve({ lab_id: 'workspace_1', state: 'starting' }),
     });
     global.fetch = fetchMock;
 
@@ -225,7 +229,7 @@ describe('LabsClient.createBrowserSession', () => {
   it('state=starting 时没有 data/expiresAt，不报错', async () => {
     global.fetch = jest.fn().mockResolvedValue({
       ok: true,
-      json: async () => ({ lab_id: 'workspace_1', state: 'starting' }),
+      json: () => Promise.resolve({ lab_id: 'workspace_1', state: 'starting' }),
     });
 
     const client = await buildClient({
@@ -248,7 +252,7 @@ describe('LabsClient.createBrowserSession', () => {
       ok: false,
       status: 502,
       statusText: 'Bad Gateway',
-      text: async () => 'Command exited with 1.',
+      text: () => Promise.resolve('Command exited with 1.'),
     });
 
     const client = await buildClient({
@@ -266,7 +270,7 @@ describe('LabsClient.createBrowserSession', () => {
       ok: false,
       status: 404,
       statusText: 'Not Found',
-      text: async () => 'no such lab',
+      text: () => Promise.resolve('no such lab'),
     });
 
     const client = await buildClient({
@@ -314,11 +318,12 @@ describe('LabsClient.stopVm', () => {
   it('POST /v1/vms/:labId/actions/stop，带上 bearer token 和 CF Access header', async () => {
     const fetchMock = jest.fn().mockResolvedValue({
       ok: true,
-      json: async () => ({
-        lab_id: 'workspace_1',
-        operation: 'stop',
-        message: 'ok',
-      }),
+      json: () =>
+        Promise.resolve({
+          lab_id: 'workspace_1',
+          operation: 'stop',
+          message: 'ok',
+        }),
     });
     global.fetch = fetchMock;
 
@@ -349,7 +354,7 @@ describe('LabsClient.stopVm', () => {
       ok: false,
       status: 502,
       statusText: 'Bad Gateway',
-      text: async () => 'Command exited with 1.',
+      text: () => Promise.resolve('Command exited with 1.'),
     });
 
     const client = await buildClient({
@@ -367,7 +372,7 @@ describe('LabsClient.stopVm', () => {
       ok: false,
       status: 403,
       statusText: 'Forbidden',
-      text: async () => 'forbidden',
+      text: () => Promise.resolve('forbidden'),
     });
 
     const client = await buildClient({
@@ -414,7 +419,8 @@ describe('LabsClient.getVmState', () => {
   it('GET /v1/vms/:labId/status，返回 dominfo 里的 State', async () => {
     const fetchMock = jest.fn().mockResolvedValue({
       ok: true,
-      json: async () => ({ Id: '-', Name: 'lab_1', State: 'shut off' }),
+      json: () =>
+        Promise.resolve({ Id: '-', Name: 'lab_1', State: 'shut off' }),
     });
     global.fetch = fetchMock;
 
@@ -440,7 +446,8 @@ describe('LabsClient.getVmState', () => {
       ok: false,
       status: 404,
       statusText: 'Not Found',
-      text: async () => JSON.stringify({ detail: 'ERROR: VM not found' }),
+      text: () =>
+        Promise.resolve(JSON.stringify({ detail: 'ERROR: VM not found' })),
     });
 
     const client = await buildConfigured();
@@ -455,11 +462,13 @@ describe('LabsClient.getVmState', () => {
       ok: false,
       status: 404,
       statusText: 'Not Found',
-      text: async () =>
-        JSON.stringify({
-          detail:
-            "error: Domain not found: no domain with matching name 'lab_1'",
-        }),
+      text: () =>
+        Promise.resolve(
+          JSON.stringify({
+            detail:
+              "error: Domain not found: no domain with matching name 'lab_1'",
+          }),
+        ),
     });
 
     const client = await buildConfigured();
@@ -470,9 +479,10 @@ describe('LabsClient.getVmState', () => {
   });
 
   it('200 但响应里没有 State 时返回 unknown，不当成已关机', async () => {
-    global.fetch = jest
-      .fn()
-      .mockResolvedValue({ ok: true, json: async () => ({ Name: 'lab_1' }) });
+    global.fetch = jest.fn().mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve({ Name: 'lab_1' }),
+    });
 
     const client = await buildConfigured();
 
@@ -487,10 +497,12 @@ describe('LabsClient.getVmState', () => {
       ok: false,
       status: 503,
       statusText: 'Service Unavailable',
-      text: async () =>
-        JSON.stringify({
-          detail: "ERROR: libvirt unavailable while checking 'lab_1'",
-        }),
+      text: () =>
+        Promise.resolve(
+          JSON.stringify({
+            detail: "ERROR: libvirt unavailable while checking 'lab_1'",
+          }),
+        ),
     });
 
     const client = await buildConfigured();
@@ -505,7 +517,7 @@ describe('LabsClient.getVmState', () => {
       ok: false,
       status: 404,
       statusText: 'Not Found',
-      text: async () => JSON.stringify({ detail: 'Not Found' }),
+      text: () => Promise.resolve(JSON.stringify({ detail: 'Not Found' })),
     });
 
     const client = await buildConfigured();
@@ -520,7 +532,7 @@ describe('LabsClient.getVmState', () => {
       ok: false,
       status: 403,
       statusText: 'Forbidden',
-      text: async () => '<html>Cloudflare Access</html>',
+      text: () => Promise.resolve('<html>Cloudflare Access</html>'),
     });
 
     const client = await buildConfigured();
@@ -548,11 +560,12 @@ describe('LabsClient.startVm', () => {
   it('POST /v1/vms/:labId/actions/start，带上 bearer token', async () => {
     const fetchMock = jest.fn().mockResolvedValue({
       ok: true,
-      json: async () => ({
-        lab_id: 'workspace_1',
-        operation: 'start',
-        message: 'ok',
-      }),
+      json: () =>
+        Promise.resolve({
+          lab_id: 'workspace_1',
+          operation: 'start',
+          message: 'ok',
+        }),
     });
     global.fetch = fetchMock;
 
@@ -579,7 +592,7 @@ describe('LabsClient.startVm', () => {
       ok: false,
       status: 504,
       statusText: 'Gateway Timeout',
-      text: async () => 'Command timed out after 180 seconds.',
+      text: () => Promise.resolve('Command timed out after 180 seconds.'),
     });
 
     const client = await buildClient({
@@ -597,7 +610,7 @@ describe('LabsClient.startVm', () => {
       ok: false,
       status: 403,
       statusText: 'Forbidden',
-      text: async () => 'forbidden',
+      text: () => Promise.resolve('forbidden'),
     });
 
     const client = await buildClient({
@@ -645,7 +658,7 @@ describe('LabsClient.exchangeGuacamoleToken', () => {
   it('POST {base}api/tokens，表单编码 data，返回 authToken 和 websocketUrl（http 转 ws）', async () => {
     const fetchMock = jest.fn().mockResolvedValue({
       ok: true,
-      json: async () => ({ authToken: 'real-auth-token' }),
+      json: () => Promise.resolve({ authToken: 'real-auth-token' }),
     });
     global.fetch = fetchMock;
 
@@ -671,7 +684,7 @@ describe('LabsClient.exchangeGuacamoleToken', () => {
   it('https 基址转成 wss', async () => {
     global.fetch = jest.fn().mockResolvedValue({
       ok: true,
-      json: async () => ({ authToken: 'token' }),
+      json: () => Promise.resolve({ authToken: 'token' }),
     });
 
     const client = await buildClient({
@@ -688,7 +701,7 @@ describe('LabsClient.exchangeGuacamoleToken', () => {
   it('基址缺结尾斜杠也能正确拼接，不丢最后一段路径', async () => {
     const fetchMock = jest.fn().mockResolvedValue({
       ok: true,
-      json: async () => ({ authToken: 'token' }),
+      json: () => Promise.resolve({ authToken: 'token' }),
     });
     global.fetch = fetchMock;
 
@@ -708,7 +721,7 @@ describe('LabsClient.exchangeGuacamoleToken', () => {
       ok: false,
       status: 403,
       statusText: 'Forbidden',
-      text: async () => 'Permission Denied.',
+      text: () => Promise.resolve('Permission Denied.'),
     });
 
     const client = await buildClient({
@@ -725,7 +738,7 @@ describe('LabsClient.exchangeGuacamoleToken', () => {
       ok: false,
       status: 503,
       statusText: 'Service Unavailable',
-      text: async () => 'unavailable',
+      text: () => Promise.resolve('unavailable'),
     });
 
     const client = await buildClient({

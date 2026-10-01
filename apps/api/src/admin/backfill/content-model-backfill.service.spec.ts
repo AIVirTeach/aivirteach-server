@@ -7,7 +7,9 @@ import { ContentModelBackfillService } from './content-model-backfill.service';
 import * as equivalence from '../../courses/lesson-conversion/plain-text';
 
 jest.mock('../../courses/lesson-conversion/plain-text', () => ({
-  ...jest.requireActual('../../courses/lesson-conversion/plain-text'),
+  ...jest.requireActual<typeof equivalence>(
+    '../../courses/lesson-conversion/plain-text',
+  ),
   checkPlainTextEquivalence: jest.fn(),
 }));
 

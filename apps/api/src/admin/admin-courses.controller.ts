@@ -87,14 +87,25 @@ class ChineseAssetUploadInterceptor implements NestInterceptor {
 function isFileSizeLimitError(error: unknown): boolean {
   return (
     (error instanceof MulterError && error.code === 'LIMIT_FILE_SIZE') ||
-    (typeof error === 'object' &&
-      error !== null &&
-      'getStatus' in error &&
-      typeof error.getStatus === 'function' &&
-      error.getStatus() === 413) ||
-    (error instanceof BadRequestException &&
-      String(error.getResponse()).includes('File too large'))
+    (hasStatusCode(error) && error.getStatus() === 413) ||
+    (error instanceof BadRequestException && hasFileTooLargeResponse(error))
   );
+}
+
+function hasStatusCode(error: unknown): error is { getStatus: () => number } {
+  return (
+    typeof error === 'object' &&
+    error !== null &&
+    'getStatus' in error &&
+    typeof error.getStatus === 'function'
+  );
+}
+
+function hasFileTooLargeResponse(error: BadRequestException): boolean {
+  const response = error.getResponse();
+  const text =
+    typeof response === 'string' ? response : (JSON.stringify(response) ?? '');
+  return text.includes('File too large');
 }
 
 const OperatorHeader = createParamDecorator((_data, context) => {
