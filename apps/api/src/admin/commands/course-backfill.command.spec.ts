@@ -52,6 +52,10 @@ describe('CourseBackfillCommand', () => {
   it('仅 execute 时执行写库并记审计', async () => {
     await command.run([], { operator: 'ops@example.com', reason: '迁移回填', execute: true });
     expect(prisma.$transaction).toHaveBeenCalledTimes(1);
+    expect(prisma.$transaction).toHaveBeenCalledWith(expect.any(Function), {
+      maxWait: 10_000,
+      timeout: 120_000,
+    });
     expect(service.run).toHaveBeenCalledWith({ execute: true }, transaction);
     expect(audit.record).toHaveBeenCalledWith({
       actor: { type: 'OPERATOR', id: 'ops@example.com' },

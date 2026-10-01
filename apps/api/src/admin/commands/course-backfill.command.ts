@@ -34,6 +34,7 @@ export class CourseBackfillCommand extends CommandRunner {
     let report: BackfillReport;
 
     if (execute) {
+      // Allow a large operator-run global backfill to finish while keeping writes and audit atomic.
       report = await this.prisma.$transaction(async (transaction) => {
         const result = await this.backfill.run({ execute: true }, transaction);
         const metadata: Prisma.InputJsonObject = {
@@ -62,7 +63,7 @@ export class CourseBackfillCommand extends CommandRunner {
           transaction,
         );
         return result;
-      });
+      }, { maxWait: 10_000, timeout: 120_000 });
     } else {
       report = await this.backfill.run({ execute: false });
     }
