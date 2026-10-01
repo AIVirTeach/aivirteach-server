@@ -2,6 +2,7 @@ import { ForbiddenException, Injectable, Logger } from '@nestjs/common';
 import { ConversationRole, WorkspaceStatus, type Conversation, type Prisma } from '@prisma/client';
 import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
+import { LATEST_PUBLISHED_VERSION } from '../courses/published-version';
 import { PrismaService } from '../prisma/prisma.service';
 import { AgentClient, DiagnoseResponseSchema, type DiagnoseRequestBody } from './agent-client';
 
@@ -52,7 +53,7 @@ export class ChatService {
       data: { enrollmentId: enrollment.id, threadId: enrollment.id, role: ConversationRole.USER, content: text },
     });
 
-    const resolved = await this.resolveDiagnoseRequest(enrollment.id);
+    const resolved = await this.resolveDiagnoseRequest(enrollment.id, enrollment.courseId);
     if (!resolved.ok) {
       return this.respondWithFallback(userId, enrollment.id, studentRow, resolved.fallbackMessage);
     }
@@ -93,7 +94,7 @@ export class ChatService {
       data: { enrollmentId: enrollment.id, threadId: enrollment.id, role: ConversationRole.USER, content: text },
     });
 
-    const resolved = await this.resolveDiagnoseRequest(enrollment.id);
+    const resolved = await this.resolveDiagnoseRequest(enrollment.id, enrollment.courseId);
     if (!resolved.ok) {
       yield {
         type: 'complete',
@@ -167,7 +168,7 @@ export class ChatService {
     };
   }
 
-  private async resolveDiagnoseRequest(enrollmentId: string): Promise<ResolvedDiagnoseRequest> {
+  private async resolveDiagnoseRequest(enrollmentId: string, courseId: string): Promise<ResolvedDiagnoseRequest> {
     const workspace = await this.prisma.workspace.findUnique({ where: { enrollmentId } });
     if (!workspace?.labId || workspace.status !== WorkspaceStatus.RUNNING) {
       return { ok: false, fallbackMessage: '请先启动虚拟机后再提问。' };
@@ -179,11 +180,11 @@ export class ChatService {
     await this.prisma.workspace.update({ where: { enrollmentId }, data: { lastSeenAt: new Date() } });
 
     const progress = await this.prisma.progress.findUnique({ where: { enrollmentId } });
-    if (!progress?.currentLessonId) {
+    if (!progress?.currentLessonContentId) {
       return { ok: false, fallbackMessage: '还没有开始学习课程内容，请先进入第一课时。' };
     }
 
-    const context = await this.buildDiagnoseContext(progress.currentLessonId);
+    const context = await this.buildDiagnoseContext(courseId, progress.currentLessonContentId);
     if (!context) {
       return { ok: false, fallbackMessage: '还没有开始学习课程内容，请先进入第一课时。' };
     }
@@ -192,44 +193,48 @@ export class ChatService {
   }
 
   private async buildDiagnoseContext(
-    currentLessonId: string,
+    courseId: string,
+    currentLessonContentId: string,
   ): Promise<{ course: DiagnoseRequestBody['course']; currentStep: DiagnoseRequestBody['current_step'] } | null> {
-    const lesson = await this.prisma.courseLesson.findUnique({
-      where: { id: currentLessonId },
+    const course = await this.prisma.course.findUnique({
+      where: { id: courseId },
       include: {
-        assessments: true,
-        module: {
+        versions: {
+          ...LATEST_PUBLISHED_VERSION,
           include: {
-            courseVersion: {
+            ...LATEST_PUBLISHED_VERSION.include,
+            modules: {
+              ...LATEST_PUBLISHED_VERSION.include.modules,
               include: {
-                course: true,
-                modules: { orderBy: { position: 'asc' }, include: { lessons: { orderBy: { position: 'asc' } } } },
+                lessons: {
+                  ...LATEST_PUBLISHED_VERSION.include.modules.include.lessons,
+                  include: { assessments: true },
+                },
               },
             },
           },
         },
       },
     });
-    if (!lesson) return null;
+    const version = course?.versions[0];
+    if (!course || !version) return null;
 
-    const flattened = lesson.module.courseVersion.modules.flatMap((courseModule) => courseModule.lessons);
-    const sequence = flattened.findIndex((entry) => entry.id === lesson.id) + 1;
-    if (sequence === 0) {
-      // 理论上不该发生：lesson 本该出现在自己 module 的 lessons 列表里。真出现说明数据有不一致，
-      // 跟 Agent 调用失败区分开单独记一条，不然只看兜底消息看不出是这个原因。
-      this.logger.warn(`courseLessonId=${lesson.id} 在自己所属 module 的 lessons 列表里找不到自己（数据不一致）`);
-    }
+    const flattened = version.modules.flatMap((courseModule) => courseModule.lessons.map((lesson) => ({ lesson, courseModule })));
+    const index = flattened.findIndex(({ lesson }) => lesson.contentId === currentLessonContentId);
+    if (index < 0) return null;
+    const { lesson, courseModule } = flattened[index];
+    const sequence = index + 1;
     const assessment = lesson.assessments[0] ?? null;
 
     return {
       course: {
-        course_id: lesson.module.courseVersion.course.slug,
-        version: lesson.module.courseVersion.version,
-        title: lesson.module.courseVersion.course.title,
-        summary: lesson.module.courseVersion.course.description,
+        course_id: course.slug,
+        version: version.version,
+        title: course.title,
+        summary: course.description,
       },
       currentStep: {
-        module_id: lesson.module.id,
+        module_id: courseModule.id,
         lesson_id: lesson.contentId,
         sequence,
         title: lesson.title,
