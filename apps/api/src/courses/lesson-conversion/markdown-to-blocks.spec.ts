@@ -30,10 +30,10 @@ describe('convertMarkdownToBlocks', () => {
   });
 
   it('drops H1 while reporting its plain text', async () => {
-    const result = await convertMarkdownToBlocks('# T', ctx);
-    expect(result.content.blocks).toEqual([]);
+    const result = await convertMarkdownToBlocks('Intro paragraph.\n\n# T', ctx);
+    expect(result.content.blocks.map(({ type }) => type)).toEqual(['paragraph']);
     expect(result.report).toEqual(expect.arrayContaining([
-      expect.objectContaining({ level: 'warning', code: 'h1-dropped' }),
+      expect.objectContaining({ level: 'warning', code: 'h1-dropped', line: 3 }),
     ]));
     expect(result.dropped).toContain('T');
   });
@@ -68,12 +68,13 @@ describe('convertMarkdownToBlocks', () => {
   });
 
   it('flattens nested list items and reports the flattening', async () => {
-    const result = await convertMarkdownToBlocks('- one\n  - child\n- two', ctx);
+    const result = await convertMarkdownToBlocks('List intro.\n\n- one\n  - child\n- two', ctx);
     expect(result.content.blocks).toMatchObject([
+      { type: 'paragraph', props: { text: 'List intro.' } },
       { type: 'bulletList', props: { items: ['one', 'child', 'two'] } },
     ]);
     expect(result.report).toEqual(expect.arrayContaining([
-      expect.objectContaining({ level: 'warning', code: 'nested-list-flattened' }),
+      expect.objectContaining({ level: 'warning', code: 'nested-list-flattened', line: 3 }),
     ]));
   });
 
