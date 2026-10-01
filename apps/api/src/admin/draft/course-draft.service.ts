@@ -1,4 +1,5 @@
 import {
+  ConflictException,
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
@@ -136,6 +137,18 @@ export class CourseDraftService {
   }
 
   async discardDraft(slug: string, operator: string): Promise<void> {
+    const course = await this.prisma.course.findUnique({
+      where: { slug },
+      select: { id: true },
+    });
+    if (!course) throw new NotFoundException(`课程 ${slug} 不存在`);
+    const published = await this.prisma.courseVersion.findFirst({
+      where: { courseId: course.id, publishedAt: { not: null } },
+      select: { id: true },
+    });
+    if (!published) {
+      throw new ConflictException('未发版课程的草稿不能丢弃');
+    }
     const draft = await this.requireDraft(slug);
     await this.prisma.$transaction(async (tx) => {
       await tx.courseVersion.delete({ where: { id: draft.id } });

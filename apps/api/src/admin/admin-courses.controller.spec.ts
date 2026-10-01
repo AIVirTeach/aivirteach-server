@@ -1,12 +1,13 @@
 import { Test } from '@nestjs/testing';
-import { INestApplication, UnprocessableEntityException } from '@nestjs/common';
+import { INestApplication, NotFoundException, UnprocessableEntityException } from '@nestjs/common';
 import request from 'supertest';
 import { ENV, type Env } from '../config/env';
 import { CourseDraftService } from './draft/course-draft.service';
 import { DraftContentService } from './draft/draft-content.service';
 import { CoursePublishService } from './course-publish.service';
 import { PrismaService } from '../prisma/prisma.service';
-import { AdminCoursesController } from './admin-courses.controller';
+import { AdminCourseCreateController, AdminCoursesController } from './admin-courses.controller';
+import { CourseCreateService } from './draft/course-create.service';
 
 const TOKEN = 'a'.repeat(32);
 const OPERATOR = 'editor@example.com';
@@ -33,6 +34,7 @@ describe('AdminCoursesController', () => {
     updateAssessment: jest.fn(),
   };
   const publishing = { publish: jest.fn() };
+  const courseCreation = { create: jest.fn() };
   const prisma = { courseAsset: { findMany: jest.fn().mockResolvedValue([]) } };
 
   const routes: Array<{
@@ -47,6 +49,12 @@ describe('AdminCoursesController', () => {
       path: '/admin/courses/demo/draft',
       service: drafts.createDraft,
       args: ['demo', OPERATOR],
+    },
+    {
+      method: 'get',
+      path: '/admin/courses/demo/draft',
+      service: drafts.requireDraft,
+      args: ['demo'],
     },
     {
       method: 'delete',
@@ -152,12 +160,13 @@ describe('AdminCoursesController', () => {
 
   beforeAll(async () => {
     const module = await Test.createTestingModule({
-      controllers: [AdminCoursesController],
+      controllers: [AdminCoursesController, AdminCourseCreateController],
       providers: [
         { provide: ENV, useValue: { ADMIN_API_TOKEN: TOKEN } as Env },
         { provide: CourseDraftService, useValue: drafts },
         { provide: DraftContentService, useValue: content },
         { provide: CoursePublishService, useValue: publishing },
+        { provide: CourseCreateService, useValue: courseCreation },
         { provide: PrismaService, useValue: prisma },
       ],
     }).compile();
@@ -168,6 +177,7 @@ describe('AdminCoursesController', () => {
   beforeEach(() => {
     jest.clearAllMocks();
     drafts.createDraft.mockResolvedValue({ draft, created: true });
+    courseCreation.create.mockResolvedValue(draft);
     drafts.requireDraft.mockResolvedValue(draft);
     prisma.courseAsset.findMany.mockResolvedValue([]);
     for (const route of routes) route.service.mockResolvedValue(draft);
@@ -213,6 +223,27 @@ describe('AdminCoursesController', () => {
     expect(absent.status).toBe(400);
     expect(invalid.status).toBe(400);
     expect(drafts.createDraft).not.toHaveBeenCalled();
+  });
+
+  it('creates a course at POST /admin/courses with required token and operator', async () => {
+    const missingToken = await request(app.getHttpServer())
+      .post('/admin/courses').set('X-Operator', OPERATOR).send({ slug: 'demo-course', title: 'Demo' });
+    expect(missingToken.status).toBe(401);
+    const missingOperator = await request(app.getHttpServer())
+      .post('/admin/courses').set('Authorization', `Bearer ${TOKEN}`).send({ slug: 'demo-course', title: 'Demo' });
+    expect(missingOperator.status).toBe(400);
+    const response = await request(app.getHttpServer())
+      .post('/admin/courses').set('Authorization', `Bearer ${TOKEN}`).set('X-Operator', OPERATOR)
+      .send({ slug: 'demo-course', title: 'Demo' });
+    expect(response.status).toBe(201);
+    expect(courseCreation.create).toHaveBeenCalledWith({ slug: 'demo-course', title: 'Demo' }, OPERATOR);
+  });
+
+  it('GET draft returns 404 when there is no draft', async () => {
+    drafts.requireDraft.mockRejectedValueOnce(new NotFoundException());
+    const response = await request(app.getHttpServer())
+      .get('/admin/courses/demo/draft').set('Authorization', `Bearer ${TOKEN}`);
+    expect(response.status).toBe(404);
   });
 
   it('returns 201 for created draft and 200 when draft already existed', async () => {

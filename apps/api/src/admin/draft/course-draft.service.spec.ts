@@ -1,4 +1,4 @@
-import { NotFoundException } from '@nestjs/common';
+import { ConflictException, NotFoundException } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { AuditService } from '../../audit/audit.service';
 import { PrismaService } from '../../prisma/prisma.service';
@@ -223,7 +223,9 @@ describe('CourseDraftService', () => {
   it('requires an existing draft and records discard audit', async () => {
     const { prisma, audit, service } = setup();
     prisma.course.findUnique.mockResolvedValue({ id: 'course-1', slug: 'demo' });
-    prisma.courseVersion.findFirst.mockResolvedValueOnce({ id: 'draft' });
+    prisma.courseVersion.findFirst
+      .mockResolvedValueOnce({ id: 'published', publishedAt: new Date() })
+      .mockResolvedValueOnce({ id: 'draft' });
     prisma.courseVersion.delete.mockResolvedValue({});
     await service.discardDraft('demo', 'operator');
     expect(audit.record).toHaveBeenCalledWith(
@@ -231,8 +233,34 @@ describe('CourseDraftService', () => {
       expect.anything(),
     );
 
-    prisma.courseVersion.findFirst.mockResolvedValueOnce(null);
+    prisma.courseVersion.findFirst
+      .mockResolvedValueOnce({ id: 'published', publishedAt: new Date() })
+      .mockResolvedValueOnce(null);
     await expect(service.discardDraft('demo', 'operator')).rejects.toBeInstanceOf(NotFoundException);
+  });
+
+  it('does not discard the only draft of an unpublished course', async () => {
+    const { prisma, service } = setup();
+    prisma.course.findUnique.mockResolvedValue({ id: 'course-1' });
+    prisma.courseVersion.findFirst
+      .mockResolvedValueOnce(null) // no published version
+      .mockResolvedValueOnce({ id: 'draft' });
+    await expect(service.discardDraft('demo', 'operator')).rejects.toThrow(
+      new ConflictException('未发版课程的草稿不能丢弃'),
+    );
+    expect(prisma.courseVersion.delete).not.toHaveBeenCalled();
+    expect(prisma.$transaction).not.toHaveBeenCalled();
+  });
+
+  it('discards a draft when the course has a published version', async () => {
+    const { prisma, service } = setup();
+    prisma.course.findUnique.mockResolvedValue({ id: 'course-1' });
+    prisma.courseVersion.findFirst
+      .mockResolvedValueOnce({ id: 'published', publishedAt: new Date() })
+      .mockResolvedValueOnce({ id: 'draft' });
+    prisma.courseVersion.delete.mockResolvedValue({});
+    await expect(service.discardDraft('demo', 'operator')).resolves.toBeUndefined();
+    expect(prisma.courseVersion.delete).toHaveBeenCalledWith({ where: { id: 'draft' } });
   });
 
   it('merges metadata on the draft and maps the level without touching Course', async () => {

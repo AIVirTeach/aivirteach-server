@@ -15,15 +15,20 @@ import { CourseDraftService } from './draft/course-draft.service';
 import { CoursePublishService } from './course-publish.service';
 import { DraftContentService } from './draft/draft-content.service';
 import { AdminApiTokenGuard } from './admin-api-token.guard';
-import { AdminCoursesController } from './admin-courses.controller';
+import {
+  AdminCourseCreateController,
+  AdminCoursesController,
+} from './admin-courses.controller';
+import { CourseCreateService } from './draft/course-create.service';
 
 @Module({
   imports: [CoursesModule],
-  controllers: [AdminCoursesController],
+  controllers: [AdminCoursesController, AdminCourseCreateController],
   providers: [
     AdminService,
     AdminApiTokenGuard,
     CourseDraftService,
+    CourseCreateService,
     DraftContentService,
     CoursePublishService,
     InviteCommand,

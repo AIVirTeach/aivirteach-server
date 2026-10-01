@@ -35,6 +35,10 @@ import {
 } from './draft/draft.schemas';
 import { DraftContentService } from './draft/draft-content.service';
 import { CoursePublishService } from './course-publish.service';
+import {
+  CourseCreateService,
+  CreateCourseSchema,
+} from './draft/course-create.service';
 
 const OperatorHeader = createParamDecorator((_data, context) => {
   const request = context
@@ -67,6 +71,11 @@ export class AdminCoursesController {
   ) {
     const result = await this.drafts.createDraft(slug, operator);
     return response.status(result.created ? 201 : 200).json(result.draft);
+  }
+
+  @Get('draft')
+  getDraft(@Param('slug') slug: string) {
+    return this.drafts.requireDraft(slug);
   }
 
   @Delete('draft')
@@ -217,5 +226,22 @@ export class AdminCoursesController {
       operator,
       body.reason ?? 'admin publish',
     );
+  }
+}
+
+@ApiTags('Admin Courses')
+@ApiBearerAuth()
+@UseGuards(AdminApiTokenGuard)
+@Controller('admin/courses')
+export class AdminCourseCreateController {
+  constructor(private readonly courses: CourseCreateService) {}
+
+  @Post()
+  create(
+    @Body(new ZodValidationPipe(CreateCourseSchema))
+    body: z.infer<typeof CreateCourseSchema>,
+    @OperatorHeader(new ZodValidationPipe(OperatorSchema)) operator: string,
+  ) {
+    return this.courses.create(body, operator);
   }
 }
