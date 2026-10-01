@@ -2,11 +2,14 @@ import { join } from 'node:path';
 import { Test } from '@nestjs/testing';
 import { ConflictException } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
+import { readFileSync } from 'node:fs';
 import { PrismaService } from '../prisma/prisma.service';
 import { CourseAssetStorageService } from './course-asset-storage.service';
 import { CourseIngestionService } from './course-ingestion.service';
+import { sliceLessonBody } from './lesson-body';
 
 const FIXTURE_DIR = join(__dirname, '__fixtures__', 'sample-course');
+const SOURCE_MARKDOWN = readFileSync(join(FIXTURE_DIR, 'lesson-source.md'), 'utf-8');
 
 const buildPrisma = () => ({
   course: {
@@ -64,7 +67,7 @@ describe('CourseIngestionService.ingestFromDirectory', () => {
             create: expect.objectContaining({
               version: 1,
               imageDigest: 'sha256:test',
-              sourceMarkdown: expect.stringContaining('Section one body.'),
+              sourceMarkdown: SOURCE_MARKDOWN,
               modules: {
                 create: [
                   expect.objectContaining({
@@ -72,8 +75,16 @@ describe('CourseIngestionService.ingestFromDirectory', () => {
                     title: 'Module One',
                     lessons: {
                       create: [
-                        expect.objectContaining({ contentId: 'lesson-1', position: 1, title: 'Lesson One', assessmentIds: ['check-lesson-1'] }),
-                        expect.objectContaining({ contentId: 'lesson-2', position: 2, title: 'Lesson Two', assessmentIds: ['check-lesson-2'] }),
+                        expect.objectContaining({
+                          contentId: 'lesson-1', position: 1, title: 'Lesson One', assessmentIds: ['check-lesson-1'],
+                          body: sliceLessonBody(SOURCE_MARKDOWN, { startLine: 3, endLine: 4 }),
+                          sourceRange: { startLine: 3, endLine: 4 },
+                        }),
+                        expect.objectContaining({
+                          contentId: 'lesson-2', position: 2, title: 'Lesson Two', assessmentIds: ['check-lesson-2'],
+                          body: sliceLessonBody(SOURCE_MARKDOWN, { startLine: 5, endLine: 6 }),
+                          sourceRange: { startLine: 5, endLine: 6 },
+                        }),
                       ],
                     },
                   }),

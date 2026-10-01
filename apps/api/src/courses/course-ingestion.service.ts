@@ -6,6 +6,7 @@ import type { Course, CourseVersion } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { CourseAssetStorageService } from './course-asset-storage.service';
 import { CourseContentSchema, mapCourseLevel } from './course-content.schemas';
+import { sliceLessonBody } from './lesson-body';
 
 @Injectable()
 export class CourseIngestionService {
@@ -77,6 +78,7 @@ export class CourseIngestionService {
                       estimatedMinutes: lesson.estimatedMinutes,
                       objectives: lesson.objectives,
                       sourceRange: lesson.sourceRange,
+                      body: sliceLessonBody(sourceMarkdown, lesson.sourceRange),
                       activityType: lesson.activity.type,
                       activityPrompt: lesson.activity.prompt,
                       activityCompletionType: lesson.activity.completionType,
