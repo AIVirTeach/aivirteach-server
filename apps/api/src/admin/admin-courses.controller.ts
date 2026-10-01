@@ -1,5 +1,6 @@
 import {
   Body,
+  BadRequestException,
   ConflictException,
   Controller,
   createParamDecorator,
@@ -10,8 +11,14 @@ import {
   Post,
   Put,
   Res,
+  UploadedFile,
   UseGuards,
+  UseInterceptors,
 } from '@nestjs/common';
+import { FileInterceptor } from '@nestjs/platform-express';
+import { MulterError } from 'multer';
+import type { CallHandler, ExecutionContext, NestInterceptor } from '@nestjs/common';
+import { catchError, throwError, type Observable } from 'rxjs';
 import type { Response } from 'express';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { z } from 'zod';
@@ -39,6 +46,46 @@ import {
   CourseCreateService,
   CreateCourseSchema,
 } from './draft/course-create.service';
+import { CourseAssetUploadService } from './assets/course-asset-upload.service';
+
+const UploadFileInterceptor = FileInterceptor('file', {
+  limits: { fileSize: 5 * 1024 * 1024 },
+});
+
+class ChineseAssetUploadInterceptor implements NestInterceptor {
+  private readonly delegate = new UploadFileInterceptor();
+
+  async intercept(context: ExecutionContext, next: CallHandler): Promise<Observable<unknown>> {
+    try {
+      const stream = await this.delegate.intercept(context, next);
+      return stream.pipe(
+        catchError((error: unknown) => {
+          if (isFileSizeLimitError(error)) {
+            return throwError(() => new BadRequestException('图片大小不能超过 5 MiB'));
+          }
+          return throwError(() => error);
+        }),
+      );
+    } catch (error) {
+      if (isFileSizeLimitError(error)) {
+        throw new BadRequestException('图片大小不能超过 5 MiB');
+      }
+      throw error;
+    }
+  }
+}
+
+function isFileSizeLimitError(error: unknown): boolean {
+  return (
+    (error instanceof MulterError && error.code === 'LIMIT_FILE_SIZE') ||
+    (typeof error === 'object' &&
+      error !== null &&
+      'getStatus' in error &&
+      typeof error.getStatus === 'function' &&
+      error.getStatus() === 413) ||
+    (error instanceof BadRequestException && String(error.getResponse()).includes('File too large'))
+  );
+}
 
 const OperatorHeader = createParamDecorator((_data, context) => {
   const request = context
@@ -61,6 +108,7 @@ export class AdminCoursesController {
     private readonly content: DraftContentService,
     private readonly publishing: CoursePublishService,
     private readonly prisma: PrismaService,
+    private readonly assetUploads: CourseAssetUploadService,
   ) {}
 
   @Post('draft')
@@ -226,6 +274,18 @@ export class AdminCoursesController {
       operator,
       body.reason ?? 'admin publish',
     );
+  }
+
+  @Post('assets')
+  @UseInterceptors(new ChineseAssetUploadInterceptor())
+  uploadAsset(
+    @Param('slug') slug: string,
+    @OperatorHeader(new ZodValidationPipe(OperatorSchema)) operator: string,
+    @UploadedFile() file: { buffer: Buffer; size: number } | undefined,
+    @Body() body: { altText?: string },
+  ) {
+    if (!file) throw new BadRequestException('请上传图片文件');
+    return this.assetUploads.upload(slug, file, body.altText, operator);
   }
 }
 

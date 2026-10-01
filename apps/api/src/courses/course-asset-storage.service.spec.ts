@@ -18,8 +18,19 @@ describe('CourseAssetStorageService.upload', () => {
     expect(put).toHaveBeenCalledWith(
       'courses/sample-course/cover.png',
       expect.any(Buffer),
-      { access: 'public' },
+      { access: 'public', contentType: 'application/octet-stream', addRandomSuffix: true },
     );
     expect(url).toBe('https://blob.vercel-storage.com/courses/sample-course/cover.png');
+  });
+
+  it('uploads a buffer using the supplied content type', async () => {
+    (put as jest.Mock).mockResolvedValue({ url: 'https://blob.test/image.png' });
+    const service = new CourseAssetStorageService();
+    const body = Buffer.from('png');
+    await expect(service.uploadBuffer('courses/c1/a.png', body, 'image/png'))
+      .resolves.toBe('https://blob.test/image.png');
+    expect(put).toHaveBeenCalledWith('courses/c1/a.png', body, {
+      access: 'public', contentType: 'image/png', addRandomSuffix: true,
+    });
   });
 });

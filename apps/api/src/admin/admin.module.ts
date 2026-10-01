@@ -20,6 +20,7 @@ import {
   AdminCoursesController,
 } from './admin-courses.controller';
 import { CourseCreateService } from './draft/course-create.service';
+import { CourseAssetUploadService } from './assets/course-asset-upload.service';
 
 @Module({
   imports: [CoursesModule],
@@ -31,6 +32,7 @@ import { CourseCreateService } from './draft/course-create.service';
     CourseCreateService,
     DraftContentService,
     CoursePublishService,
+    CourseAssetUploadService,
     InviteCommand,
     CourseCreateCommand,
     CoursePublishCommand,

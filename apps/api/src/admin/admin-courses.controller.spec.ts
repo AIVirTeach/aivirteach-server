@@ -8,6 +8,7 @@ import { CoursePublishService } from './course-publish.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { AdminCourseCreateController, AdminCoursesController } from './admin-courses.controller';
 import { CourseCreateService } from './draft/course-create.service';
+import { CourseAssetUploadService } from './assets/course-asset-upload.service';
 
 const TOKEN = 'a'.repeat(32);
 const OPERATOR = 'editor@example.com';
@@ -35,6 +36,7 @@ describe('AdminCoursesController', () => {
   };
   const publishing = { publish: jest.fn() };
   const courseCreation = { create: jest.fn() };
+  const assetUploads = { upload: jest.fn() };
   const prisma = { courseAsset: { findMany: jest.fn().mockResolvedValue([]) } };
 
   const routes: Array<{
@@ -167,6 +169,7 @@ describe('AdminCoursesController', () => {
         { provide: DraftContentService, useValue: content },
         { provide: CoursePublishService, useValue: publishing },
         { provide: CourseCreateService, useValue: courseCreation },
+        { provide: CourseAssetUploadService, useValue: assetUploads },
         { provide: PrismaService, useValue: prisma },
       ],
     }).compile();
@@ -178,10 +181,53 @@ describe('AdminCoursesController', () => {
     jest.clearAllMocks();
     drafts.createDraft.mockResolvedValue({ draft, created: true });
     courseCreation.create.mockResolvedValue(draft);
+    assetUploads.upload.mockResolvedValue({ id: 'asset-1', url: 'https://blob.test/a.png', altText: null, mimeType: 'image/png' });
     drafts.requireDraft.mockResolvedValue(draft);
     prisma.courseAsset.findMany.mockResolvedValue([]);
     for (const route of routes) route.service.mockResolvedValue(draft);
     drafts.createDraft.mockResolvedValue({ draft, created: true });
+  });
+
+  it('POST /admin/courses/:slug/assets requires the admin token and X-Operator', async () => {
+    const noToken = await request(app.getHttpServer())
+      .post('/admin/courses/demo/assets')
+      .attach('file', Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), 'anything.jpg');
+    expect(noToken.status).toBe(401);
+    const noOperator = await request(app.getHttpServer())
+      .post('/admin/courses/demo/assets')
+      .set('Authorization', `Bearer ${TOKEN}`)
+      .attach('file', Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), 'anything.jpg');
+    expect(noOperator.status).toBe(400);
+  });
+
+  it('POST /admin/courses/:slug/assets requires a file and delegates a normal upload', async () => {
+    const missing = await request(app.getHttpServer())
+      .post('/admin/courses/demo/assets')
+      .set('Authorization', `Bearer ${TOKEN}`)
+      .set('X-Operator', OPERATOR);
+    expect(missing.status).toBe(400);
+    expect(missing.body.message).toContain('图片');
+
+    const response = await request(app.getHttpServer())
+      .post('/admin/courses/demo/assets')
+      .set('Authorization', `Bearer ${TOKEN}`)
+      .set('X-Operator', OPERATOR)
+      .field('altText', 'A diagram')
+      .attach('file', Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), 'untrusted.jpg');
+    expect(response.status).toBe(201);
+    expect(assetUploads.upload).toHaveBeenCalledWith('demo', expect.objectContaining({ size: 8, buffer: expect.any(Buffer) }), 'A diagram', OPERATOR);
+    expect(response.body).toEqual({ id: 'asset-1', url: 'https://blob.test/a.png', altText: null, mimeType: 'image/png' });
+  });
+
+  it('POST /admin/courses/:slug/assets maps file-size overflow to Chinese 400', async () => {
+    const response = await request(app.getHttpServer())
+      .post('/admin/courses/demo/assets')
+      .set('Authorization', `Bearer ${TOKEN}`)
+      .set('X-Operator', OPERATOR)
+      .attach('file', Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), Buffer.alloc(5 * 1024 * 1024)]), 'large.png');
+    expect(response.status).toBe(400);
+    expect(response.body.message).toContain('5 MiB');
+    expect(assetUploads.upload).not.toHaveBeenCalled();
   });
 
   it.each(routes)('$method $path requires the admin token', async (route) => {
