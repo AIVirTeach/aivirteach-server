@@ -20,6 +20,7 @@ export const CodePropsSchema = z.object({
   code: z.string().min(1, '代码不能为空').max(20000, '代码不能超过 20000 个字符'),
   language: z.string().max(30, 'language 不能超过 30 个字符').optional(),
   label: z.string().max(80, 'label 不能超过 80 个字符').optional(),
+  description: z.string().max(500, '代码说明不能超过 500 个字符').optional(),
 }).superRefine((value, ctx) => {
   if (value.kind === 'file' && !value.label) {
     ctx.addIssue({ code: 'custom', path: ['label'], message: 'file 类型代码块必须提供 label' });
