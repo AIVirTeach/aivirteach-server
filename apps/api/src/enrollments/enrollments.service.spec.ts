@@ -214,8 +214,8 @@ describe('EnrollmentsService.restart', () => {
     expect(prisma.progress.upsert).toHaveBeenCalledWith(
       expect.objectContaining({
         where: { enrollmentId: 'enrollment_1' },
-        update: { currentLessonContentId: null },
-        create: { enrollmentId: 'enrollment_1', currentLessonContentId: null },
+        update: { currentLessonId: null, currentLessonContentId: null },
+        create: { enrollmentId: 'enrollment_1', currentLessonId: null, currentLessonContentId: null },
       }),
     );
     expect(result.courseId).toBe('sample');

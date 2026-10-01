@@ -81,8 +81,8 @@ export class EnrollmentsService {
 
       await tx.progress.upsert({
         where: { enrollmentId: upserted.id },
-        update: { currentLessonContentId: null },
-        create: { enrollmentId: upserted.id, currentLessonContentId: null },
+        update: { currentLessonId: null, currentLessonContentId: null },
+        create: { enrollmentId: upserted.id, currentLessonId: null, currentLessonContentId: null },
       });
 
       // 全新 restart：清空聊天记录和 Learning Lab，让用户像第一次报名一样重新走一遍。
