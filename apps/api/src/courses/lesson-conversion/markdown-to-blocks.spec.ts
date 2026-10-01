@@ -167,7 +167,11 @@ describe('convertMarkdownToBlocks', () => {
       { type: 'bulletList', props: { items: ['** y** after'] } },
     ]);
     expect(listResult.report).toEqual(expect.arrayContaining([
-      expect.objectContaining({ level: 'warning', code: 'list-image-split' }),
+      expect.objectContaining({
+        level: 'warning',
+        code: 'list-image-split',
+        message: '列表中的图片无法嵌入列表项，将转换为独立图片块或缺图占位段落；列表结构可能变化。',
+      }),
     ]));
 
     const quoteResult = await convertMarkdownToBlocks('> before **x ![alt](a.png) y** after', {
@@ -212,6 +216,11 @@ describe('convertMarkdownToBlocks', () => {
     ]);
     expect(result.report).toEqual(expect.arrayContaining([
       expect.objectContaining({ level: 'warning', code: 'missing-asset' }),
+      expect.objectContaining({
+        level: 'warning',
+        code: 'list-image-split',
+        message: '列表中的图片无法嵌入列表项，将转换为独立图片块或缺图占位段落；列表结构可能变化。',
+      }),
     ]));
   });
 

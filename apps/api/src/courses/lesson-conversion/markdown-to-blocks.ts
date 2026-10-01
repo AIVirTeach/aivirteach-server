@@ -210,7 +210,7 @@ export async function convertMarkdownToBlocks(
           report.push({
             level: 'warning',
             code: 'list-image-split',
-            message: '列表中的图片已提取为独立内容块，列表文本按原顺序拆分。',
+            message: '列表中的图片无法嵌入列表项，将转换为独立图片块或缺图占位段落；列表结构可能变化。',
             line: unit.node.position?.start.line,
           });
           imageBlock(unit.node);
