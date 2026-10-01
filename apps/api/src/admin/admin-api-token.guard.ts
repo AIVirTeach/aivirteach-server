@@ -22,7 +22,8 @@ export class AdminApiTokenGuard implements CanActivate {
     const expectedDigest = createHash('sha256')
       .update(this.env.ADMIN_API_TOKEN)
       .digest();
-    if (!token || !timingSafeEqual(providedDigest, expectedDigest)) {
+    const matches = timingSafeEqual(providedDigest, expectedDigest);
+    if (!token || !matches) {
       throw new UnauthorizedException('缺少或无效的 admin 令牌');
     }
 
