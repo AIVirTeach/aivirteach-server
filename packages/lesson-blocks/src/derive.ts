@@ -35,32 +35,58 @@ export function collectImageAssetIds(content: unknown): string[] {
   return [...ids];
 }
 
+function stripLinks(value: string): string {
+  let output = '';
+  for (let index = 0; index < value.length;) {
+    if (value[index] !== '[' || (index > 0 && value[index - 1] === '\\')) {
+      output += value[index++];
+      continue;
+    }
+    let labelEnd = index + 1;
+    while (labelEnd < value.length && (value[labelEnd] !== ']' || value[labelEnd - 1] === '\\')) labelEnd++;
+    if (labelEnd >= value.length || value[labelEnd + 1] !== '(') {
+      output += value[index++];
+      continue;
+    }
+    let depth = 1;
+    let destinationEnd = labelEnd + 2;
+    while (destinationEnd < value.length && depth > 0) {
+      const char = value[destinationEnd];
+      if (char === '\\') { destinationEnd += 2; continue; }
+      if (char === '(') depth++;
+      if (char === ')') depth--;
+      destinationEnd++;
+    }
+    if (depth !== 0) {
+      output += value[index++];
+      continue;
+    }
+    output += value.slice(index + 1, labelEnd);
+    index = destinationEnd;
+  }
+  return output;
+}
+
 function plain(value: string): string {
-  const escaped: string[] = [];
-  const protectedValue = value.replace(/\\([\\`*{}\[\]()#+\-.!_>=])/g, (_match, char: string) => {
-    const token = `\u0000${escaped.length}\u0000`;
-    escaped.push(char);
-    return token;
-  });
-  return protectedValue
-    .replace(/\[([^\]]+)\]\([^)]+\)/g, '$1')
-    .replace(/\*\*(.*?)\*\*/gs, '$1')
-    .replace(/\*(.*?)\*/gs, '$1')
-    .replace(/==(.*?)==/gs, '$1')
-    .replace(/`([^`]*)`/g, '$1')
-    .replace(/\u0000(\d+)\u0000/g, (_match, index: string) => escaped[Number(index)] ?? '');
+  return stripLinks(value)
+    .replace(/(?<!\\)\*\*(.*?)((?<!\\)\*\*)/gs, '$1')
+    .replace(/(?<!\\)(?<!\*)\*(?!\*)(.*?)((?<!\\)(?<!\*)\*(?!\*))/gs, '$1')
+    .replace(/(?<!\\)==(.*?)((?<!\\)==)/gs, '$1')
+    .replace(/(?<!\\)`([^`]*)`/g, '$1')
+    .replace(/\\([\\`*{}\[\]()#+\-.!_>=])/g, '$1');
 }
 
 export function blocksToPlainText(content: unknown): string {
   const lines: string[] = [];
   for (const { type, props } of validBlocks(content)) {
     const add = (value: unknown) => { if (typeof value === 'string') lines.push(plain(value)); };
+    const addRaw = (value: unknown) => { if (typeof value === 'string') lines.push(value); };
     switch (type) {
       case 'heading': case 'paragraph': add(props.text); break;
       case 'bulletList': case 'numberedList':
         if (Array.isArray(props.items)) props.items.forEach(add);
         break;
-      case 'code': add(props.code); add(props.description); break;
+      case 'code': addRaw(props.code); add(props.description); break;
       case 'step': add(props.title); add(props.body); break;
       case 'callout': add(props.title); add(props.body); break;
       case 'table':
@@ -75,7 +101,7 @@ export function blocksToPlainText(content: unknown): string {
         if (Array.isArray(props.steps)) props.steps.forEach((step) => {
           if (typeof step === 'object' && step !== null) {
             const item = step as Record<string, unknown>;
-            add(item.label); add(item.code); add(item.explanationTitle); add(item.explanation);
+            add(item.label); addRaw(item.code); add(item.explanationTitle); add(item.explanation);
             if (Array.isArray(item.terms)) item.terms.forEach((term) => {
               if (typeof term === 'object' && term !== null) { add((term as Record<string, unknown>).term); add((term as Record<string, unknown>).description); }
             });

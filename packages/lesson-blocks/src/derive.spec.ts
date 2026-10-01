@@ -24,6 +24,20 @@ describe('lesson content derived helpers', () => {
       .toBe('a b c d e *f* =g=');
   });
 
+  it('preserves code source and extracts links with balanced destinations', () => {
+    const code = '*value* `literal` [label](url)';
+    expect(blocksToPlainText(content([
+      block('c', 'code', { kind: 'plain', code }),
+      block('a', 'annotatedCode', { steps: [{ label: 'Step', code, terms: [] }] }),
+      block('p', 'paragraph', { text: '[x](https://a.test/a_(b))' }),
+    ]))).toBe(`${code}\nStep\n${code}\nx`);
+  });
+
+  it('preserves literal sentinel-shaped text', () => {
+    expect(blocksToPlainText(content([block('p', 'paragraph', { text: '\u0000123\u0000 and \\*literal\\*' })])))
+      .toBe('\u0000123\u0000 and *literal*');
+  });
+
   it('includes code descriptions in visible plain text', () => {
     expect(blocksToPlainText(content([block('c', 'code', { kind: 'plain', code: 'const x = 1', description: 'Example code' })])))
       .toBe('const x = 1\nExample code');

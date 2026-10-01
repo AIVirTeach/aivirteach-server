@@ -26,6 +26,20 @@ describe('validateLessonContent', () => {
     expect(validateLessonContent(tooLarge, { courseAssetIds: new Set() }).errors.map((p) => p.code)).toContain('too-large');
   });
 
+  it('accepts exactly 256 KiB and rejects one byte over using UTF-8 size', () => {
+    const makeContent = (paddingLength: number, padding = 'x') => valid([
+      block('p', 'paragraph', { text: 'x', padding: padding.repeat(paddingLength) }),
+    ]);
+    const baseSize = new TextEncoder().encode(JSON.stringify(makeContent(0))).byteLength;
+    const exact = makeContent(256 * 1024 - baseSize);
+    expect(new TextEncoder().encode(JSON.stringify(exact)).byteLength).toBe(256 * 1024);
+    expect(validateLessonContent(exact, { courseAssetIds: new Set() }).errors.map((p) => p.code)).not.toContain('too-large');
+    const over = makeContent(256 * 1024 - baseSize + 1);
+    expect(validateLessonContent(over, { courseAssetIds: new Set() }).errors.map((p) => p.code)).toContain('too-large');
+    const multibyte = makeContent(Math.ceil((256 * 1024 - baseSize) / 2) + 1, 'é');
+    expect(validateLessonContent(multibyte, { courseAssetIds: new Set() }).errors.map((p) => p.code)).toContain('too-large');
+  });
+
   it('identifies unknown types and invalid props with block location', () => {
     const result = validateLessonContent(valid([
       block('quiz', 'quiz-widget', {}), block('image', 'image', { assetId: 'a', alt: '' }),
