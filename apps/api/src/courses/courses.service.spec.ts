@@ -2,6 +2,7 @@ import { NotFoundException } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
 import { PrismaService } from '../prisma/prisma.service';
 import { CoursesService } from './courses.service';
+import { LATEST_PUBLISHED_VERSION } from './published-version';
 
 const buildPrisma = () => ({
   course: { findMany: jest.fn(), findUnique: jest.fn() },
@@ -14,6 +15,16 @@ const buildService = async (prisma: ReturnType<typeof buildPrisma>) => {
   }).compile();
   return moduleRef.get(CoursesService);
 };
+
+describe('LATEST_PUBLISHED_VERSION', () => {
+  it('filters drafts and selects the highest published version', () => {
+    expect(LATEST_PUBLISHED_VERSION).toMatchObject({
+      where: { publishedAt: { not: null } },
+      orderBy: { version: 'desc' },
+      take: 1,
+    });
+  });
+});
 
 describe('CoursesService.listPublished', () => {
   it('只列已发布课程，id 字段用 slug 而不是内部 cuid', async () => {
@@ -111,6 +122,11 @@ describe('CoursesService.getDetail', () => {
 
     const detail = await service.getDetail('ai-daily-briefing');
 
+    expect(prisma.course.findUnique).toHaveBeenCalledWith({
+      where: { slug: 'ai-daily-briefing' },
+      include: { versions: LATEST_PUBLISHED_VERSION },
+    });
+
     expect(detail.id).toBe('ai-daily-briefing');
     expect(detail.version).toBe(1);
     expect(detail.modules[0].lessons[0]).toEqual(
@@ -140,6 +156,10 @@ describe('CoursesService.getWelcome', () => {
     await expect(service.getWelcome('ai-daily-briefing')).rejects.toThrow(
       NotFoundException,
     );
+    expect(prisma.course.findUnique).toHaveBeenCalledWith({
+      where: { slug: 'ai-daily-briefing' },
+      include: { versions: LATEST_PUBLISHED_VERSION },
+    });
   });
 });
 
@@ -147,7 +167,7 @@ describe('CoursesService.getLesson', () => {
   const versionWithTwoLessons = {
     id: 'version_1',
     version: 1,
-    sourceMarkdown: 'line1\nline2\nline3\nline4\nline5\nline6\n',
+    sourceMarkdown: 'irrelevant legacy source',
     modules: [
       {
         id: 'module_1',
@@ -162,6 +182,7 @@ describe('CoursesService.getLesson', () => {
             estimatedMinutes: 15,
             objectives: ['a'],
             sourceRange: { startLine: 1, endLine: 2 },
+            body: 'body from lesson one',
             activityType: 'guided-lab',
             activityPrompt: 'p',
             activityCompletionType: 'learner-confirmation',
@@ -174,6 +195,7 @@ describe('CoursesService.getLesson', () => {
             estimatedMinutes: 15,
             objectives: ['b'],
             sourceRange: { startLine: 3, endLine: 4 },
+            body: 'body from lesson two',
             activityType: 'guided-lab',
             activityPrompt: 'p',
             activityCompletionType: 'learner-confirmation',
@@ -183,7 +205,7 @@ describe('CoursesService.getLesson', () => {
     ],
   };
 
-  it('按 sourceRange 从 sourceMarkdown 里切出正文，算出 navigation', async () => {
+  it('从 lesson body 读取正文并计算 navigation', async () => {
     const prisma = buildPrisma();
     prisma.course.findUnique.mockResolvedValue({
       id: 'course_cuid_1',
@@ -195,7 +217,11 @@ describe('CoursesService.getLesson', () => {
 
     const lesson = await service.getLesson('sample', 'verify-virtual-machine');
 
-    expect(lesson.markdown).toBe('line1\nline2');
+    expect(lesson.markdown).toBe('body from lesson one');
+    expect(prisma.course.findUnique).toHaveBeenCalledWith({
+      where: { slug: 'sample' },
+      include: { versions: LATEST_PUBLISHED_VERSION },
+    });
     expect(lesson.lesson.id).toBe('verify-virtual-machine');
     expect(lesson.module).toEqual({
       id: 'module_1',
@@ -223,7 +249,7 @@ describe('CoursesService.getLesson', () => {
 
     const lesson = await service.getLesson('sample', 'verify-network');
 
-    expect(lesson.markdown).toBe('line3\nline4');
+    expect(lesson.markdown).toBe('body from lesson two');
     expect(lesson.navigation).toEqual({
       previousLessonId: 'verify-virtual-machine',
       nextLessonId: null,
