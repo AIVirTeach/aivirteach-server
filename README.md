@@ -23,15 +23,30 @@ NestJS 模块化单体，AIVirTeach 三个代码仓库之一（另外两个：`a
 - 校验：Zod，`ZodValidationPipe` 统一在 controller 层拦
 - 运营侧：`nest-commander` 写的 CLI，不是 admin 后台网页
 
+## 仓库结构
+
+```text
+apps/api/              NestJS API、Prisma schema/migrations、CLI 和测试
+packages/*/            可复用的工作区包
+docker-compose.yml      本地 Postgres
+docs/                  设计与开发文档
+```
+
+仓库根使用 npm workspaces；依赖安装和 `build`、`test`、`test:e2e`、`test:cov`、`lint` 从根目录运行。API 自有脚本（例如数据库迁移和 CLI）在 `apps/api` 工作区运行。
+
 ## 本地开发
 
 ```bash
 npm install
-cp .env.example .env      # 至少要填 JWT_SECRET，见下方生成方式
+cp apps/api/.env.example apps/api/.env  # 至少要填 JWT_SECRET，见下方生成方式
 npm run db:up              # 起本地 Postgres（docker-compose，端口 55432）
-npx prisma migrate dev
-npm run start:dev          # http://localhost:4000/docs
+npm run db:migrate -w api
+npm run start:dev -w api   # http://localhost:4000/docs
 ```
+
+环境文件放在 `apps/api/.env`（以及可选的 `apps/api/.env.local`），Prisma 和应用都以 API 工作区为基准读取它们。
+
+Vercel 的 Root Directory 需要设为 `apps/api`，并开启 **Include source files outside of the Root Directory in the Build Step**，以便构建时也能访问根目录下的 `packages/*`。线上 Vercel 项目设置应在迁移预览部署通过后再调整。
 
 生成本地 `JWT_SECRET`：
 
@@ -41,7 +56,7 @@ node -e "console.log(require('node:crypto').randomBytes(48).toString('base64url'
 
 ## 环境变量
 
-由 `src/config/env.ts` 用 Zod 在启动时强校验，缺一个直接崩，不会带着错配置跑起来。
+由 `apps/api/src/config/env.ts` 用 Zod 在启动时强校验，缺一个直接崩，不会带着错配置跑起来。
 
 | 变量 | 必填 | 说明 |
 |---|---|---|
@@ -73,7 +88,7 @@ node -e "console.log(require('node:crypto').randomBytes(48).toString('base64url'
 
 ## 运营 CLI 是什么
 
-封测期没有 admin 后台网页——发邀请、建课程、开课、发额度这些运营操作量很小，做一整套带鉴权的管理网页不划算，所以做成了一个命令行工具（`nest-commander`），入口是 `npm run cli`。谁要执行，就在自己电脑上（或有权限访问生产库的机器上）跑这个命令，天然就是"内部人员本机操作"的权限模型，不用另外造一套 admin 登录态。
+封测期没有 admin 后台网页——发邀请、建课程、开课、发额度这些运营操作量很小，做一整套带鉴权的管理网页不划算，所以做成了一个命令行工具（`nest-commander`），入口是 `npm run cli -w api -- <args>`。谁要执行，就在自己电脑上（或有权限访问生产库的机器上）跑这个命令，天然就是"内部人员本机操作"的权限模型，不用另外造一套 admin 登录态。
 
 | 命令 | 参数 | 作用 |
 |---|---|---|
@@ -89,14 +104,14 @@ node -e "console.log(require('node:crypto').randomBytes(48).toString('base64url'
 
 ```bash
 # 本地跑（连的是 .env 里配置的库）
-npm run cli -- invite someone@example.com -o "你的邮箱" -r "联调测试账号" --execute
+npm run cli -w api -- invite someone@example.com -o "你的邮箱" -r "联调测试账号" --execute
 # 拿到返回的 invitationToken，再调 POST /auth/invitations/accept 激活
 
-npm run cli -- course:create /path/to/course-content-dir -o "你的邮箱" -r "联调用课程" --execute
+npm run cli -w api -- course:create /path/to/course-content-dir -o "你的邮箱" -r "联调用课程" --execute
 # course-content-dir 下要有 course.json（定义课程/模块/课时结构，见 src/courses/course-content.schemas.ts）
-npm run cli -- course:publish <slug> -o "你的邮箱" -r "发布" --execute
-npm run cli -- enroll someone@example.com <slug> -o "你的邮箱" -r "开课" --execute
-npm run cli -- quota:grant someone@example.com 60 -o "你的邮箱" -r "发额度" --execute
+npm run cli -w api -- course:publish <slug> -o "你的邮箱" -r "发布" --execute
+npm run cli -w api -- enroll someone@example.com <slug> -o "你的邮箱" -r "开课" --execute
+npm run cli -w api -- quota:grant someone@example.com 60 -o "你的邮箱" -r "发额度" --execute
 ```
 
 要对生产库操作，先 `vercel env pull .env.production --environment production --yes`，`source` 进去再跑同样的命令，跑完把临时文件删掉。
@@ -104,7 +119,7 @@ npm run cli -- quota:grant someone@example.com 60 -o "你的邮箱" -r "发额�
 ## 测试
 
 ```bash
-npm run test        # 单元测试
+npm test            # 单元测试
 npm run test:e2e    # e2e
 npm run test:cov    # 覆盖率
 ```
