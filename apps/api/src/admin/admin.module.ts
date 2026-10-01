@@ -11,11 +11,15 @@ import { QuotaGrantCommand } from './commands/quota.command';
 import { CoursesModule } from '../courses/courses.module';
 import { ContentModelBackfillService } from './backfill/content-model-backfill.service';
 import { CourseBackfillCommand } from './commands/course-backfill.command';
+import { CourseDraftService } from './draft/course-draft.service';
+import { CoursePublishService } from './course-publish.service';
 
 @Module({
   imports: [CoursesModule],
   providers: [
     AdminService,
+    CourseDraftService,
+    CoursePublishService,
     InviteCommand,
     CourseCreateCommand,
     CoursePublishCommand,

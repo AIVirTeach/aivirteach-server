@@ -26,6 +26,7 @@ import {
   detectImageExtension,
   MAX_COVER_IMAGE_BYTES,
 } from './course-cover-image';
+import { CoursePublishService } from './course-publish.service';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -47,6 +48,7 @@ export class AdminService {
     private readonly audit: AuditService,
     private readonly courseIngestion: CourseIngestionService,
     private readonly courseAssetStorage: CourseAssetStorageService,
+    private readonly coursePublish: CoursePublishService,
   ) {}
 
   async inviteUser(
@@ -170,40 +172,7 @@ export class AdminService {
     operator: string,
     reason: string,
   ): Promise<CourseVersion> {
-    const course = await this.requireCourse(slug);
-    const latest = await this.prisma.courseVersion.findFirst({
-      where: { courseId: course.id },
-      orderBy: { version: 'desc' },
-    });
-    if (!latest) {
-      throw new NotFoundException(`课程 ${slug} 还没有任何版本`);
-    }
-
-    // 已经发布过就直接返回，不二次写 publishedAt——发布本身要是幂等操作。
-    const published = latest.publishedAt
-      ? latest
-      : await this.prisma.courseVersion.update({
-          where: { id: latest.id },
-          data: { publishedAt: new Date() },
-        });
-
-    if (!course.published) {
-      await this.prisma.course.update({
-        where: { id: course.id },
-        data: { published: true },
-      });
-    }
-
-    await this.audit.record({
-      actor: { type: AuditActorType.OPERATOR, id: operator },
-      action: 'admin.publishCourse',
-      success: true,
-      targetType: 'CourseVersion',
-      targetId: published.id,
-      reason,
-    });
-
-    return published;
+    return this.coursePublish.publish(slug, operator, reason);
   }
 
   async enrollUser(
