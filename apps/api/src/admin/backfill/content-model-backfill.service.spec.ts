@@ -1,8 +1,15 @@
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
+import { Prisma } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
 import { sliceLessonBody } from '../../courses/lesson-body';
 import { ContentModelBackfillService } from './content-model-backfill.service';
+import * as equivalence from '../../courses/lesson-conversion/plain-text';
+
+jest.mock('../../courses/lesson-conversion/plain-text', () => ({
+  ...jest.requireActual('../../courses/lesson-conversion/plain-text'),
+  checkPlainTextEquivalence: jest.fn(),
+}));
 
 describe('ContentModelBackfillService', () => {
   const markdownPromise = readFile(
@@ -13,6 +20,7 @@ describe('ContentModelBackfillService', () => {
   const createPrisma = () => {
     const prisma = {
       courseLesson: { findMany: jest.fn(), updateMany: jest.fn().mockResolvedValue({ count: 1 }) },
+      courseAsset: { findMany: jest.fn().mockResolvedValue([]) },
       progress: { findMany: jest.fn(), updateMany: jest.fn().mockResolvedValue({ count: 1 }) },
       $transaction: jest.fn(),
     };
@@ -40,6 +48,7 @@ describe('ContentModelBackfillService', () => {
     expect(report).toEqual({
       bodies: { filled: 2, unresolved: [{ lessonId: 'unresolved', reason: '版本没有 sourceMarkdown' }] },
       progress: { filled: 1, total: 2 },
+      content: { filled: 0, skipped: [], reports: [] },
     });
     expect(prisma.courseLesson.updateMany).toHaveBeenNthCalledWith(1, {
       where: { id: 'l1', body: '' },
@@ -70,7 +79,7 @@ describe('ContentModelBackfillService', () => {
 
     const report = await service.run({ execute: false });
 
-    expect(report).toEqual({ bodies: { filled: 1, unresolved: [] }, progress: { filled: 1, total: 1 } });
+    expect(report).toEqual({ bodies: { filled: 1, unresolved: [] }, progress: { filled: 1, total: 1 }, content: { filled: 0, skipped: [], reports: [] } });
     expect(prisma.courseLesson.updateMany).not.toHaveBeenCalled();
     expect(prisma.progress.updateMany).not.toHaveBeenCalled();
   });
@@ -90,10 +99,62 @@ describe('ContentModelBackfillService', () => {
 
     const report = await service.run({ execute: true });
 
-    expect(report).toEqual({ bodies: { filled: 0, unresolved: [] }, progress: { filled: 0, total: 1 } });
+    expect(report).toEqual({ bodies: { filled: 0, unresolved: [] }, progress: { filled: 0, total: 1 }, content: { filled: 0, skipped: [], reports: [] } });
     expect(prisma.courseLesson.updateMany).toHaveBeenCalledWith(expect.objectContaining({ where: { id: 'raced_lesson', body: '' } }));
     expect(prisma.progress.updateMany).toHaveBeenCalledWith(expect.objectContaining({
       where: { id: 'raced_progress', currentLessonContentId: null, currentLessonId: 'old_id' },
     }));
+  });
+  it('converts eligible content, checks equivalence, and respects dry-run', async () => {
+    const prisma = createPrisma();
+    prisma.courseAsset.findMany.mockResolvedValue([{ id: 'asset-a', objectKey: 'courses/course-1/a.png' }]);
+    prisma.courseLesson.findMany.mockResolvedValue([{
+      id: 'lesson-1', body: '## hello\n\n![A](./a.png)', content: null,
+      module: { courseVersion: { courseId: 'course-1', sourceMarkdown: null } },
+    }, {
+      id: 'already-set', body: 'do not replace', content: { schemaVersion: 1, blocks: [] },
+      module: { courseVersion: { courseId: 'course-1', sourceMarkdown: null } },
+    }]);
+    prisma.progress.findMany.mockResolvedValue([]);
+    jest.mocked(equivalence.checkPlainTextEquivalence).mockResolvedValue({ equal: true, expected: 'hello', actual: 'hello' });
+    const service = new ContentModelBackfillService(prisma as unknown as PrismaService);
+
+    const preview = await service.run({ execute: false });
+    expect(preview.content.filled).toBe(1);
+    expect(prisma.courseLesson.updateMany).not.toHaveBeenCalled();
+
+    const report = await service.run({ execute: true });
+    expect(report.content).toEqual({ filled: 1, skipped: [], reports: [{ lessonId: 'lesson-1', issues: [] }] });
+    expect(prisma.courseLesson.updateMany).toHaveBeenCalledWith({
+      where: { id: 'lesson-1', content: { equals: Prisma.DbNull } },
+      data: { content: expect.objectContaining({
+        schemaVersion: 1,
+        blocks: expect.arrayContaining([expect.objectContaining({ type: 'image', props: expect.objectContaining({ assetId: 'asset-a' }) })]),
+      }) },
+    });
+    expect(prisma.courseLesson.updateMany).toHaveBeenCalledTimes(1);
+  });
+
+  it('skips oversized converter output, equivalence mismatches, and existing content', async () => {
+    const prisma = createPrisma();
+    prisma.courseLesson.findMany.mockResolvedValue([
+      { id: 'oversized', body: `\`\`\`\n${'x'.repeat(21_000)}\n\`\`\``, content: null, module: { courseVersion: { courseId: 'c', sourceMarkdown: null } } },
+      { id: 'mismatch', body: 'source', content: null, module: { courseVersion: { courseId: 'c', sourceMarkdown: null } } },
+      { id: 'existing', body: 'existing', content: { schemaVersion: 1, blocks: [] }, module: { courseVersion: { courseId: 'c', sourceMarkdown: null } } },
+    ]);
+    prisma.progress.findMany.mockResolvedValue([]);
+    jest.mocked(equivalence.checkPlainTextEquivalence).mockResolvedValue({ equal: false, expected: 'source', actual: 'changed' });
+    const service = new ContentModelBackfillService(prisma as unknown as PrismaService);
+
+    const report = await service.run({ execute: true });
+
+    expect(report.content.skipped).toEqual([
+      expect.objectContaining({ lessonId: 'oversized' }),
+      { lessonId: 'mismatch', reason: '纯文本与 body 不一致' },
+    ]);
+    expect(report.content.reports.find(({ lessonId }) => lessonId === 'oversized')?.issues).toEqual(
+      expect.arrayContaining([expect.objectContaining({ level: 'error' })]),
+    );
+    expect(prisma.courseLesson.updateMany).not.toHaveBeenCalled();
   });
 });

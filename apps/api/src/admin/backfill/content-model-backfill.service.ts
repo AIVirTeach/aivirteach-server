@@ -1,5 +1,9 @@
 import { Injectable } from '@nestjs/common';
-import type { Prisma } from '@prisma/client';
+import { basename } from 'node:path';
+import { Prisma } from '@prisma/client';
+import type { ConversionIssue } from '../../courses/lesson-conversion/markdown-to-blocks';
+import { convertMarkdownToBlocks } from '../../courses/lesson-conversion/markdown-to-blocks';
+import { checkPlainTextEquivalence } from '../../courses/lesson-conversion/plain-text';
 import { PrismaService } from '../../prisma/prisma.service';
 import { sliceLessonBody } from '../../courses/lesson-body';
 
@@ -9,13 +13,19 @@ export interface BackfillReport {
     unresolved: Array<{ lessonId: string; reason: string }>;
   };
   progress: { filled: number; total: number };
+  content: {
+    filled: number;
+    skipped: Array<{ lessonId: string; reason: string }>;
+    reports: Array<{ lessonId: string; issues: ConversionIssue[] }>;
+  };
 }
 
 type LessonBackfillRow = {
   id: string;
   body: string;
+  content: Prisma.JsonValue | null;
   sourceRange: Prisma.JsonValue | null;
-  module: { courseVersion: { sourceMarkdown: string | null } };
+  module: { courseVersion: { courseId: string; sourceMarkdown: string | null } };
 };
 
 type ProgressBackfillRow = {
@@ -38,12 +48,13 @@ export class ContentModelBackfillService {
     const client = transaction ?? this.prisma;
     const [lessons, progresses] = await Promise.all([
       client.courseLesson.findMany({
-        where: { body: '' },
+        where: { OR: [{ body: '' }, { content: { equals: Prisma.DbNull } }] },
         select: {
           id: true,
           body: true,
+          content: true,
           sourceRange: true,
-          module: { select: { courseVersion: { select: { sourceMarkdown: true } } } },
+          module: { select: { courseVersion: { select: { courseId: true, sourceMarkdown: true } } } },
         },
       }),
       client.progress.findMany({
@@ -58,7 +69,7 @@ export class ContentModelBackfillService {
 
     const unresolved: BackfillReport['bodies']['unresolved'] = [];
     const bodyUpdates: Array<{ id: string; body: string }> = [];
-    for (const row of lessons as LessonBackfillRow[]) {
+    for (const row of lessons as unknown as LessonBackfillRow[]) {
       // Keep the invariant even if a mocked/stale read returns a non-empty body.
       if (row.body !== '') continue;
       const markdown = row.module.courseVersion.sourceMarkdown;
@@ -81,8 +92,44 @@ export class ContentModelBackfillService {
           : [],
     );
 
+    const contentSkipped: BackfillReport['content']['skipped'] = [];
+    const conversionReports: BackfillReport['content']['reports'] = [];
+    const contentUpdates: Array<{ id: string; content: Prisma.InputJsonValue }> = [];
+    const assetMapByCourse = new Map<string, Map<string, string>>();
+    // Convert one lesson at a time: remark ASTs and intermediate blocks become collectible immediately.
+    for (const row of lessons as unknown as LessonBackfillRow[]) {
+      if (row.content !== null || row.body === '') continue;
+      const courseId = row.module.courseVersion.courseId;
+      let assetIdsByFilename = assetMapByCourse.get(courseId);
+      if (!assetIdsByFilename) {
+        const assets = await client.courseAsset.findMany({
+          where: { courseId },
+          select: { id: true, objectKey: true },
+        });
+        assetIdsByFilename = new Map(assets.map((asset) => [basename(asset.objectKey), asset.id]));
+        assetMapByCourse.set(courseId, assetIdsByFilename);
+      }
+      const converted = await convertMarkdownToBlocks(row.body, { assetIdsByFilename });
+      conversionReports.push({ lessonId: row.id, issues: converted.report });
+      const errors = converted.report.filter(({ level }) => level === 'error');
+      if (errors.length) {
+        contentSkipped.push({
+          lessonId: row.id,
+          reason: errors.map(({ code, message }) => `${code}: ${message}`).join('; '),
+        });
+        continue;
+      }
+      const equivalence = await checkPlainTextEquivalence(row.body, converted);
+      if (!equivalence.equal) {
+        contentSkipped.push({ lessonId: row.id, reason: '纯文本与 body 不一致' });
+        continue;
+      }
+      contentUpdates.push({ id: row.id, content: converted.content as unknown as Prisma.InputJsonValue });
+    }
+
     let bodyFilled = bodyUpdates.length;
     let progressFilled = progressUpdates.length;
+    let contentFilled = contentUpdates.length;
     if (options.execute) {
       bodyFilled = 0;
       for (const update of bodyUpdates) {
@@ -108,11 +155,20 @@ export class ContentModelBackfillService {
         });
         progressFilled += result.count;
       }
+      contentFilled = 0;
+      for (const update of contentUpdates) {
+        const result = await client.courseLesson.updateMany({
+          where: { id: update.id, content: { equals: Prisma.DbNull } },
+          data: { content: update.content },
+        });
+        contentFilled += result.count;
+      }
     }
 
     return {
       bodies: { filled: bodyFilled, unresolved },
       progress: { filled: progressFilled, total: progresses.length },
+      content: { filled: contentFilled, skipped: contentSkipped, reports: conversionReports },
     };
   }
 }

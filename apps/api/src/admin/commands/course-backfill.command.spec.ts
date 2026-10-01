@@ -4,7 +4,7 @@ import { PrismaService } from '../../prisma/prisma.service';
 import { CourseBackfillCommand } from './course-backfill.command';
 
 describe('CourseBackfillCommand', () => {
-  const report = { bodies: { filled: 2, unresolved: [] }, progress: { filled: 1, total: 1 } };
+  const report = { bodies: { filled: 2, unresolved: [] }, progress: { filled: 1, total: 1 }, content: { filled: 3, skipped: [], reports: [] } };
   let service: { run: jest.Mock };
   let audit: { record: jest.Mock };
   let prisma: { $transaction: jest.Mock };

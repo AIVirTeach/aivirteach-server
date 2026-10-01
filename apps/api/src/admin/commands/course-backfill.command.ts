@@ -49,6 +49,11 @@ export class CourseBackfillCommand extends CommandRunner {
               filled: result.progress.filled,
               total: result.progress.total,
             },
+            content: {
+              filled: result.content.filled,
+              skipped: result.content.skipped.map(({ lessonId, reason }) => ({ lessonId, reason })),
+              reports: result.content.reports.map(({ lessonId, issues }) => ({ lessonId, issues })),
+            },
           },
         };
         await this.audit.record(
