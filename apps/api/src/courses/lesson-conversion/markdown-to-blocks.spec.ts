@@ -157,16 +157,52 @@ describe('convertMarkdownToBlocks', () => {
     expect(result.content.blocks.map(({ type }) => type)).toEqual(['paragraph', 'image', 'paragraph']);
   });
 
+  it('splits list and blockquote text around nested phrasing images', async () => {
+    const listResult = await convertMarkdownToBlocks('- before **x ![alt](a.png) y** after', {
+      assetIdsByFilename: new Map([['a.png', 'asset-a']]),
+    });
+    expect(listResult.content.blocks).toMatchObject([
+      { type: 'bulletList', props: { items: ['before **x **'] } },
+      { type: 'image', props: { assetId: 'asset-a', alt: 'alt' } },
+      { type: 'bulletList', props: { items: ['** y** after'] } },
+    ]);
+
+    const quoteResult = await convertMarkdownToBlocks('> before **x ![alt](a.png) y** after', {
+      assetIdsByFilename: new Map([['a.png', 'asset-a']]),
+    });
+    expect(quoteResult.content.blocks).toMatchObject([
+      { type: 'callout', props: { variant: 'note', body: 'before **x **' } },
+      { type: 'image', props: { assetId: 'asset-a', alt: 'alt' } },
+      { type: 'callout', props: { variant: 'note', body: '** y** after' } },
+    ]);
+  });
+
+  it('keeps table image alt in its cell and reports its adjacent block relocation', async () => {
+    const result = await convertMarkdownToBlocks(
+      '| Name | Description |\n| --- | --- |\n| row | before **x ![alt](a.png) y** after |\n\nLater paragraph.',
+      { assetIdsByFilename: new Map([['a.png', 'asset-a']]) },
+    );
+    expect(result.content.blocks).toMatchObject([
+      { type: 'table', props: { rows: [['row', 'before **x alt y** after']] } },
+      { type: 'image', props: { assetId: 'asset-a', alt: 'alt' } },
+      { type: 'paragraph', props: { text: 'Later paragraph.' } },
+    ]);
+    expect(result.report).toEqual(expect.arrayContaining([
+      expect.objectContaining({ level: 'warning', code: 'image-relocated' }),
+    ]));
+  });
+
   it('resolves nested images in lists, tables, and blockquotes without losing missing-image diagnostics', async () => {
     const result = await convertMarkdownToBlocks(
       '- item ![Diagram](a.png)\n- missing ![absent](missing.png)\n\n| Header | Visual |\n| --- | --- |\n| row | ![Table image](b.png) |\n\n> quoted\n>\n> - ![Quote image](c.png)',
       { assetIdsByFilename: new Map([['a.png', 'a'], ['b.png', 'b'], ['c.png', 'c']]) },
     );
     expect(result.content.blocks).toMatchObject([
-      { type: 'bulletList', props: { items: ['item', 'missing'] } },
+      { type: 'bulletList', props: { items: ['item'] } },
       { type: 'image', props: { assetId: 'a', alt: 'Diagram' } },
+      { type: 'bulletList', props: { items: ['missing'] } },
       { type: 'paragraph', props: { text: '[图片缺失：missing.png] absent' } },
-      { type: 'table', props: { rows: [['row', '']] } },
+      { type: 'table', props: { rows: [['row', 'Table image']] } },
       { type: 'image', props: { assetId: 'b', alt: 'Table image' } },
       { type: 'callout', props: { variant: 'note', body: 'quoted' } },
       { type: 'image', props: { assetId: 'c', alt: 'Quote image' } },

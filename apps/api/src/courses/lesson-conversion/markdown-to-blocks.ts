@@ -53,9 +53,12 @@ export async function convertMarkdownToBlocks(
   );
   const assetDefinitions = new Map(tree.children.flatMap((node) => node.type === 'definition' ? [[node.identifier, node.url] as const] : []));
   type ImageNode = Extract<Nodes, { type: 'image' | 'imageReference' }>;
-  const imageBlock = (node: ImageNode) => {
+  const imageBlock = (node: ImageNode, options: { altRetainedInParent?: boolean; relocated?: boolean } = {}) => {
     const url = node.type === 'image' ? node.url : (assetDefinitions.get(node.identifier) ?? node.identifier);
     const filename = url.split(/[\\/]/).filter(Boolean).at(-1) || url;
+    if (options.relocated) {
+      report.push({ level: 'warning', code: 'image-relocated', message: `表格单元格只能保存文字，图片已移至表格之后：${filename}`, line: node.position?.start.line });
+    }
     const sourceAlt = node.alt?.trim() ?? '';
     const generatedAlt = !sourceAlt;
     const alt = sourceAlt || filename;
@@ -66,12 +69,12 @@ export async function convertMarkdownToBlocks(
     if (!assetId) {
       report.push({ level: 'warning', code: 'missing-asset', message: `找不到图片素材：${filename}`, line: node.position?.start.line });
       const label = `[图片缺失：${filename}]`;
-      const placeholderId = append('paragraph', { text: `${label}${alt ? ` ${alt}` : ''}` });
-      generatedTextByBlockId[placeholderId] = [label, ...(generatedAlt ? [` ${alt}`] : [])];
+      const placeholderId = append('paragraph', { text: `${label}${alt && !options.altRetainedInParent ? ` ${alt}` : ''}` });
+      generatedTextByBlockId[placeholderId] = [label, ...(generatedAlt && !options.altRetainedInParent ? [` ${alt}`] : [])];
       return;
     }
     const imageId = append('image', { assetId, alt });
-    if (generatedAlt) generatedTextByBlockId[imageId] = [alt];
+    if (generatedAlt || options.altRetainedInParent) generatedTextByBlockId[imageId] = [alt];
   };
   const nestedImages = (node: Nodes): ImageNode[] => {
     if (node.type === 'image' || node.type === 'imageReference') return [node];
@@ -101,13 +104,33 @@ export async function convertMarkdownToBlocks(
     flush();
     return units;
   };
-  const emitNestedImages = (node: Nodes) => nestedImages(node).forEach(imageBlock);
-  const quotedText = (node: Nodes): string[] => {
-    if (node.type === 'paragraph' || node.type === 'heading') return [inline(node.children)];
-    if (node.type === 'code') return [node.value];
-    if (node.type === 'html') return [node.value.replace(/<[^>]*>/g, '').trim()];
-    if ('children' in node) return node.children.flatMap((child) => quotedText(child as Nodes)).filter(Boolean);
-    return [plainText(node)];
+  const emitNestedImages = (node: Nodes) => nestedImages(node).forEach((image) => imageBlock(image));
+  type ContentUnit = { kind: 'text'; text: string } | { kind: 'image'; node: ImageNode };
+  const phrasingUnits = (children: PhrasingContent[]): ContentUnit[] => children.flatMap(splitPhrasing).map((unit) =>
+    unit.kind === 'image' ? { kind: 'image', node: unit.node } : { kind: 'text', text: inline([unit.node]) },
+  );
+  const contentUnits = (node: Nodes): ContentUnit[] => {
+    if (node.type === 'paragraph' || node.type === 'heading') return phrasingUnits(node.children);
+    if (node.type === 'code') return node.value ? [{ kind: 'text', text: node.value }] : [];
+    if (node.type === 'html') {
+      const text = node.value.replace(/<[^>]*>/g, '').trim();
+      return text ? [{ kind: 'text', text }] : [];
+    }
+    if (node.type === 'table') {
+      return node.children.flatMap((row, rowIndex) => [
+        ...(rowIndex ? [{ kind: 'text' as const, text: '\n' }] : []),
+        ...row.children.flatMap((cell, cellIndex) => [
+          ...(cellIndex ? [{ kind: 'text' as const, text: ' | ' }] : []),
+          ...phrasingUnits(cell.children),
+        ]),
+      ]);
+    }
+    if ('children' in node) return node.children.flatMap((child, index) => [
+      ...(index ? [{ kind: 'text' as const, text: '\n' }] : []),
+      ...contentUnits(child as Nodes),
+    ]);
+    const text = plainText(node);
+    return text ? [{ kind: 'text', text }] : [];
   };
   const unmappedText = (node: Nodes) => {
     const text = node.type === 'html' ? node.value.replace(/<[^>]*>/g, '').trim() : plainText(node);
@@ -136,26 +159,60 @@ export async function convertMarkdownToBlocks(
         ...(language ? { language } : {}),
       });
     } else if (node.type === 'table') {
-      const rows = node.children.map((row) => row.children.map((cell) => inline(cell.children).trim()));
+      // Table cells cannot contain blocks: keep alt text at its original cell position and place media immediately after this table.
+      const rows = node.children.map((row) => row.children.map((cell) => inlineToMarkdownSubset(cell.children, report).trim()));
       append('table', { columns: rows[0] ?? [], rows: rows.slice(1) });
-      emitNestedImages(node);
+      nestedImages(node).forEach((image) => imageBlock(image, { altRetainedInParent: true, relocated: true }));
     } else if (node.type === 'list') {
-      const items: string[] = [];
+      type ListUnit = { kind: 'item'; text: string } | { kind: 'image'; node: ImageNode };
+      const units: ListUnit[] = [];
       let flattenedNestedList = false;
+      const addParagraph = (children: PhrasingContent[]) => {
+        let text = '';
+        const flushText = () => {
+          if (text.trim()) units.push({ kind: 'item', text: text.trim() });
+          text = '';
+        };
+        for (const unit of phrasingUnits(children)) {
+          if (unit.kind === 'image') {
+            flushText();
+            units.push(unit);
+          } else {
+            text += unit.text;
+          }
+        }
+        flushText();
+      };
       const visitListItem = (item: Extract<Nodes, { type: 'listItem' }>) => {
         for (const child of item.children) {
           if (child.type === 'list') {
             flattenedNestedList = true;
             child.children.forEach(visitListItem);
+          } else if (child.type === 'paragraph') {
+            addParagraph(child.children);
           } else {
-            const text = child.type === 'paragraph' ? inline(child.children).trim() : plainText(child);
-            if (text) items.push(text);
+            for (const unit of contentUnits(child as Nodes)) {
+              if (unit.kind === 'image') units.push(unit);
+              else if (unit.text.trim()) units.push({ kind: 'item', text: unit.text.trim() });
+            }
           }
         }
       };
       node.children.forEach(visitListItem);
-      if (items.length) append(node.ordered ? 'numberedList' : 'bulletList', { items });
-      emitNestedImages(node);
+      let items: string[] = [];
+      const flushItems = () => {
+        if (items.length) append(node.ordered ? 'numberedList' : 'bulletList', { items });
+        items = [];
+      };
+      for (const unit of units) {
+        if (unit.kind === 'image') {
+          flushItems();
+          imageBlock(unit.node);
+        } else {
+          items.push(unit.text);
+        }
+      }
+      flushItems();
       if (flattenedNestedList) {
         report.push({ level: 'warning', code: 'nested-list-flattened', message: '嵌套列表已拍平。', line: node.position?.start.line });
       }
@@ -177,9 +234,21 @@ export async function convertMarkdownToBlocks(
       }
       flush();
     } else if (node.type === 'blockquote') {
-      const body = node.children.flatMap(quotedText).join('\n').trim();
-      if (body) append('callout', { variant: 'note', body });
-      emitNestedImages(node);
+      let body = '';
+      const flushCallout = () => {
+        const text = body.trim();
+        if (text) append('callout', { variant: 'note', body: text });
+        body = '';
+      };
+      for (const unit of contentUnits(node)) {
+        if (unit.kind === 'image') {
+          flushCallout();
+          imageBlock(unit.node);
+        } else {
+          body += unit.text;
+        }
+      }
+      flushCallout();
     } else if (node.type === 'definition') {
       continue;
     } else if (node.type === 'html') {

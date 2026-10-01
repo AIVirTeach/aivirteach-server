@@ -93,4 +93,26 @@ describe('checkPlainTextEquivalence', () => {
     expect(comparison.equal).toBe(true);
     expect(comparison.actual).toContain('Body repeats missing.png.');
   });
+
+  it('keeps interleaved list and quote prose in order around their image blocks', async () => {
+    const markdown = '- before **x ![List alt](list.png) y** after\n\n> before **x ![Quote alt](quote.png) y** after';
+    const result = await convertMarkdownToBlocks(markdown, {
+      assetIdsByFilename: new Map([['list.png', 'list-id'], ['quote.png', 'quote-id']]),
+    });
+    expect((await checkPlainTextEquivalence(markdown, result)).equal).toBe(true);
+    expect(result.content.blocks.map(({ type }) => type)).toEqual([
+      'bulletList', 'image', 'bulletList', 'callout', 'image', 'callout',
+    ]);
+  });
+
+  it('compares table cell prose and image alt once while retaining adjacent relocation', async () => {
+    const markdown = '| Name | Description |\n| --- | --- |\n| row | before **x ![alt](a.png) y** after |\n\nLater paragraph.';
+    const result = await convertMarkdownToBlocks(markdown, {
+      assetIdsByFilename: new Map([['a.png', 'asset-a']]),
+    });
+    const comparison = await checkPlainTextEquivalence(markdown, result);
+    expect(comparison.equal).toBe(true);
+    expect(comparison.actual.split('alt')).toHaveLength(2);
+    expect(result.content.blocks.map(({ type }) => type)).toEqual(['table', 'image', 'paragraph']);
+  });
 });
