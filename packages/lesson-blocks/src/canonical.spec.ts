@@ -2,6 +2,11 @@ import { BLOCK_TYPES, validateLessonContent } from './index';
 import canonical from '../fixtures/canonical-lesson.json';
 
 describe('canonical lesson fixture', () => {
+  it('resolves through the package fixture subpath', () => {
+    expect(require.resolve('@aivirteach/lesson-blocks/fixtures/canonical-lesson.json'))
+      .toBe(require.resolve('../fixtures/canonical-lesson.json'));
+  });
+
   it('uses fixture version 1', () => {
     expect(canonical.fixtureVersion).toBe(1);
   });

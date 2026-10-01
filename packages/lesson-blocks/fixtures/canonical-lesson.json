@@ -196,7 +196,16 @@
       "name": "empty image alt text",
       "content": {
         "schemaVersion": 1,
-        "blocks": [{ "id": "empty-alt", "type": "image", "props": { "assetId": "lesson-deploy-terminal", "alt": "" } }]
+        "blocks": [
+          {
+            "id": "empty-alt",
+            "type": "image",
+            "props": {
+              "assetId": "lesson-deploy-terminal",
+              "alt": ""
+            }
+          }
+        ]
       },
       "expectedCodes": ["invalid-props"]
     },
@@ -204,7 +213,16 @@
       "name": "table row has a different number of cells than columns",
       "content": {
         "schemaVersion": 1,
-        "blocks": [{ "id": "uneven-table", "type": "table", "props": { "columns": ["Setting", "Value"], "rows": [["Environment"]] } }]
+        "blocks": [
+          {
+            "id": "uneven-table",
+            "type": "table",
+            "props": {
+              "columns": ["Setting", "Value"],
+              "rows": [["Environment"]]
+            }
+          }
+        ]
       },
       "expectedCodes": ["invalid-props"]
     },
@@ -212,7 +230,21 @@
       "name": "diagram connection points to a missing node",
       "content": {
         "schemaVersion": 1,
-        "blocks": [{ "id": "dangling-diagram", "type": "diagram", "props": { "nodes": [{ "id": "start", "title": "Start" }, { "id": "end", "title": "End" }], "connections": [{ "from": "start", "to": "missing" }] } }]
+        "blocks": [
+          {
+            "id": "dangling-diagram",
+            "type": "diagram",
+            "props": {
+              "nodes": [
+                { "id": "start", "title": "Start" },
+                { "id": "end", "title": "End" }
+              ],
+              "connections": [
+                { "from": "start", "to": "missing" }
+              ]
+            }
+          }
+        ]
       },
       "expectedCodes": ["invalid-props"]
     },
@@ -220,7 +252,16 @@
       "name": "javascript resource link",
       "content": {
         "schemaVersion": 1,
-        "blocks": [{ "id": "unsafe-link", "type": "resourceLink", "props": { "url": "javascript:alert(1)", "title": "Unsafe" } }]
+        "blocks": [
+          {
+            "id": "unsafe-link",
+            "type": "resourceLink",
+            "props": {
+              "url": "javascript:alert(1)",
+              "title": "Unsafe"
+            }
+          }
+        ]
       },
       "expectedCodes": ["invalid-props"]
     },
@@ -229,8 +270,16 @@
       "content": {
         "schemaVersion": 1,
         "blocks": [
-          { "id": "repeated", "type": "paragraph", "props": { "text": "First block." } },
-          { "id": "repeated", "type": "paragraph", "props": { "text": "Second block." } }
+          {
+            "id": "repeated",
+            "type": "paragraph",
+            "props": { "text": "First block." }
+          },
+          {
+            "id": "repeated",
+            "type": "paragraph",
+            "props": { "text": "Second block." }
+          }
         ]
       },
       "expectedCodes": ["duplicate-id"]
@@ -239,7 +288,16 @@
       "name": "image references an asset outside the lesson",
       "content": {
         "schemaVersion": 1,
-        "blocks": [{ "id": "missing-asset", "type": "image", "props": { "assetId": "not-in-assets", "alt": "Missing image" } }]
+        "blocks": [
+          {
+            "id": "missing-asset",
+            "type": "image",
+            "props": {
+              "assetId": "not-in-assets",
+              "alt": "Missing image"
+            }
+          }
+        ]
       },
       "expectedCodes": ["unknown-asset"]
     },
