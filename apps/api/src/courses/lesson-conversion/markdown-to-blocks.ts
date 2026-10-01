@@ -14,7 +14,8 @@ export type ConversionResult = {
   content: LessonContent;
   report: ConversionIssue[];
   dropped: string[];
-  equivalenceIgnoredBlockIds?: string[];
+  /** Comparison-only generated text, keyed by block id; never applied to content. */
+  equivalenceIgnoredTextByBlockId?: Readonly<Record<string, readonly string[]>>;
 };
 
 type Context = { assetIdsByFilename: ReadonlyMap<string, string> };
@@ -33,7 +34,7 @@ export async function convertMarkdownToBlocks(
   const tree = unified().use(remarkParse).use(remarkGfm).parse(markdown) as Root;
   const report: ConversionIssue[] = [];
   const dropped: string[] = [];
-  const equivalenceIgnoredBlockIds: string[] = [];
+  const equivalenceIgnoredTextByBlockId: Record<string, string[]> = {};
   const blocks: LessonBlock[] = [];
   const append = (type: string, props: unknown) => {
     const id = `b-${String(blocks.length + 1).padStart(3, '0')}`;
@@ -56,19 +57,22 @@ export async function convertMarkdownToBlocks(
   const imageBlock = (node: ImageNode) => {
     const url = node.type === 'image' ? node.url : (assetDefinitions.get(node.identifier) ?? node.identifier);
     const filename = url.split(/[\\/]/).filter(Boolean).at(-1) || url;
-    let alt = node.alt?.trim() ?? '';
-    if (!alt) {
-      alt = filename;
+    const sourceAlt = node.alt?.trim() ?? '';
+    const generatedAlt = !sourceAlt;
+    const alt = sourceAlt || filename;
+    if (generatedAlt) {
       report.push({ level: 'warning', code: 'empty-alt-defaulted', message: `图片缺少替代文字，已使用文件名：${filename}`, line: node.position?.start.line });
     }
     const assetId = ctx.assetIdsByFilename.get(filename);
     if (!assetId) {
       report.push({ level: 'warning', code: 'missing-asset', message: `找不到图片素材：${filename}`, line: node.position?.start.line });
-      const placeholderId = append('paragraph', { text: `[图片缺失：${filename}]${alt ? ` ${alt}` : ''}` });
-      equivalenceIgnoredBlockIds.push(placeholderId);
+      const label = `[图片缺失：${filename}]`;
+      const placeholderId = append('paragraph', { text: `${label}${alt ? ` ${alt}` : ''}` });
+      equivalenceIgnoredTextByBlockId[placeholderId] = [label, ...(generatedAlt ? [` ${alt}`] : [])];
       return;
     }
-    append('image', { assetId, alt });
+    const imageId = append('image', { assetId, alt });
+    if (generatedAlt) equivalenceIgnoredTextByBlockId[imageId] = [alt];
   };
   const nestedImages = (node: Nodes): ImageNode[] => {
     if (node.type === 'image' || node.type === 'imageReference') return [node];
@@ -134,9 +138,26 @@ export async function convertMarkdownToBlocks(
         report.push({ level: 'warning', code: 'nested-list-flattened', message: '嵌套列表已拍平。', line: node.position?.start.line });
       }
     } else if (node.type === 'paragraph') {
-      const text = inline(node.children).trim();
-      if (text) append('paragraph', { text });
-      emitNestedImages(node);
+      let phrasing: PhrasingContent[] = [];
+      const flush = () => {
+        const text = inline(phrasing).trim();
+        if (text) append('paragraph', { text });
+        phrasing = [];
+      };
+      for (const child of node.children) {
+        if (child.type === 'image' || child.type === 'imageReference') {
+          flush();
+          imageBlock(child);
+          continue;
+        }
+        phrasing.push(child);
+        const images = nestedImages(child as Nodes);
+        if (images.length) {
+          flush();
+          images.forEach(imageBlock);
+        }
+      }
+      flush();
     } else if (node.type === 'blockquote') {
       const body = node.children.flatMap(quotedText).join('\n').trim();
       if (body) append('callout', { variant: 'note', body });
@@ -153,5 +174,7 @@ export async function convertMarkdownToBlocks(
   const content: LessonContent = { schemaVersion: 1, blocks };
   const validation = validateLessonContent(content, { courseAssetIds: new Set(ctx.assetIdsByFilename.values()) });
   for (const problem of validation.errors) report.push({ level: 'error', code: 'invalid-output', message: problem.message });
-  return { content, report, dropped, equivalenceIgnoredBlockIds };
+  const result: ConversionResult = { content, report, dropped };
+  Object.defineProperty(result, 'equivalenceIgnoredTextByBlockId', { value: equivalenceIgnoredTextByBlockId });
+  return result;
 }

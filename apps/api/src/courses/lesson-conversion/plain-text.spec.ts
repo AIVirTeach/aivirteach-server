@@ -63,4 +63,34 @@ describe('checkPlainTextEquivalence', () => {
       expect(actual.split(alt)).toHaveLength(2);
     }
   });
+
+  it('ignores generated filename alts when the source image alt is empty', async () => {
+    const missingMarkdown = '![](missing.png)';
+    const missingResult = await convertMarkdownToBlocks(missingMarkdown, ctx);
+    expect(missingResult.content.blocks).toMatchObject([
+      { type: 'paragraph', props: { text: '[图片缺失：missing.png] missing.png' } },
+    ]);
+    expect(JSON.stringify(missingResult)).not.toContain('equivalenceIgnoredTextByBlockId');
+    expect((await checkPlainTextEquivalence(missingMarkdown, missingResult)).equal).toBe(true);
+
+    const resolvedMarkdown = '![](resolved.png)\n\nBody repeats resolved.png.';
+    const resolvedResult = await convertMarkdownToBlocks(resolvedMarkdown, {
+      assetIdsByFilename: new Map([['resolved.png', 'resolved-id']]),
+    });
+    expect(resolvedResult.content.blocks).toMatchObject([
+      { type: 'image', props: { alt: 'resolved.png' } },
+      { type: 'paragraph', props: { text: 'Body repeats resolved.png.' } },
+    ]);
+    const resolvedComparison = await checkPlainTextEquivalence(resolvedMarkdown, resolvedResult);
+    expect(resolvedComparison.equal).toBe(true);
+    expect(resolvedComparison.actual).toContain('Body repeats resolved.png.');
+  });
+
+  it('retains body text equal to a generated filename alt during comparison', async () => {
+    const markdown = '![](missing.png)\n\nBody repeats missing.png.';
+    const result = await convertMarkdownToBlocks(markdown, ctx);
+    const comparison = await checkPlainTextEquivalence(markdown, result);
+    expect(comparison.equal).toBe(true);
+    expect(comparison.actual).toContain('Body repeats missing.png.');
+  });
 });

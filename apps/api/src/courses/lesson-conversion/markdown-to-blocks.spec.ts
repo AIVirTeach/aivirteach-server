@@ -134,6 +134,17 @@ describe('convertMarkdownToBlocks', () => {
     ]));
   });
 
+  it('keeps top-level paragraph images in source order between surrounding text', async () => {
+    const result = await convertMarkdownToBlocks('before ![alt](a.png) after', {
+      assetIdsByFilename: new Map([['a.png', 'asset-a']]),
+    });
+    expect(result.content.blocks).toMatchObject([
+      { type: 'paragraph', props: { text: 'before' } },
+      { type: 'image', props: { assetId: 'asset-a', alt: 'alt' } },
+      { type: 'paragraph', props: { text: 'after' } },
+    ]);
+  });
+
   it('resolves nested images in lists, tables, and blockquotes without losing missing-image diagnostics', async () => {
     const result = await convertMarkdownToBlocks(
       '- item ![Diagram](a.png)\n- missing ![absent](missing.png)\n\n| Header | Visual |\n| --- | --- |\n| row | ![Table image](b.png) |\n\n> quoted\n>\n> - ![Quote image](c.png)',

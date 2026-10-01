@@ -36,14 +36,17 @@ export async function checkPlainTextEquivalence(
     else droppedCounts.set(plainHeading, remaining - 1);
     return false;
   }).map(toString).join('\n');
-  const ignoredBlockIds = new Set(result.equivalenceIgnoredBlockIds ?? []);
+  const ignoredTextByBlockId = result.equivalenceIgnoredTextByBlockId ?? {};
   const comparableContent = {
     ...result.content,
     blocks: result.content.blocks.map((block) => {
-      if (!ignoredBlockIds.has(block.id) || block.type !== 'paragraph' || typeof block.props !== 'object' || block.props === null) return block;
+      const ignoredText = ignoredTextByBlockId[block.id];
+      if (!ignoredText?.length || typeof block.props !== 'object' || block.props === null) return block;
       const props = block.props as Record<string, unknown>;
-      if (typeof props.text !== 'string') return block;
-      return { ...block, props: { ...props, text: props.text.replace(/^\[图片缺失：[^\]]+\]\s?/, '') } };
+      const textProperty = block.type === 'paragraph' ? 'text' : block.type === 'image' ? 'alt' : undefined;
+      if (!textProperty || typeof props[textProperty] !== 'string') return block;
+      const comparableText = ignoredText.reduce((value, ignored) => value.replace(ignored, ''), props[textProperty] as string);
+      return { ...block, props: { ...props, [textProperty]: comparableText } };
     }),
   };
   const actual = blocksToPlainText(comparableContent);
