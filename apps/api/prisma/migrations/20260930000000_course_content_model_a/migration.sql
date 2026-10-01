@@ -1,4 +1,6 @@
 -- Migration A: additive course content model changes. This file is intentionally not applied.
+BEGIN;
+
 ALTER TABLE "CourseLesson"
   ADD COLUMN "body" TEXT NOT NULL DEFAULT '',
   ADD COLUMN "content" JSONB,
@@ -13,3 +15,5 @@ ALTER TABLE "Progress"
 CREATE UNIQUE INDEX "CourseVersion_one_draft_per_course"
   ON "CourseVersion"("courseId")
   WHERE "publishedAt" IS NULL;
+
+COMMIT;
