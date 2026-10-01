@@ -304,6 +304,56 @@ describe('CourseIngestionService.ingestFromDirectory', () => {
     }
   });
 
+  it('real converter resolves an image by the generated upload basename to the persisted asset UUID', async () => {
+    const contentDir = await mkdtemp(join(tmpdir(), 'lesson-image-ingestion-'));
+    const courseContent = JSON.parse(
+      readFileSync(join(FIXTURE_DIR, 'course.json'), 'utf8'),
+    );
+    courseContent.assets[0].id = 'manifest-cover-id';
+    courseContent.assets[0].path = 'cover.png';
+    courseContent.modules[0].lessons.forEach((lesson: any) => {
+      lesson.sourceRange = { startLine: 1, endLine: 1 };
+    });
+    await writeFile(
+      join(contentDir, 'course.json'),
+      JSON.stringify(courseContent),
+    );
+    await writeFile(
+      join(contentDir, 'lesson-source.md'),
+      '![Course cover](manifest-cover-id.png)\n',
+    );
+
+    try {
+      const prisma = buildPrisma();
+      const service = await buildService(prisma);
+      const result = await service.ingestFromDirectory(contentDir);
+
+      const data = prisma.course.create.mock.calls[0][0].data as any;
+      const asset = data.assets.create[0];
+      const lesson = data.versions.create.modules.create[0].lessons.create[0];
+
+      expect(asset.id).toMatch(/^[0-9a-f-]{36}$/i);
+      expect(asset.objectKey).toBe(
+        'https://blob.vercel-storage.com/courses/sample-course/manifest-cover-id.png',
+      );
+      expect(lesson.content.blocks).toContainEqual(
+        expect.objectContaining({
+          type: 'image',
+          props: expect.objectContaining({ assetId: asset.id }),
+        }),
+      );
+      expect(
+        result.conversionReports.flatMap((report) => report.issues),
+      ).not.toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ code: 'missing-asset' }),
+        ]),
+      );
+    } finally {
+      await rm(contentDir, { recursive: true, force: true });
+    }
+  });
+
   it('dry-run 只返回转换报告，不上传素材或调用数据库', async () => {
     const prisma = buildPrisma();
     const assetStorage = buildAssetStorage();
