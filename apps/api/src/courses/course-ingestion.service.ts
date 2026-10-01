@@ -1,4 +1,5 @@
 import { readFile } from 'node:fs/promises';
+import { randomUUID } from 'node:crypto';
 import { extname, resolve } from 'node:path';
 import { ConflictException, Injectable } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
@@ -47,7 +48,8 @@ export class CourseIngestionService {
 
     const assets = await Promise.all(
       content.assets.map(async (asset) => ({
-        id: asset.id,
+        id: randomUUID(),
+        sourceId: asset.id,
         objectKey: await this.assetStorage.upload(
           `courses/${content.slug}/${asset.id}${extname(asset.path)}`,
           resolve(contentDir, asset.path),
@@ -81,7 +83,7 @@ export class CourseIngestionService {
             outcomes: content.outcomes,
             requirements: content.requirements,
             assets: {
-              create: assets,
+              create: assets.map(({ sourceId: _sourceId, ...asset }) => asset),
             },
             versions: {
               create: {
@@ -92,7 +94,12 @@ export class CourseIngestionService {
                 sourceEncoding: content.source.encoding,
                 sourceMarkdown,
                 introSourceRange: content.introduction.sourceRange,
-                introFeaturedAssetIds: content.introduction.featuredAssetIds,
+                introFeaturedAssetIds:
+                  content.introduction.featuredAssetIds.map(
+                    (sourceId) =>
+                      assets.find((asset) => asset.sourceId === sourceId)?.id ??
+                      sourceId,
+                  ),
                 modules: {
                   create: modules,
                 },
@@ -124,7 +131,8 @@ export class CourseIngestionService {
       content.source.encoding,
     );
     const assets = content.assets.map((asset) => ({
-      id: asset.id,
+      id: randomUUID(),
+      sourceId: asset.id,
       objectKey: asset.path,
       type: asset.type,
       altText: asset.alt,
@@ -138,6 +146,7 @@ export class CourseIngestionService {
     sourceMarkdown: string,
     assets: Array<{
       id: string;
+      sourceId: string;
       objectKey: string;
       type: string;
       altText: string;

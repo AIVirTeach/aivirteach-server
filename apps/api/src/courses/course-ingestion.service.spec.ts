@@ -80,7 +80,7 @@ describe('CourseIngestionService.ingestFromDirectory', () => {
           assets: {
             create: [
               expect.objectContaining({
-                id: 'cover',
+                id: expect.any(String),
                 objectKey:
                   'https://blob.vercel-storage.com/courses/sample-course/cover.png',
                 type: 'image',
@@ -143,6 +143,9 @@ describe('CourseIngestionService.ingestFromDirectory', () => {
       .create.modules.create[0].lessons.create as any[];
 
     expect(lessons).toHaveLength(2);
+    const persistedAssetIds = (
+      prisma.course.create.mock.calls[0][0].data as any
+    ).assets.create.map((asset: { id: string }) => asset.id);
     for (const [index, lesson] of lessons.entries()) {
       expect(lesson.body).toBe(
         sliceLessonBody(SOURCE_MARKDOWN, {
@@ -153,7 +156,7 @@ describe('CourseIngestionService.ingestFromDirectory', () => {
       expect(lesson.content.blocks.length).toBeGreaterThan(0);
       expect(
         validateLessonContent(lesson.content, {
-          courseAssetIds: new Set(['asset_cover']),
+          courseAssetIds: new Set(persistedAssetIds),
         }).errors,
       ).toEqual([]);
     }
@@ -167,13 +170,58 @@ describe('CourseIngestionService.ingestFromDirectory', () => {
   it('按已上传素材 objectKey 的文件名建立转换引用映射', async () => {
     const prisma = buildPrisma();
     const service = await buildService(prisma);
-    const convert = jest.spyOn(service as any, 'convertMarkdown');
+    const convert = jest
+      .spyOn(service as any, 'convertMarkdown')
+      .mockImplementation(async (_markdown: string, context: any) => ({
+        content: {
+          schemaVersion: 1,
+          blocks: [
+            {
+              id: 'b-001',
+              type: 'image',
+              props: {
+                assetId: context.assetIdsByFilename.get('cover.png'),
+                alt: 'Cover image',
+              },
+            },
+          ],
+        },
+        report: [],
+        dropped: [],
+      }));
 
     await service.ingestFromDirectory(FIXTURE_DIR);
 
+    const data = prisma.course.create.mock.calls[0][0].data as any;
+    const assetId = data.assets.create[0].id;
+    const lessonContent =
+      data.versions.create.modules.create[0].lessons.create[0].content;
     expect(convert).toHaveBeenCalledWith(expect.any(String), {
-      assetIdsByFilename: new Map([['cover.png', 'cover']]),
+      assetIdsByFilename: new Map([['cover.png', assetId]]),
     });
+    expect(data.versions.create.introFeaturedAssetIds).toEqual([assetId]);
+    expect(lessonContent.blocks[0].props.assetId).toBe(assetId);
+    expect(assetId).not.toBe('cover');
+  });
+
+  it('相同的课程级源素材 ID 在不同摄取中生成不同数据库 ID', async () => {
+    const prisma = buildPrisma();
+    const service = await buildService(prisma);
+
+    await service.ingestFromDirectory(FIXTURE_DIR);
+    await service.ingestFromDirectory(FIXTURE_DIR);
+
+    const firstData = prisma.course.create.mock.calls[0][0].data as any;
+    const secondData = prisma.course.create.mock.calls[1][0].data as any;
+    const firstId = firstData.assets.create[0].id;
+    const secondId = secondData.assets.create[0].id;
+    expect(firstId).toMatch(/^[0-9a-f-]{36}$/i);
+    expect(secondId).toMatch(/^[0-9a-f-]{36}$/i);
+    expect(secondId).not.toBe(firstId);
+    expect(firstData.versions.create.introFeaturedAssetIds).toEqual([firstId]);
+    expect(secondData.versions.create.introFeaturedAssetIds).toEqual([
+      secondId,
+    ]);
   });
 
   it('dry-run 只返回转换报告，不上传素材或调用数据库', async () => {
