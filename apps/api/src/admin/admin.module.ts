@@ -13,12 +13,18 @@ import { ContentModelBackfillService } from './backfill/content-model-backfill.s
 import { CourseBackfillCommand } from './commands/course-backfill.command';
 import { CourseDraftService } from './draft/course-draft.service';
 import { CoursePublishService } from './course-publish.service';
+import { DraftContentService } from './draft/draft-content.service';
+import { AdminApiTokenGuard } from './admin-api-token.guard';
+import { AdminCoursesController } from './admin-courses.controller';
 
 @Module({
   imports: [CoursesModule],
+  controllers: [AdminCoursesController],
   providers: [
     AdminService,
+    AdminApiTokenGuard,
     CourseDraftService,
+    DraftContentService,
     CoursePublishService,
     InviteCommand,
     CourseCreateCommand,
