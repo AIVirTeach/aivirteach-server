@@ -36,7 +36,8 @@ describe('simple lesson block schemas', () => {
     expect(CodePropsSchema.safeParse({ kind: 'file', code: 'x' }).success).toBe(false);
     expect(CodePropsSchema.safeParse({ kind: 'terminal', code: 'x' }).success).toBe(true);
     expect(CodePropsSchema.safeParse({ kind: 'plain', code: 'x'.repeat(20000), language: 'x'.repeat(30) }).success).toBe(true);
-    expect(CodePropsSchema.safeParse({ kind: 'plain', code: 'x', description: 'x'.repeat(500) }).success).toBe(true);
+    const codeWithDescription = { kind: 'plain', code: 'x', description: 'x'.repeat(500) };
+    expect(CodePropsSchema.parse(codeWithDescription)).toEqual(codeWithDescription);
     expect(CodePropsSchema.safeParse({ kind: 'plain', code: 'x'.repeat(20001) }).success).toBe(false);
     expect(CodePropsSchema.safeParse({ kind: 'plain', code: 'x', description: 'x'.repeat(501) }).success).toBe(false);
     expect(CodePropsSchema.safeParse({ kind: 'plain', code: 'x', language: 'x'.repeat(31) }).success).toBe(false);
