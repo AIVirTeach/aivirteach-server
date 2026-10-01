@@ -1,5 +1,6 @@
 import { NotFoundException } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
+import type { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { CoursesService } from './courses.service';
 import { LATEST_PUBLISHED_VERSION } from './published-version';
@@ -198,6 +199,7 @@ describe('CoursesService.getLesson', () => {
             objectives: ['a'],
             sourceRange: { startLine: 1, endLine: 2 },
             body: 'body from lesson one',
+            content: null as Prisma.JsonValue,
             activityType: 'guided-lab',
             activityPrompt: 'p',
             activityCompletionType: 'learner-confirmation',
@@ -211,6 +213,7 @@ describe('CoursesService.getLesson', () => {
             objectives: ['b'],
             sourceRange: { startLine: 3, endLine: 4 },
             body: 'body from lesson two',
+            content: null as Prisma.JsonValue,
             activityType: 'guided-lab',
             activityPrompt: 'p',
             activityCompletionType: 'learner-confirmation',
