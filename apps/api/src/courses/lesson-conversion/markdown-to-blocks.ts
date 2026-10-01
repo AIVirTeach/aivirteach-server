@@ -207,6 +207,12 @@ export async function convertMarkdownToBlocks(
       for (const unit of units) {
         if (unit.kind === 'image') {
           flushItems();
+          report.push({
+            level: 'warning',
+            code: 'list-image-split',
+            message: '列表中的图片已提取为独立内容块，列表文本按原顺序拆分。',
+            line: unit.node.position?.start.line,
+          });
           imageBlock(unit.node);
         } else {
           items.push(unit.text);

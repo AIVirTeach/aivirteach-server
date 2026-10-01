@@ -166,6 +166,9 @@ describe('convertMarkdownToBlocks', () => {
       { type: 'image', props: { assetId: 'asset-a', alt: 'alt' } },
       { type: 'bulletList', props: { items: ['** y** after'] } },
     ]);
+    expect(listResult.report).toEqual(expect.arrayContaining([
+      expect.objectContaining({ level: 'warning', code: 'list-image-split' }),
+    ]));
 
     const quoteResult = await convertMarkdownToBlocks('> before **x ![alt](a.png) y** after', {
       assetIdsByFilename: new Map([['a.png', 'asset-a']]),
