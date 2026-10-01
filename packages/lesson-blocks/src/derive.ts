@@ -35,45 +35,135 @@ export function collectImageAssetIds(content: unknown): string[] {
   return [...ids];
 }
 
-function stripLinks(value: string): string {
-  let output = '';
-  for (let index = 0; index < value.length;) {
-    if (value[index] !== '[' || (index > 0 && value[index - 1] === '\\')) {
-      output += value[index++];
+const escapableInlineChars = new Set('\\`*{}[]()#+-.!_>=');
+
+function countRun(value: string, start: number, char: string): number {
+  let end = start;
+  while (value[end] === char) end++;
+  return end - start;
+}
+
+function findInlineCodeEnd(value: string, start: number, delimiterLength: number): number {
+  for (let index = start; index < value.length;) {
+    if (value[index] === '\\') {
+      const runLength = countRun(value, index, '\\');
+      index += runLength;
+      if (runLength % 2 === 1) index++;
       continue;
     }
-    let labelEnd = index + 1;
-    while (labelEnd < value.length && (value[labelEnd] !== ']' || value[labelEnd - 1] === '\\')) labelEnd++;
-    if (labelEnd >= value.length || value[labelEnd + 1] !== '(') {
-      output += value[index++];
+    if (value[index] === '`') {
+      const runLength = countRun(value, index, '`');
+      if (runLength === delimiterLength) return index;
+      index += runLength;
       continue;
     }
-    let depth = 1;
-    let destinationEnd = labelEnd + 2;
-    while (destinationEnd < value.length && depth > 0) {
-      const char = value[destinationEnd];
-      if (char === '\\') { destinationEnd += 2; continue; }
-      if (char === '(') depth++;
-      if (char === ')') depth--;
-      destinationEnd++;
-    }
-    if (depth !== 0) {
-      output += value[index++];
-      continue;
-    }
-    output += value.slice(index + 1, labelEnd);
-    index = destinationEnd;
+    index++;
   }
-  return output;
+  return -1;
+}
+
+function findUnescaped(value: string, char: string, start: number): number {
+  for (let index = start; index < value.length;) {
+    if (value[index] === '\\') {
+      const runLength = countRun(value, index, '\\');
+      index += runLength;
+      if (runLength % 2 === 1) index++;
+      continue;
+    }
+    if (value[index] === char) return index;
+    index++;
+  }
+  return -1;
+}
+
+function findLinkEnd(value: string, start: number): { labelEnd: number; end: number } | undefined {
+  const labelEnd = findUnescaped(value, ']', start + 1);
+  if (labelEnd < 0 || value[labelEnd + 1] !== '(') return undefined;
+  let depth = 1;
+  for (let index = labelEnd + 2; index < value.length;) {
+    if (value[index] === '\\') {
+      const runLength = countRun(value, index, '\\');
+      index += runLength;
+      if (runLength % 2 === 1) index++;
+      continue;
+    }
+    if (value[index] === '(') depth++;
+    if (value[index] === ')' && --depth === 0) return { labelEnd, end: index + 1 };
+    index++;
+  }
+  return undefined;
+}
+
+function findMarkEnd(value: string, delimiter: string, start: number): number {
+  for (let index = start; index < value.length;) {
+    if (value[index] === '\\') {
+      const runLength = countRun(value, index, '\\');
+      index += runLength;
+      if (runLength % 2 === 1) index++;
+      continue;
+    }
+    if (value[index] === '`') {
+      const runLength = countRun(value, index, '`');
+      const closing = findInlineCodeEnd(value, index + runLength, runLength);
+      index = closing < 0 ? index + runLength : closing + runLength;
+      continue;
+    }
+    if (value.startsWith(delimiter, index)) return index;
+    index++;
+  }
+  return -1;
 }
 
 function plain(value: string): string {
-  return stripLinks(value)
-    .replace(/(?<!\\)\*\*(.*?)((?<!\\)\*\*)/gs, '$1')
-    .replace(/(?<!\\)(?<!\*)\*(?!\*)(.*?)((?<!\\)(?<!\*)\*(?!\*))/gs, '$1')
-    .replace(/(?<!\\)==(.*?)((?<!\\)==)/gs, '$1')
-    .replace(/(?<!\\)`([^`]*)`/g, '$1')
-    .replace(/\\([\\`*{}\[\]()#+\-.!_>=])/g, '$1');
+  let output = '';
+  for (let index = 0; index < value.length;) {
+    const char = value[index];
+    if (char === '\\') {
+      const runLength = countRun(value, index, '\\');
+      output += '\\'.repeat(Math.floor(runLength / 2));
+      index += runLength;
+      if (runLength % 2 === 1) {
+        if (index < value.length && escapableInlineChars.has(value[index])) output += value[index++];
+        else output += '\\';
+      }
+      continue;
+    }
+    if (char === '`') {
+      const delimiterLength = countRun(value, index, '`');
+      const end = findInlineCodeEnd(value, index + delimiterLength, delimiterLength);
+      if (end >= 0) {
+        output += value.slice(index + delimiterLength, end);
+        index = end + delimiterLength;
+        continue;
+      }
+      output += '`'.repeat(delimiterLength);
+      index += delimiterLength;
+      continue;
+    }
+    if (char === '[') {
+      const link = findLinkEnd(value, index);
+      if (link) {
+        output += plain(value.slice(index + 1, link.labelEnd));
+        index = link.end;
+        continue;
+      }
+    }
+    const delimiter = value.startsWith('**', index) ? '**'
+      : value.startsWith('==', index) ? '=='
+        : char === '*' && value[index + 1] !== '*' && (index === 0 || value[index - 1] !== '*') ? '*'
+          : undefined;
+    if (delimiter) {
+      const end = findMarkEnd(value, delimiter, index + delimiter.length);
+      if (end >= 0) {
+        output += plain(value.slice(index + delimiter.length, end));
+        index = end + delimiter.length;
+        continue;
+      }
+    }
+    output += char;
+    index++;
+  }
+  return output;
 }
 
 export function blocksToPlainText(content: unknown): string {

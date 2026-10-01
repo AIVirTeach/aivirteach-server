@@ -33,6 +33,14 @@ describe('lesson content derived helpers', () => {
     ]))).toBe(`${code}\nStep\n${code}\nx`);
   });
 
+  it('keeps inline code contents literal and handles bracket escapes by parity', () => {
+    const evenSlashLink = String.raw`\\[even](url)`;
+    const oddSlashLink = String.raw`\[odd](url)`;
+    const text = `\`[x](url)\` and \`**literal**\` / ${evenSlashLink} / ${oddSlashLink} / \`unmatched`;
+    expect(blocksToPlainText(content([block('p', 'paragraph', { text })])))
+      .toBe('[x](url) and **literal** / \\even / [odd](url) / `unmatched');
+  });
+
   it('preserves literal sentinel-shaped text', () => {
     expect(blocksToPlainText(content([block('p', 'paragraph', { text: '\u0000123\u0000 and \\*literal\\*' })])))
       .toBe('\u0000123\u0000 and *literal*');
