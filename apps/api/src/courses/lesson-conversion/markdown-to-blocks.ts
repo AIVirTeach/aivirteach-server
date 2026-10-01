@@ -38,8 +38,11 @@ export async function convertMarkdownToBlocks(
   };
   const plainText = (node: Nodes) => toString(node).trim();
   const inline = (children: PhrasingContent[]) => inlineToMarkdownSubset(children, report);
-  const imageBlock = (node: Extract<Nodes, { type: 'image' }>) => {
-    const filename = node.url.split(/[\\/]/).filter(Boolean).at(-1) || node.url;
+  const assetDefinitions = new Map(tree.children.flatMap((node) => node.type === 'definition' ? [[node.identifier, node.url] as const] : []));
+  type ImageNode = Extract<Nodes, { type: 'image' | 'imageReference' }>;
+  const imageBlock = (node: ImageNode) => {
+    const url = node.type === 'image' ? node.url : (assetDefinitions.get(node.identifier) ?? node.identifier);
+    const filename = url.split(/[\\/]/).filter(Boolean).at(-1) || url;
     const assetId = ctx.assetIdsByFilename.get(filename);
     if (!assetId) {
       report.push({ level: 'warning', code: 'missing-asset', message: `找不到图片素材：${filename}`, line: node.position?.start.line });
@@ -52,6 +55,19 @@ export async function convertMarkdownToBlocks(
       report.push({ level: 'warning', code: 'empty-alt-defaulted', message: `图片缺少替代文字，已使用文件名：${filename}`, line: node.position?.start.line });
     }
     append('image', { assetId, alt });
+  };
+  const nestedImages = (node: Nodes): ImageNode[] => {
+    if (node.type === 'image' || node.type === 'imageReference') return [node];
+    if ('children' in node) return node.children.flatMap((child) => nestedImages(child as Nodes));
+    return [];
+  };
+  const emitNestedImages = (node: Nodes) => nestedImages(node).forEach(imageBlock);
+  const quotedText = (node: Nodes): string[] => {
+    if (node.type === 'paragraph' || node.type === 'heading') return [inline(node.children)];
+    if (node.type === 'code') return [node.value];
+    if (node.type === 'html') return [node.value.replace(/<[^>]*>/g, '').trim()];
+    if ('children' in node) return node.children.flatMap((child) => quotedText(child as Nodes)).filter(Boolean);
+    return [plainText(node)];
   };
   const unmappedText = (node: Nodes) => {
     const text = node.type === 'html' ? node.value.replace(/<[^>]*>/g, '').trim() : plainText(node);
@@ -68,6 +84,7 @@ export async function convertMarkdownToBlocks(
       } else {
         append('heading', { level: node.depth === 2 ? 2 : 3, text });
       }
+      emitNestedImages(node);
     } else if (node.type === 'thematicBreak') {
       append('divider', {});
     } else if (node.type === 'code') {
@@ -81,6 +98,7 @@ export async function convertMarkdownToBlocks(
     } else if (node.type === 'table') {
       const rows = node.children.map((row) => row.children.map((cell) => inline(cell.children)));
       append('table', { columns: rows[0] ?? [], rows: rows.slice(1) });
+      emitNestedImages(node);
     } else if (node.type === 'list') {
       const items: string[] = [];
       let flattenedNestedList = false;
@@ -97,6 +115,7 @@ export async function convertMarkdownToBlocks(
       };
       node.children.forEach(visitListItem);
       append(node.ordered ? 'numberedList' : 'bulletList', { items });
+      emitNestedImages(node);
       if (flattenedNestedList) {
         report.push({ level: 'warning', code: 'nested-list-flattened', message: '嵌套列表已拍平。', line: node.position?.start.line });
       }
@@ -107,7 +126,7 @@ export async function convertMarkdownToBlocks(
         phrasing = [];
       };
       for (const child of node.children) {
-        if (child.type === 'image') {
+        if (child.type === 'image' || child.type === 'imageReference') {
           flush();
           imageBlock(child);
         } else {
@@ -116,7 +135,10 @@ export async function convertMarkdownToBlocks(
       }
       flush();
     } else if (node.type === 'blockquote') {
-      append('callout', { variant: 'note', body: inline(node.children.flatMap((child) => child.type === 'paragraph' ? child.children : [])) });
+      append('callout', { variant: 'note', body: node.children.flatMap(quotedText).join('\n') });
+      emitNestedImages(node);
+    } else if (node.type === 'definition') {
+      continue;
     } else if (node.type === 'html') {
       unmappedText(node);
     } else {

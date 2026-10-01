@@ -12,7 +12,18 @@ function textOf(node: PhrasingContent): string {
 
 function convertNode(node: PhrasingContent): string {
   switch (node.type) {
-    case 'text': return escapeLiteral(node.value);
+    case 'text': {
+      const parts: string[] = [];
+      const highlight = /==([^=\n]+)==/g;
+      let cursor = 0;
+      for (const match of node.value.matchAll(highlight)) {
+        const start = match.index ?? 0;
+        parts.push(escapeLiteral(node.value.slice(cursor, start)), `**${escapeLiteral(match[1])}**`);
+        cursor = start + match[0].length;
+      }
+      parts.push(escapeLiteral(node.value.slice(cursor)));
+      return parts.join('');
+    }
     case 'strong': return `**${node.children.map(convertNode).join('')}**`;
     case 'emphasis': return `*${node.children.map(convertNode).join('')}*`;
     case 'inlineCode': {

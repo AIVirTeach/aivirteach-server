@@ -122,8 +122,48 @@ describe('convertMarkdownToBlocks', () => {
     ]));
   });
 
+  it('resolves reference-style image URLs through their definition', async () => {
+    const result = await convertMarkdownToBlocks('![Reference][diagram]\n\n[diagram]: folder/a.png', {
+      assetIdsByFilename: new Map([['a.png', 'asset-a']]),
+    });
+    expect(result.content.blocks).toMatchObject([
+      { type: 'image', props: { assetId: 'asset-a', alt: 'Reference' } },
+    ]);
+    expect(result.report).not.toEqual(expect.arrayContaining([
+      expect.objectContaining({ code: 'unmapped-node' }),
+    ]));
+  });
+
+  it('resolves nested images in lists, tables, and blockquotes without losing missing-image diagnostics', async () => {
+    const result = await convertMarkdownToBlocks(
+      '- item ![Diagram](a.png)\n- missing ![absent](missing.png)\n\n| Header | Visual |\n| --- | --- |\n| row | ![Table image](b.png) |\n\n> quoted\n>\n> - ![Quote image](c.png)',
+      { assetIdsByFilename: new Map([['a.png', 'a'], ['b.png', 'b'], ['c.png', 'c']]) },
+    );
+    expect(result.content.blocks).toMatchObject([
+      { type: 'bulletList', props: { items: ['item Diagram', 'missing absent'] } },
+      { type: 'image', props: { assetId: 'a', alt: 'Diagram' } },
+      { type: 'paragraph', props: { text: '[图片缺失：missing.png]' } },
+      { type: 'table', props: { rows: [['row', 'Table image']] } },
+      { type: 'image', props: { assetId: 'b', alt: 'Table image' } },
+      { type: 'callout', props: { variant: 'note', body: 'quoted\nQuote image' } },
+      { type: 'image', props: { assetId: 'c', alt: 'Quote image' } },
+    ]);
+    expect(result.report).toEqual(expect.arrayContaining([
+      expect.objectContaining({ level: 'warning', code: 'missing-asset' }),
+    ]));
+  });
+
+  it('flattens quoted list and code content into the callout body', async () => {
+    const result = await convertMarkdownToBlocks('> intro\n>\n> - listed\n>\n> ```ts\n> const x = 1;\n> ```', ctx);
+    expect(result.content.blocks[0]).toMatchObject({
+      type: 'callout', props: { variant: 'note', body: expect.stringContaining('intro') },
+    });
+    expect((result.content.blocks[0].props as { body: string }).body).toContain('listed');
+    expect((result.content.blocks[0].props as { body: string }).body).toContain('const x = 1;');
+  });
+
   it('validates converted content and reports invalid block properties', async () => {
-    const code = `\`\`\`\n${'x'.repeat(20_001)}\n\`\`\``;
+    const code = `\`\`\`\n${'x'.repeat(21_000)}\n\`\`\``;
     const paragraph = 'y'.repeat(5_001);
     const result = await convertMarkdownToBlocks(`${code}\n\n${paragraph}`, ctx);
     expect(result.report.filter(({ code }) => code === 'invalid-output')).toHaveLength(2);

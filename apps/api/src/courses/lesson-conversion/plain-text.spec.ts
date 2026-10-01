@@ -33,4 +33,13 @@ describe('checkPlainTextEquivalence', () => {
     const result = await convertMarkdownToBlocks(markdown, ctx);
     expect(await checkPlainTextEquivalence(markdown, result)).toMatchObject({ equal: true });
   });
+
+  it('excludes formatted H1 text while retaining matching text in the body', async () => {
+    const markdown = '# **Title**\n\nTitle appears again.';
+    const result = await convertMarkdownToBlocks(markdown, ctx);
+    const comparison = await checkPlainTextEquivalence(markdown, result);
+    expect(result.dropped).toContain('**Title**');
+    expect(comparison.equal).toBe(true);
+    expect(comparison.expected).toContain('Title appears again.');
+  });
 });
