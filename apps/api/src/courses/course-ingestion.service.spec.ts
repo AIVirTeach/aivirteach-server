@@ -3,6 +3,8 @@ import { Test } from '@nestjs/testing';
 import { ConflictException } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { readFileSync } from 'node:fs';
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
 import { PrismaService } from '../prisma/prisma.service';
 import { CourseAssetStorageService } from './course-asset-storage.service';
 import { CourseIngestionService } from './course-ingestion.service';
@@ -41,8 +43,8 @@ const buildPrisma = () => ({
 const buildAssetStorage = () => ({
   upload: jest
     .fn()
-    .mockResolvedValue(
-      'https://blob.vercel-storage.com/courses/sample-course/cover.png',
+    .mockImplementation(
+      async (pathname: string) => `https://blob.vercel-storage.com/${pathname}`,
     ),
 });
 
@@ -199,7 +201,7 @@ describe('CourseIngestionService.ingestFromDirectory', () => {
     expect(convert).toHaveBeenCalledWith(expect.any(String), {
       assetIdsByFilename: new Map([['cover.png', assetId]]),
     });
-    expect(data.versions.create.introFeaturedAssetIds).toEqual([assetId]);
+    expect(data.versions.create.introFeaturedAssetIds).toEqual(['cover']);
     expect(lessonContent.blocks[0].props.assetId).toBe(assetId);
     expect(assetId).not.toBe('cover');
   });
@@ -218,10 +220,88 @@ describe('CourseIngestionService.ingestFromDirectory', () => {
     expect(firstId).toMatch(/^[0-9a-f-]{36}$/i);
     expect(secondId).toMatch(/^[0-9a-f-]{36}$/i);
     expect(secondId).not.toBe(firstId);
-    expect(firstData.versions.create.introFeaturedAssetIds).toEqual([firstId]);
-    expect(secondData.versions.create.introFeaturedAssetIds).toEqual([
-      secondId,
-    ]);
+    expect(firstData.versions.create.introFeaturedAssetIds).toEqual(['cover']);
+    expect(secondData.versions.create.introFeaturedAssetIds).toEqual(['cover']);
+  });
+
+  it('dry-run and ingestion use the upload filename when source asset id differs from source filename', async () => {
+    const contentDir = await mkdtemp(join(tmpdir(), 'lesson-ingestion-'));
+    const courseContent = JSON.parse(
+      readFileSync(join(FIXTURE_DIR, 'course.json'), 'utf8'),
+    );
+    courseContent.assets[0].id = 'manifest-cover-id';
+    courseContent.introduction.featuredAssetIds = ['manifest-cover-id'];
+    await writeFile(
+      join(contentDir, 'course.json'),
+      JSON.stringify(courseContent),
+    );
+    await writeFile(join(contentDir, 'lesson-source.md'), SOURCE_MARKDOWN);
+
+    try {
+      const previewService = await buildService(buildPrisma());
+      const previewMaps: Map<string, string>[] = [];
+      jest
+        .spyOn(previewService as any, 'convertMarkdown')
+        .mockImplementation(async (_markdown: string, context: any) => {
+          previewMaps.push(context.assetIdsByFilename);
+          return {
+            content: { schemaVersion: 1, blocks: [] },
+            report: [],
+            dropped: [],
+          };
+        });
+      await previewService.previewConversions(contentDir);
+
+      const prisma = buildPrisma();
+      const assetStorage = buildAssetStorage();
+      const ingestionService = await buildService(prisma, assetStorage);
+      const ingestionMaps: Map<string, string>[] = [];
+      jest
+        .spyOn(ingestionService as any, 'convertMarkdown')
+        .mockImplementation(async (_markdown: string, context: any) => {
+          ingestionMaps.push(context.assetIdsByFilename);
+          return {
+            content: {
+              schemaVersion: 1,
+              blocks: [
+                {
+                  id: 'b-001',
+                  type: 'image',
+                  props: {
+                    assetId: context.assetIdsByFilename.get(
+                      'manifest-cover-id.png',
+                    ),
+                    alt: 'Cover image',
+                  },
+                },
+              ],
+            },
+            report: [],
+            dropped: [],
+          };
+        });
+      await ingestionService.ingestFromDirectory(contentDir);
+
+      const data = prisma.course.create.mock.calls[0][0].data as any;
+      const assetId = data.assets.create[0].id;
+      const imageAssetId =
+        data.versions.create.modules.create[0].lessons.create[0].content
+          .blocks[0].props.assetId;
+      const expectedFilename = 'manifest-cover-id.png';
+      expect(previewMaps[0].has(expectedFilename)).toBe(true);
+      expect([...previewMaps[0].keys()]).toEqual([...ingestionMaps[0].keys()]);
+      expect(ingestionMaps[0].get(expectedFilename)).toBe(assetId);
+      expect(imageAssetId).toBe(assetId);
+      expect(data.versions.create.introFeaturedAssetIds).toEqual([
+        'manifest-cover-id',
+      ]);
+      expect(assetStorage.upload).toHaveBeenCalledWith(
+        'courses/sample-course/manifest-cover-id.png',
+        join(contentDir, 'cover.png'),
+      );
+    } finally {
+      await rm(contentDir, { recursive: true, force: true });
+    }
   });
 
   it('dry-run 只返回转换报告，不上传素材或调用数据库', async () => {

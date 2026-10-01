@@ -49,7 +49,6 @@ export class CourseIngestionService {
     const assets = await Promise.all(
       content.assets.map(async (asset) => ({
         id: randomUUID(),
-        sourceId: asset.id,
         objectKey: await this.assetStorage.upload(
           `courses/${content.slug}/${asset.id}${extname(asset.path)}`,
           resolve(contentDir, asset.path),
@@ -83,7 +82,7 @@ export class CourseIngestionService {
             outcomes: content.outcomes,
             requirements: content.requirements,
             assets: {
-              create: assets.map(({ sourceId: _sourceId, ...asset }) => asset),
+              create: assets,
             },
             versions: {
               create: {
@@ -94,12 +93,7 @@ export class CourseIngestionService {
                 sourceEncoding: content.source.encoding,
                 sourceMarkdown,
                 introSourceRange: content.introduction.sourceRange,
-                introFeaturedAssetIds:
-                  content.introduction.featuredAssetIds.map(
-                    (sourceId) =>
-                      assets.find((asset) => asset.sourceId === sourceId)?.id ??
-                      sourceId,
-                  ),
+                introFeaturedAssetIds: content.introduction.featuredAssetIds,
                 modules: {
                   create: modules,
                 },
@@ -132,8 +126,7 @@ export class CourseIngestionService {
     );
     const assets = content.assets.map((asset) => ({
       id: randomUUID(),
-      sourceId: asset.id,
-      objectKey: asset.path,
+      objectKey: `courses/${content.slug}/${asset.id}${extname(asset.path)}`,
       type: asset.type,
       altText: asset.alt,
     }));
@@ -146,7 +139,6 @@ export class CourseIngestionService {
     sourceMarkdown: string,
     assets: Array<{
       id: string;
-      sourceId: string;
       objectKey: string;
       type: string;
       altText: string;
