@@ -45,7 +45,7 @@ const ActivitySchema = z
 const LessonFieldsSchema = z
   .object({
     title: z.string().min(1).optional(),
-    body: z.string().optional(),
+    content: z.unknown().optional(),
     estimatedMinutes: z.number().int().nonnegative().optional(),
     objectives: z.array(z.string()).optional(),
     activity: ActivitySchema.optional(),
@@ -56,7 +56,7 @@ export const CreateLessonSchema = z
   .object({
     contentId: z.string().regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/),
     title: z.string().min(1),
-    body: z.string().optional(),
+    content: z.unknown().optional(),
     estimatedMinutes: z.number().int().nonnegative(),
     objectives: z.array(z.string()).optional(),
     activity: ActivitySchema,

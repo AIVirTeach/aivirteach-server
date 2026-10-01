@@ -34,6 +34,18 @@ describe('draft content schemas', () => {
     expect(
       UpdateLessonPatchSchema.safeParse({ contentId: 'changed' }).success,
     ).toBe(false);
+    expect(
+      CreateLessonSchema.safeParse({
+        contentId: 'lesson-one',
+        title: 'L',
+        body: 'legacy',
+        estimatedMinutes: 1,
+        activity: { type: 'guided', prompt: 'Go', completionType: 'manual' },
+      }).success,
+    ).toBe(false);
+    expect(UpdateLessonPatchSchema.safeParse({ body: 'legacy' }).success).toBe(
+      false,
+    );
     expect(ReorderSchema.safeParse({ modules: [], extra: true }).success).toBe(
       false,
     );
@@ -44,6 +56,7 @@ describe('DraftContentService', () => {
   function setup(
     draft: any = {
       id: 'draft',
+      courseId: 'c',
       modules: [
         {
           id: 'm1',
@@ -70,6 +83,9 @@ describe('DraftContentService', () => {
     },
   ) {
     const prisma: any = {
+      courseAsset: {
+        findMany: jest.fn().mockResolvedValue([{ id: 'asset-local' }]),
+      },
       course: {
         findUnique: jest.fn().mockResolvedValue({ id: 'c', slug: 'demo' }),
       },
@@ -115,7 +131,7 @@ describe('DraftContentService', () => {
     };
   }
 
-  it('appends modules and lessons, defaults body, and audits writes', async () => {
+  it('appends modules and lessons, defaults empty content, and audits writes', async () => {
     const { prisma, audit, service } = setup();
     prisma.courseModule.create.mockResolvedValue({ id: 'm3' });
     await service.createModule(
@@ -132,7 +148,7 @@ describe('DraftContentService', () => {
       }),
     );
     prisma.courseModule.findFirst.mockResolvedValue({ id: 'm1', position: 1 });
-    await service.createLesson(
+    const result = await service.createLesson(
       'demo',
       'm1',
       {
@@ -146,13 +162,17 @@ describe('DraftContentService', () => {
     expect(prisma.courseLesson.create).toHaveBeenCalledWith(
       expect.objectContaining({
         data: expect.objectContaining({
-          body: '',
+          content: { schemaVersion: 1, blocks: [] },
           position: 2,
           activityType: 'lab',
           activityPrompt: 'Do',
           activityCompletionType: 'manual',
         }),
       }),
+    );
+    expect(result.problems.errors).toEqual([]);
+    expect(result.problems.warnings.map(({ code }) => code)).toContain(
+      'no-blocks',
     );
     expect(audit.record).toHaveBeenCalledWith(
       expect.objectContaining({ action: 'admin.draft.createModule' }),
@@ -162,6 +182,114 @@ describe('DraftContentService', () => {
       expect.objectContaining({ action: 'admin.draft.createLesson' }),
       prisma,
     );
+  });
+
+  it('saves invalid block content and returns validation problems, then clears them after repair', async () => {
+    const { service, prisma } = setup();
+    const content = {
+      schemaVersion: 1,
+      blocks: [
+        { id: 'bad', type: 'future-block', props: {} },
+        {
+          id: 'img',
+          type: 'image',
+          props: { assetId: 'asset-local', alt: '' },
+        },
+      ],
+    };
+    prisma.courseLesson.update.mockResolvedValue({});
+    const saved = await service.updateLesson('demo', 'one', { content }, 'op');
+    expect(prisma.courseLesson.update).toHaveBeenCalledWith(
+      expect.objectContaining({ data: { content } }),
+    );
+    expect(saved.problems.errors.map(({ code }) => code)).toEqual(
+      expect.arrayContaining(['unknown-type', 'invalid-props']),
+    );
+    const repaired = await service.updateLesson(
+      'demo',
+      'one',
+      {
+        content: {
+          schemaVersion: 1,
+          blocks: [
+            {
+              id: 'img',
+              type: 'image',
+              props: { assetId: 'asset-local', alt: 'A view' },
+            },
+          ],
+        },
+      },
+      'op',
+    );
+    expect(repaired.problems.errors).toEqual([]);
+    expect(repaired.problems.warnings).toEqual([]);
+    expect(prisma.courseAsset.findMany).toHaveBeenCalledWith({
+      where: { courseId: 'c' },
+      select: { id: true },
+    });
+  });
+
+  it.each([
+    ['text', 'invalid'],
+    ['null', null],
+    ['array', []],
+  ] as const)(
+    'rejects a %s lesson envelope without writes',
+    async (_label, content) => {
+      const { service, prisma } = setup();
+      await expect(
+        service.updateLesson('demo', 'one', { content }, 'op'),
+      ).rejects.toBeInstanceOf(BadRequestException);
+      expect(prisma.$transaction).not.toHaveBeenCalled();
+      expect(prisma.courseLesson.update).not.toHaveBeenCalled();
+    },
+  );
+
+  it('rejects content over 256 KB without writes', async () => {
+    const { service, prisma } = setup();
+    const content = {
+      schemaVersion: 1,
+      blocks: [],
+      extra: 'x'.repeat(256 * 1024),
+    };
+    await expect(
+      service.updateLesson('demo', 'one', { content }, 'op'),
+    ).rejects.toBeInstanceOf(BadRequestException);
+    expect(prisma.$transaction).not.toHaveBeenCalled();
+  });
+
+  it('reports image asset IDs outside the course while accepting local asset IDs', async () => {
+    const { service, prisma } = setup();
+    prisma.courseAsset.findMany.mockResolvedValue([{ id: 'asset-local' }]);
+    const result = await service.updateLesson(
+      'demo',
+      'one',
+      {
+        content: {
+          schemaVersion: 1,
+          blocks: [
+            {
+              id: 'local',
+              type: 'image',
+              props: { assetId: 'asset-local', alt: 'Local' },
+            },
+            {
+              id: 'foreign',
+              type: 'image',
+              props: { assetId: 'asset-other', alt: 'Other' },
+            },
+          ],
+        },
+      },
+      'op',
+    );
+    expect(result.problems.errors.map(({ code }) => code)).toContain(
+      'unknown-asset',
+    );
+    expect(
+      result.problems.errors.filter(({ code }) => code === 'unknown-asset'),
+    ).toHaveLength(1);
   });
 
   it('rejects ambiguous contentId before writes and reports module titles', async () => {

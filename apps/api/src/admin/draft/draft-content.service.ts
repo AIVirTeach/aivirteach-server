@@ -9,6 +9,10 @@ import { AuditService } from '../../audit/audit.service';
 import { PrismaService } from '../../prisma/prisma.service';
 import { CourseDraftService } from './course-draft.service';
 import {
+  validateLessonContent,
+  type ValidationReport,
+} from '@aivirteach/lesson-blocks';
+import {
   CreateLessonSchema,
   CreateModuleSchema,
   ReorderSchema,
@@ -109,40 +113,55 @@ export class DraftContentService {
     moduleId: string,
     input: CreateLessonInput,
     operator: string,
-  ): Promise<DraftVersion> {
+  ): Promise<{ draft: DraftVersion; problems: ValidationReport }> {
     const data = CreateLessonSchema.parse(input);
+    const content =
+      data.content === undefined
+        ? { schemaVersion: 1 as const, blocks: [] }
+        : data.content;
+    assertWritableContent(content);
     const draft = await this.drafts.requireDraft(slug);
-    return this.mutate(slug, draft, operator, 'createLesson', async (tx) => {
-      const module = await tx.courseModule.findFirst({
-        where: { id: moduleId, courseVersionId: draft.id },
-        select: { id: true },
-      });
-      if (!module) throw new NotFoundException(`草稿模块 ${moduleId} 不存在`);
-      const duplicate = await tx.courseLesson.findFirst({
-        where: { moduleId, contentId: data.contentId },
-        select: { id: true },
-      });
-      if (duplicate)
-        throw new ConflictException(`模块中已存在课时 ${data.contentId}`);
-      const last = await tx.courseLesson.findFirst({
-        where: { moduleId },
-        orderBy: { position: 'desc' },
-        select: { position: true },
-      });
-      const { activity, ...lesson } = data;
-      await tx.courseLesson.create({
-        data: {
-          ...lesson,
-          body: lesson.body ?? '',
-          objectives: lesson.objectives ?? [],
-          moduleId,
-          position: (last?.position ?? 0) + 1,
-          activityType: activity.type,
-          activityPrompt: activity.prompt,
-          activityCompletionType: activity.completionType,
-        },
-      });
-    });
+    const courseAssetIds = await this.courseAssetIds(draft.courseId);
+    const problems = validateLessonContent(content, { courseAssetIds });
+    const updatedDraft = await this.mutate(
+      slug,
+      draft,
+      operator,
+      'createLesson',
+      async (tx) => {
+        const module = await tx.courseModule.findFirst({
+          where: { id: moduleId, courseVersionId: draft.id },
+          select: { id: true },
+        });
+        if (!module) throw new NotFoundException(`草稿模块 ${moduleId} 不存在`);
+        const duplicate = await tx.courseLesson.findFirst({
+          where: { moduleId, contentId: data.contentId },
+          select: { id: true },
+        });
+        if (duplicate)
+          throw new ConflictException(`模块中已存在课时 ${data.contentId}`);
+        const last = await tx.courseLesson.findFirst({
+          where: { moduleId },
+          orderBy: { position: 'desc' },
+          select: { position: true },
+        });
+        const { activity, content: _unused, ...lesson } = data;
+        await tx.courseLesson.create({
+          data: {
+            ...lesson,
+            body: '',
+            content: content as Prisma.InputJsonValue,
+            objectives: lesson.objectives ?? [],
+            moduleId,
+            position: (last?.position ?? 0) + 1,
+            activityType: activity.type,
+            activityPrompt: activity.prompt,
+            activityCompletionType: activity.completionType,
+          },
+        });
+      },
+    );
+    return { draft: updatedDraft, problems };
   }
 
   async updateLesson(
@@ -150,26 +169,53 @@ export class DraftContentService {
     contentId: string,
     patchInput: UpdateLessonPatch,
     operator: string,
-  ): Promise<DraftVersion> {
+  ): Promise<{ draft: DraftVersion; problems: ValidationReport }> {
     const patch = UpdateLessonPatchSchema.parse(patchInput);
     const draft = await this.drafts.requireDraft(slug);
     const lesson = this.findLesson(draft, contentId);
-    return this.mutate(slug, draft, operator, 'updateLesson', async (tx) => {
-      const { activity, ...fields } = patch;
-      await tx.courseLesson.update({
-        where: { id: lesson.id },
-        data: {
-          ...fields,
-          ...(activity
-            ? {
-                activityType: activity.type,
-                activityPrompt: activity.prompt,
-                activityCompletionType: activity.completionType,
-              }
-            : {}),
-        },
-      });
+    let problems: ValidationReport | undefined;
+    if (patch.content !== undefined) {
+      assertWritableContent(patch.content);
+      const courseAssetIds = await this.courseAssetIds(draft.courseId);
+      problems = validateLessonContent(patch.content, { courseAssetIds });
+    }
+    const updatedDraft = await this.mutate(
+      slug,
+      draft,
+      operator,
+      'updateLesson',
+      async (tx) => {
+        const { activity, content, ...fields } = patch;
+        await tx.courseLesson.update({
+          where: { id: lesson.id },
+          data: {
+            ...fields,
+            ...(content === undefined
+              ? {}
+              : { content: content as Prisma.InputJsonValue }),
+            ...(activity
+              ? {
+                  activityType: activity.type,
+                  activityPrompt: activity.prompt,
+                  activityCompletionType: activity.completionType,
+                }
+              : {}),
+          },
+        });
+      },
+    );
+    return {
+      draft: updatedDraft,
+      problems: problems ?? { errors: [], warnings: [] },
+    };
+  }
+
+  private async courseAssetIds(courseId: string): Promise<Set<string>> {
+    const assets = await this.prisma.courseAsset.findMany({
+      where: { courseId },
+      select: { id: true },
     });
+    return new Set(assets.map(({ id }) => id));
   }
 
   async deleteLesson(
@@ -347,6 +393,30 @@ export class DraftContentService {
       );
       return updated as DraftVersion;
     });
+  }
+}
+
+function assertWritableContent(
+  content: unknown,
+): asserts content is Record<string, unknown> {
+  if (
+    typeof content !== 'object' ||
+    content === null ||
+    Array.isArray(content)
+  ) {
+    throw new BadRequestException('课时内容必须是 JSON 对象');
+  }
+  let serialized: string | undefined;
+  try {
+    serialized = JSON.stringify(content);
+  } catch {
+    throw new BadRequestException('课时内容必须是有效 JSON');
+  }
+  if (
+    serialized === undefined ||
+    new TextEncoder().encode(serialized).byteLength > 256 * 1024
+  ) {
+    throw new BadRequestException('课时内容不能超过 256 KB');
   }
 }
 
