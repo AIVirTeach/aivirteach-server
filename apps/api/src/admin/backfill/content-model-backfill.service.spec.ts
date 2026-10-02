@@ -304,6 +304,7 @@ describe('ContentModelBackfillService', () => {
   it('finishes asset reads and equivalence checks before opening the execute transaction', async () => {
     const prisma = createPrisma();
     const events: string[] = [];
+    // eslint-disable-next-line @typescript-eslint/require-await -- mock 需要返回 Promise
     prisma.courseLesson.findMany.mockImplementation(async () => {
       events.push('lesson-read');
       return [
@@ -315,12 +316,14 @@ describe('ContentModelBackfillService', () => {
         },
       ];
     });
+    // eslint-disable-next-line @typescript-eslint/require-await -- mock 需要返回 Promise
     prisma.courseAsset.findMany.mockImplementation(async () => {
       events.push('asset-read');
       return [];
     });
     prisma.progress.findMany.mockResolvedValue([]);
     prisma.$transaction.mockImplementation(
+      // eslint-disable-next-line @typescript-eslint/require-await -- mock 需要返回 Promise
       async (callback: (tx: unknown) => unknown) => {
         events.push('transaction-start');
         return callback(prisma);
@@ -328,6 +331,7 @@ describe('ContentModelBackfillService', () => {
     );
     jest
       .mocked(equivalence.checkPlainTextEquivalence)
+      // eslint-disable-next-line @typescript-eslint/require-await -- mock 需要返回 Promise
       .mockImplementation(async (...args) => {
         events.push('equivalence');
         return { equal: true, expected: args[0], actual: args[0] };

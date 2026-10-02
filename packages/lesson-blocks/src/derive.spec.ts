@@ -62,3 +62,40 @@ describe('lesson content derived helpers', () => {
     expect(blocksToPlainText(content([block('i', 'image', { assetId: 'asset', alt: 'Diagram', caption: 'Caption' })]))).toContain('Diagram');
   });
 });
+
+describe('blocksToPlainText covers every block type', () => {
+  it('lists, step, callout, resourceLink, divider in block order', () => {
+    expect(blocksToPlainText(content([
+      block('l', 'bulletList', { items: ['one', '**two**'] }),
+      block('n', 'numberedList', { items: ['three'] }),
+      block('s', 'step', { number: 1, title: 'Install', body: 'Run it' }),
+      block('c', 'callout', { variant: 'tip', title: 'Tip', body: 'Be careful' }),
+      block('r', 'resourceLink', { url: 'https://a.test', title: 'Docs', description: 'Read me' }),
+      block('d', 'divider', {}),
+    ]))).toBe('one\ntwo\nthree\nInstall\nRun it\nTip\nBe careful\nDocs\nRead me');
+  });
+
+  it('annotatedCode includes labels, raw code, explanations and terms', () => {
+    expect(blocksToPlainText(content([block('a', 'annotatedCode', {
+      title: 'T', fileLabel: 'main.ts',
+      steps: [{
+        label: 'Step 1', code: '*raw*', explanationTitle: 'Why', explanation: 'Because',
+        terms: [{ term: 'Term', description: 'Meaning' }],
+      }],
+    })]))).toBe('T\nmain.ts\nStep 1\n*raw*\nWhy\nBecause\nTerm\nMeaning');
+  });
+
+  it('diagram includes title, node text and connection labels', () => {
+    expect(blocksToPlainText(content([block('g', 'diagram', {
+      title: 'Flow',
+      nodes: [{ id: 'a', title: 'A', description: 'first' }, { id: 'b', title: 'B' }],
+      connections: [{ from: 'a', to: 'b', label: 'then' }],
+    })]))).toBe('Flow\nA\nfirst\nB\nthen');
+  });
+
+  it('leaves unclosed marks as literal text and skips invalid content', () => {
+    expect(blocksToPlainText(content([block('p', 'paragraph', { text: '**open and ==also and `tick' })])))
+      .toBe('**open and ==also and `tick');
+    expect(blocksToPlainText(null)).toBe('');
+  });
+});

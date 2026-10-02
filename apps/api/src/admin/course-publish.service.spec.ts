@@ -93,6 +93,7 @@ function setup({
     ),
   };
   const audit = {
+    // eslint-disable-next-line @typescript-eslint/require-await -- mock 需要返回 Promise
     record: jest.fn(async () => {
       expect(transactionCommitted).toBe(true);
     }),

@@ -41,11 +41,10 @@ const buildPrisma = () => ({
 });
 
 const buildAssetStorage = () => ({
-  upload: jest
-    .fn()
-    .mockImplementation(
-      async (pathname: string) => `https://blob.vercel-storage.com/${pathname}`,
-    ),
+  upload: jest.fn().mockImplementation(
+    // eslint-disable-next-line @typescript-eslint/require-await -- mock 需要返回 Promise
+    async (pathname: string) => `https://blob.vercel-storage.com/${pathname}`,
+  ),
 });
 
 const buildService = async (
@@ -175,6 +174,7 @@ describe('CourseIngestionService.ingestFromDirectory', () => {
     const service = await buildService(prisma);
     const convert = jest
       .spyOn(service as any, 'convertMarkdown')
+      // eslint-disable-next-line @typescript-eslint/require-await -- mock 需要返回 Promise
       .mockImplementation(async (_markdown: string, context: any) => ({
         content: {
           schemaVersion: 1,
@@ -247,6 +247,7 @@ describe('CourseIngestionService.ingestFromDirectory', () => {
       const previewMaps: Map<string, string>[] = [];
       jest
         .spyOn(previewService as any, 'convertMarkdown')
+        // eslint-disable-next-line @typescript-eslint/require-await -- mock 需要返回 Promise
         .mockImplementation(async (_markdown: string, context: any) => {
           previewMaps.push(context.assetIdsByFilename);
           return {
@@ -263,6 +264,7 @@ describe('CourseIngestionService.ingestFromDirectory', () => {
       const ingestionMaps: Map<string, string>[] = [];
       jest
         .spyOn(ingestionService as any, 'convertMarkdown')
+        // eslint-disable-next-line @typescript-eslint/require-await -- mock 需要返回 Promise
         .mockImplementation(async (_markdown: string, context: any) => {
           ingestionMaps.push(context.assetIdsByFilename);
           return {

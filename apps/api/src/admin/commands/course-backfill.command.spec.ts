@@ -27,6 +27,7 @@ describe('CourseBackfillCommand', () => {
   beforeEach(() => {
     service = {
       prepare: jest.fn().mockResolvedValue({ report, plan: true }),
+      // eslint-disable-next-line @typescript-eslint/require-await -- mock 需要返回 Promise
       apply: jest.fn(async (_plan: unknown, tx?: { writes: string[] }) => {
         tx?.writes.push('backfill write');
         return report;

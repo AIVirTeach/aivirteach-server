@@ -80,6 +80,7 @@ describe('CourseCreateService', () => {
         return result;
       },
     );
+    // eslint-disable-next-line @typescript-eslint/require-await -- mock 需要返回 Promise
     audit.record.mockImplementation(async () => {
       expect(committed).toBe(true);
     });
