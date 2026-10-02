@@ -59,7 +59,12 @@ export async function checkPlainTextEquivalence(
       else droppedCounts.set(plainHeading, remaining - 1);
       return false;
     })
-    .map(toString)
+    // 原始 HTML 与转换器口径一致：只比较去掉标签后的可见文字。
+    .map((node) =>
+      node.type === 'html'
+        ? node.value.replace(/<[^>]*>/g, '')
+        : toString(node),
+    )
     .join('\n');
   const comparableContent = withoutGeneratedComparisonText(
     result.content,

@@ -160,4 +160,12 @@ describe('checkPlainTextEquivalence', () => {
       'paragraph',
     ]);
   });
+
+  it('treats tag-only and tagged raw html the same way on both sides', async () => {
+    const markdown =
+      'Intro\n\n<aside>\nℹ️\n\nNotion callout text.\n\n</aside>\n\n<div>x</div>\n\nOutro';
+    const result = await convertMarkdownToBlocks(markdown, ctx);
+    const check = await checkPlainTextEquivalence(markdown, result);
+    expect(check.equal).toBe(true);
+  });
 });

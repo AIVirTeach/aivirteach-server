@@ -203,7 +203,10 @@ export async function convertMarkdownToBlocks(
       node.type === 'html'
         ? node.value.replace(/<[^>]*>/g, '').trim()
         : plainText(node);
-    append('paragraph', { text: text || '（未映射内容）' });
+    // 纯标签的原始 HTML（如 Notion 导出的 <aside>）没有可见文字：不生成块，也不塞原文里没有的占位文字。
+    if (text || node.type !== 'html') {
+      append('paragraph', { text: text || '（未映射内容）' });
+    }
     report.push({
       level: 'warning',
       code: 'unmapped-node',

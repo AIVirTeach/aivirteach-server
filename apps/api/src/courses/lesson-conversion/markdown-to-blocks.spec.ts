@@ -174,6 +174,23 @@ describe('convertMarkdownToBlocks', () => {
     );
   });
 
+  it('drops tag-only html without inventing placeholder text, and still reports it', async () => {
+    const result = await convertMarkdownToBlocks(
+      'Before\n\n<aside>\nℹ️\n\nInside the aside.\n\n</aside>\n\nAfter',
+      ctx,
+    );
+    expect(result.content.blocks).toMatchObject([
+      { type: 'paragraph', props: { text: 'Before' } },
+      { type: 'paragraph', props: { text: 'ℹ️' } },
+      { type: 'paragraph', props: { text: 'Inside the aside.' } },
+      { type: 'paragraph', props: { text: 'After' } },
+    ]);
+    expect(JSON.stringify(result.content)).not.toContain('未映射内容');
+    expect(
+      result.report.filter((issue) => issue.code === 'unmapped-node'),
+    ).toHaveLength(2);
+  });
+
   it('defaults an empty image alt to the resolved filename', async () => {
     const result = await convertMarkdownToBlocks('![](images/a.png)', {
       assetIdsByFilename: new Map([['a.png', 'asset-a']]),
