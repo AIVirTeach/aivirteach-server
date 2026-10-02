@@ -5,7 +5,6 @@ import {
 } from '@nestjs/common';
 import { AuditActorType, Prisma } from '@prisma/client';
 import { AuditService } from '../../audit/audit.service';
-import { mapCourseLevel } from '../../courses/course-content.schemas';
 import { PrismaService } from '../../prisma/prisma.service';
 import {
   CourseMetaPatchSchema,
@@ -189,9 +188,8 @@ export class CourseDraftService {
     const patch = CourseMetaPatchSchema.parse(patchInput);
     const draft = await this.requireDraft(slug);
     const currentMeta = isJsonObject(draft.meta) ? draft.meta : {};
-    const update: Record<string, unknown> = { ...patch };
-    if (patch.level) update.level = mapCourseLevel(patch.level);
-    const meta = { ...currentMeta, ...update } as Prisma.InputJsonObject;
+    // meta 存客户端形态（如 'Intermediate'）：发版校验和发版写入都按这个形态解析，枚举映射只在发版时做。
+    const meta = { ...currentMeta, ...patch } as Prisma.InputJsonObject;
 
     return this.prisma.$transaction(async (tx) => {
       const updated = await tx.courseVersion.update({

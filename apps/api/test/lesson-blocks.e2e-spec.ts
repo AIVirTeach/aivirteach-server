@@ -131,7 +131,7 @@ describe('课时块 端到端', () => {
             blocks: [{ id: 'x', type: 'nope', props: {} }],
           },
         }),
-    ).expect((res) => expect([200, 400, 422]).toContain(res.status));
+    ).expect(200); // 草稿写入允许暂存非法块，发版才拦
 
     const publish = await admin(
       request(app.getHttpServer())
@@ -177,6 +177,14 @@ describe('课时块 端到端', () => {
     expect(JSON.stringify(publish.body.problems)).toContain('图片资源不存在');
   });
 
+  it('草稿设置 level 后仍可发版，并映射到 Course.level', async () => {
+    await admin(
+      request(app.getHttpServer())
+        .patch(`/api/v1/admin/courses/${slug}/draft`)
+        .send({ level: 'Intermediate' }),
+    ).expect(200);
+  });
+
   it('正确的 image 块发版成功，学员读到 blocks 与 assets', async () => {
     await admin(
       request(app.getHttpServer())
@@ -201,5 +209,8 @@ describe('课时块 端到端', () => {
     expect(lesson.body.blocks).toEqual(imageLesson(assetId).blocks);
     expect(lesson.body.assets[assetId]).toMatchObject({ alt: '终端截图' });
     expect(typeof lesson.body.markdown).toBe('string');
+    expect(
+      (await prisma.course.findUniqueOrThrow({ where: { slug } })).level,
+    ).toBe('INTERMEDIATE');
   });
 });

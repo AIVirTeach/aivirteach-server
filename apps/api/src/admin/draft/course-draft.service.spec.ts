@@ -284,7 +284,7 @@ describe('CourseDraftService', () => {
     });
   });
 
-  it('merges metadata on the draft and maps the level without touching Course', async () => {
+  it('merges metadata on the draft and keeps the level in its client-facing form without touching Course', async () => {
     const { prisma, audit, service } = setup();
     const draft = { id: 'draft', meta: { title: 'Old', tags: ['one'] } };
     prisma.course.findUnique.mockResolvedValue({
@@ -295,19 +295,19 @@ describe('CourseDraftService', () => {
       .mockResolvedValueOnce(draft)
       .mockResolvedValueOnce({
         ...draft,
-        meta: { title: 'New', tags: ['one'], level: 'INTERMEDIATE' },
+        meta: { title: 'New', tags: ['one'], level: 'Intermediate' },
       });
     prisma.courseVersion.update
       .mockResolvedValueOnce({
         ...draft,
-        meta: { title: 'New', tags: ['one'], level: 'INTERMEDIATE' },
+        meta: { title: 'New', tags: ['one'], level: 'Intermediate' },
       })
       .mockResolvedValueOnce({
         ...draft,
         meta: {
           title: 'New',
           tags: ['one'],
-          level: 'INTERMEDIATE',
+          level: 'Intermediate',
           description: 'Added',
         },
       });
@@ -319,7 +319,7 @@ describe('CourseDraftService', () => {
     await service.updateCourse('demo', { description: 'Added' }, 'operator');
     expect(prisma.courseVersion.update).toHaveBeenNthCalledWith(1, {
       where: { id: 'draft' },
-      data: { meta: { title: 'New', tags: ['one'], level: 'INTERMEDIATE' } },
+      data: { meta: { title: 'New', tags: ['one'], level: 'Intermediate' } },
       include: expect.any(Object),
     });
     expect(prisma.courseVersion.update).toHaveBeenNthCalledWith(2, {
@@ -328,7 +328,7 @@ describe('CourseDraftService', () => {
         meta: {
           title: 'New',
           tags: ['one'],
-          level: 'INTERMEDIATE',
+          level: 'Intermediate',
           description: 'Added',
         },
       },
