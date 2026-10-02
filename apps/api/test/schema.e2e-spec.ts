@@ -44,7 +44,7 @@ describe('数据库 schema', () => {
       data: {
         slug: `cascade-course-${Date.now()}`,
         title: '级联测试课程',
-        versions: { create: { version: 1, content: {} } },
+        versions: { create: { version: 1 } },
       },
       include: { versions: true },
     });

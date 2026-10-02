@@ -96,7 +96,7 @@ describe('Chat 端到端', () => {
 
   it('工作区就绪且有当前课时时，真实拼出 CourseContext/LessonContext 传给 Agent，成功响应落 ASSISTANT 消息并存完整 contextRef', async () => {
     const courseVersion = await prisma.courseVersion.create({
-      data: { courseId, version: 1 },
+      data: { courseId, version: 1, publishedAt: new Date() },
     });
     const courseModule = await prisma.courseModule.create({
       data: { courseVersionId: courseVersion.id, position: 1, title: '模块一', description: '', estimatedMinutes: 30 },
@@ -127,7 +127,9 @@ describe('Chat 端到端', () => {
     await prisma.workspace.create({
       data: { enrollmentId, status: WorkspaceStatus.RUNNING, labId: `lab_${Date.now()}` },
     });
-    await prisma.progress.create({ data: { enrollmentId, currentLessonId: lesson.id } });
+    await prisma.progress.create({
+      data: { enrollmentId, currentLessonId: lesson.id, currentLessonContentId: lesson.contentId },
+    });
 
     const diagnoseResponse: DiagnoseResponseBody = {
       request_id: 'e2e-req-1',

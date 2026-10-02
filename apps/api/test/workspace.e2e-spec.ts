@@ -39,7 +39,7 @@ describe('Workspace 端到端', () => {
     const enrollment = await prisma.enrollment.create({ data: { userId: user.id, courseId: course.id } });
     enrollmentId = enrollment.id;
     await prisma.workspace.create({
-      data: { enrollmentId, status: WorkspaceStatus.RUNNING, labId: `lab_${Date.now()}` },
+      data: { enrollmentId, status: WorkspaceStatus.RUNNING, labId: `lab_${Date.now()}`, lastSeenAt: new Date() },
     });
 
     accessToken = await signAccessToken({ sub: user.id, email: user.email }, jwtSecret, '15m');
