@@ -1,9 +1,11 @@
 import 'dotenv/config';
 import { INestApplication } from '@nestjs/common';
+import type { NestExpressApplication } from '@nestjs/platform-express';
 import { Test } from '@nestjs/testing';
 import { PrismaClient } from '@prisma/client';
 import request from 'supertest';
 import { AppModule } from '../src/app.module';
+import { configureBodyParsers } from '../src/body-parsers';
 import { signAccessToken } from '../src/auth/tokens';
 import { CourseAssetStorageService } from '../src/courses/course-asset-storage.service';
 
@@ -48,7 +50,10 @@ describe('课时块 端到端', () => {
       .overrideProvider(CourseAssetStorageService)
       .useValue({ uploadBuffer: jest.fn().mockResolvedValue(STUB_URL) })
       .compile();
-    app = moduleRef.createNestApplication();
+    app = moduleRef.createNestApplication<NestExpressApplication>({
+      bodyParser: false,
+    });
+    configureBodyParsers(app);
     app.setGlobalPrefix('api/v1');
     await app.init();
 
@@ -175,6 +180,32 @@ describe('课时块 端到端', () => {
     );
     expect(publish.status).toBe(422);
     expect(JSON.stringify(publish.body.problems)).toContain('图片资源不存在');
+  });
+
+  it('150 KB 的课时内容能正常写入草稿，超过 256 KB 由业务返回 400 而不是被 body 解析器 413', async () => {
+    const blocks = Array.from({ length: 150 }, (_, i) => ({
+      id: `p${i}`,
+      type: 'paragraph',
+      props: { text: 'x'.repeat(1000) },
+    }));
+    await admin(
+      request(app.getHttpServer())
+        .patch(`/api/v1/admin/courses/${slug}/draft/lessons/intro`)
+        .send({ content: { schemaVersion: 1, blocks } }),
+    ).expect(200);
+
+    const tooBig = {
+      schemaVersion: 1,
+      blocks: [
+        { id: 'p', type: 'paragraph', props: { text: 'x'.repeat(300 * 1024) } },
+      ],
+    };
+    const res = await admin(
+      request(app.getHttpServer())
+        .patch(`/api/v1/admin/courses/${slug}/draft/lessons/intro`)
+        .send({ content: tooBig }),
+    ).expect(400);
+    expect(JSON.stringify(res.body)).toContain('256 KB');
   });
 
   it('草稿设置 level 后仍可发版，并映射到 Course.level', async () => {

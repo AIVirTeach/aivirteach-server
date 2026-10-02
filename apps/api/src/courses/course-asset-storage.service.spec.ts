@@ -28,11 +28,7 @@ describe('CourseAssetStorageService.upload', () => {
     expect(put).toHaveBeenCalledWith(
       'courses/sample-course/cover.png',
       expect.any(Buffer),
-      {
-        access: 'public',
-        contentType: 'application/octet-stream',
-        addRandomSuffix: true,
-      },
+      { access: 'public' },
     );
     expect(url).toBe(
       'https://blob.vercel-storage.com/courses/sample-course/cover.png',

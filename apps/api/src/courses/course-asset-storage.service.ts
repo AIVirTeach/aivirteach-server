@@ -6,7 +6,10 @@ import { put } from '@vercel/blob';
 export class CourseAssetStorageService {
   async upload(pathname: string, filePath: string): Promise<string> {
     const body = await readFile(filePath);
-    return this.uploadBuffer(pathname, body, 'application/octet-stream');
+    // CLI 摄取靠 URL basename 把 Markdown 图片文件名对回素材，所以这里不能加随机后缀；
+    // Content-Type 交给 Blob 按扩展名推断。
+    const blob = await put(pathname, body, { access: 'public' });
+    return blob.url;
   }
 
   async uploadBuffer(
