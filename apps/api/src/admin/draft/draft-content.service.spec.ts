@@ -116,6 +116,7 @@ describe('DraftContentService', () => {
         update: jest.fn(),
         updateMany: jest.fn().mockResolvedValue({ count: 1 }),
       },
+      $queryRaw: jest.fn().mockResolvedValue([{ id: 'draft' }]),
       $transaction: jest.fn(async (fn: (tx: unknown) => Promise<unknown>) =>
         fn(prisma),
       ),
@@ -132,6 +133,47 @@ describe('DraftContentService', () => {
       draft,
     };
   }
+
+  it('refuses draft writes once the version is no longer an unpublished draft', async () => {
+    const { prisma, service } = setup();
+    prisma.$queryRaw.mockResolvedValue([]);
+    await expect(
+      service.createModule(
+        'demo',
+        { title: 'New', description: 'D', estimatedMinutes: 4 },
+        'op',
+      ),
+    ).rejects.toBeInstanceOf(ConflictException);
+    expect(prisma.courseModule.create).not.toHaveBeenCalled();
+  });
+
+  it('rejects a lesson contentId that already exists in another module of the draft', async () => {
+    const { prisma, service } = setup();
+    prisma.courseLesson.findFirst.mockImplementation(
+      (args: { where: { contentId?: string; module?: unknown } }) =>
+        Promise.resolve(
+          args.where.contentId
+            ? args.where.module
+              ? { id: 'other-module-lesson' }
+              : null
+            : { position: 1 },
+        ),
+    );
+    await expect(
+      service.createLesson(
+        'demo',
+        'm1',
+        {
+          contentId: 'two',
+          title: 'L',
+          estimatedMinutes: 1,
+          activity: { type: 'guided', prompt: 'Go', completionType: 'manual' },
+        },
+        'op',
+      ),
+    ).rejects.toBeInstanceOf(ConflictException);
+    expect(prisma.courseLesson.create).not.toHaveBeenCalled();
+  });
 
   it('appends modules and lessons, defaults empty content, and audits writes', async () => {
     const { prisma, audit, service } = setup();

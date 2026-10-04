@@ -30,6 +30,11 @@ export function validateDraftForPublish(input: {
     problems.push('欢迎页资源不属于当前课程');
   }
 
+  if (modules.every((module) => module.lessons.length === 0)) {
+    // 首次发布已有更具体的“至少一个模块/课时”提示，不重复报。
+    if (!isFirstPublish) problems.push('课程至少需要一个课时');
+  }
+
   modules.forEach((module, moduleIndex) => {
     if (module.position !== moduleIndex + 1) {
       problems.push('模块 position 必须连续且从 1 开始');

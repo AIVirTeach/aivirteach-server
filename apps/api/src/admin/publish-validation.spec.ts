@@ -78,7 +78,7 @@ describe('validateDraftForPublish', () => {
     );
   });
 
-  it('requires modules and lessons per module on first publish, but not on later publishes', () => {
+  it('requires modules and lessons per module on first publish, and at least one lesson overall on every publish', () => {
     const empty = { ...draft([]), introFeaturedAssetIds: ['foreign-intro'] };
     expect(
       validateDraftForPublish({
@@ -95,7 +95,7 @@ describe('validateDraftForPublish', () => {
         coverAssetId: null,
         isFirstPublish: false,
       }),
-    ).toEqual([]);
+    ).toEqual(['课程至少需要一个课时']);
 
     const emptyModule = draft([moduleItem(1, [])]);
     expect(

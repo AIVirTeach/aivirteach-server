@@ -26,7 +26,11 @@ import {
   type UpdateLessonPatch,
   type UpdateModulePatch,
 } from './draft.schemas';
-import { DRAFT_INCLUDE, type DraftVersion } from './draft-version';
+import {
+  DRAFT_INCLUDE,
+  requireUnpublishedVersion,
+  type DraftVersion,
+} from './draft-version';
 
 const POSITION_OFFSET = 1_000_000;
 
@@ -134,12 +138,16 @@ export class DraftContentService {
           select: { id: true },
         });
         if (!module) throw new NotFoundException(`草稿模块 ${moduleId} 不存在`);
+        // contentId 在整个草稿内唯一：跨模块重复会让之后按 contentId 的 PATCH/DELETE/reorder 全部 409。
         const duplicate = await tx.courseLesson.findFirst({
-          where: { moduleId, contentId: data.contentId },
+          where: {
+            contentId: data.contentId,
+            module: { courseVersionId: draft.id },
+          },
           select: { id: true },
         });
         if (duplicate)
-          throw new ConflictException(`模块中已存在课时 ${data.contentId}`);
+          throw new ConflictException(`草稿中已存在课时 ${data.contentId}`);
         const last = await tx.courseLesson.findFirst({
           where: { moduleId },
           orderBy: { position: 'desc' },
@@ -375,6 +383,7 @@ export class DraftContentService {
     write: (tx: Prisma.TransactionClient) => Promise<void>,
   ): Promise<DraftVersion> {
     return this.prisma.$transaction(async (tx) => {
+      await requireUnpublishedVersion(tx, draft.id);
       await write(tx);
       const updated = await tx.courseVersion.findUnique({
         where: { id: draft.id },

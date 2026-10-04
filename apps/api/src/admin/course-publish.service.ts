@@ -1,4 +1,5 @@
 import {
+  ConflictException,
   Injectable,
   NotFoundException,
   UnprocessableEntityException,
@@ -9,7 +10,7 @@ import { mapCourseLevel } from '../courses/course-content.schemas';
 import { PrismaService } from '../prisma/prisma.service';
 import { CourseDraftService } from './draft/course-draft.service';
 import { CourseMetaPatchSchema } from './draft/draft.schemas';
-import { DRAFT_INCLUDE } from './draft/draft-version';
+import { DRAFT_INCLUDE, lockUnpublishedVersion } from './draft/draft-version';
 import { validateDraftForPublish } from './publish-validation';
 import { remapRemovedLessons } from './progress-remap';
 
@@ -66,37 +67,58 @@ export class CoursePublishService {
       });
     }
 
-    const oldOrder =
-      previousPublished?.modules.flatMap((module) =>
-        module.lessons.map((lesson) => lesson.contentId),
-      ) ?? [];
-    const newOrder = draft.modules
-      .slice()
-      .sort((a, b) => a.position - b.position)
-      .flatMap((module) =>
-        module.lessons
-          .slice()
-          .sort((a, b) => a.position - b.position)
-          .map((lesson) => lesson.contentId),
-      );
-    const remap = remapRemovedLessons(oldOrder, newOrder);
-    const allLessons = draft.modules.flatMap((module) => module.lessons);
-    const meta =
-      draft.meta && isJsonObject(draft.meta)
-        ? CourseMetaPatchSchema.parse(draft.meta)
-        : {};
-
     const published = await this.prisma.$transaction(async (tx) => {
+      // 草稿写入和发版互斥：先锁行，再重读草稿重新校验，校验与翻转之间不会有人改草稿。
+      if (!(await lockUnpublishedVersion(tx, draft.id))) {
+        const winner = await tx.courseVersion.findUnique({
+          where: { id: draft.id },
+        });
+        if (winner?.publishedAt) return winner;
+        throw new ConflictException(`课程草稿 ${slug} 已发生并发变化`);
+      }
+      const locked = await tx.courseVersion.findUnique({
+        where: { id: draft.id },
+        include: DRAFT_INCLUDE,
+      });
+      if (!locked) throw new NotFoundException(`课程草稿 ${slug} 不存在`);
+      const lockedProblems = validateDraftForPublish({
+        draft: locked,
+        courseAssetIds: new Set(assets.map((asset) => asset.id)),
+        coverAssetId: course.coverAssetId,
+        isFirstPublish: previousPublished === null,
+      });
+      if (lockedProblems.length) {
+        throw new UnprocessableEntityException({
+          message: '草稿校验未通过',
+          problems: lockedProblems,
+        });
+      }
+      const oldOrder =
+        previousPublished?.modules.flatMap((module) =>
+          module.lessons.map((lesson) => lesson.contentId),
+        ) ?? [];
+      const newOrder = locked.modules
+        .slice()
+        .sort((a, b) => a.position - b.position)
+        .flatMap((module) =>
+          module.lessons
+            .slice()
+            .sort((a, b) => a.position - b.position)
+            .map((lesson) => lesson.contentId),
+        );
+      const remap = remapRemovedLessons(oldOrder, newOrder);
+      const allLessons = locked.modules.flatMap((module) => module.lessons);
+      const meta =
+        locked.meta && isJsonObject(locked.meta)
+          ? CourseMetaPatchSchema.parse(locked.meta)
+          : {};
+
       const publishResult = await tx.courseVersion.updateMany({
         where: { id: draft.id, publishedAt: null },
         data: { publishedAt: new Date() },
       });
       if (publishResult.count !== 1) {
-        const winner = await tx.courseVersion.findUnique({
-          where: { id: draft.id },
-        });
-        if (winner?.publishedAt) return winner;
-        throw new Error(`课程草稿 ${slug} 已发生并发变化`);
+        throw new ConflictException(`课程草稿 ${slug} 已发生并发变化`);
       }
 
       await tx.course.update({

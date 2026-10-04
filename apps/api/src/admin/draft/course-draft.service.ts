@@ -12,7 +12,11 @@ import {
   WelcomePatchSchema,
   type WelcomePatch,
 } from './draft.schemas';
-import { DRAFT_INCLUDE, type DraftVersion } from './draft-version';
+import {
+  DRAFT_INCLUDE,
+  requireUnpublishedVersion,
+  type DraftVersion,
+} from './draft-version';
 
 @Injectable()
 export class CourseDraftService {
@@ -151,6 +155,7 @@ export class CourseDraftService {
     }
     const draft = await this.requireDraft(slug);
     await this.prisma.$transaction(async (tx) => {
+      await requireUnpublishedVersion(tx, draft.id);
       await tx.courseVersion.delete({ where: { id: draft.id } });
       await this.audit.record(
         {
@@ -192,6 +197,7 @@ export class CourseDraftService {
     const meta = { ...currentMeta, ...patch } as Prisma.InputJsonObject;
 
     return this.prisma.$transaction(async (tx) => {
+      await requireUnpublishedVersion(tx, draft.id);
       const updated = await tx.courseVersion.update({
         where: { id: draft.id },
         data: { meta },
@@ -232,6 +238,7 @@ export class CourseDraftService {
     }
     const draft = await this.requireDraft(slug);
     await this.prisma.$transaction(async (tx) => {
+      await requireUnpublishedVersion(tx, draft.id);
       await tx.courseWelcome.upsert({
         where: { courseVersionId: draft.id },
         create: {

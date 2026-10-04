@@ -99,6 +99,7 @@ describe('CourseDraftService', () => {
       },
       courseWelcome: { upsert: jest.fn() },
       courseAsset: { create: jest.fn() },
+      $queryRaw: jest.fn().mockResolvedValue([{ id: 'draft' }]),
       $transaction: jest.fn(async (callback: (tx: any) => Promise<unknown>) =>
         callback(prisma),
       ),
@@ -282,6 +283,23 @@ describe('CourseDraftService', () => {
     expect(prisma.courseVersion.delete).toHaveBeenCalledWith({
       where: { id: 'draft' },
     });
+  });
+
+  it('refuses to edit course metadata once the version has been published', async () => {
+    const { prisma, service } = setup();
+    prisma.course.findUnique.mockResolvedValue({
+      id: 'course-1',
+      slug: 'demo',
+    });
+    prisma.courseVersion.findFirst.mockResolvedValue({
+      id: 'draft',
+      meta: {},
+    });
+    prisma.$queryRaw.mockResolvedValue([]);
+    await expect(
+      service.updateCourse('demo', { title: 'New' }, 'operator'),
+    ).rejects.toBeInstanceOf(ConflictException);
+    expect(prisma.courseVersion.update).not.toHaveBeenCalled();
   });
 
   it('merges metadata on the draft and keeps the level in its client-facing form without touching Course', async () => {

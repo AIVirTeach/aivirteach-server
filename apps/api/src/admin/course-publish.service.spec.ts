@@ -42,6 +42,7 @@ function setup({
   draft = makeDraft(),
 } = {}) {
   const tx = {
+    $queryRaw: jest.fn().mockResolvedValue([{ id: 'draft-2' }]),
     courseVersion: {
       updateMany: jest.fn().mockResolvedValue({ count: 1 }),
       findUnique: jest
@@ -212,20 +213,52 @@ describe('CoursePublishService.publish', () => {
     expect(audit.record).not.toHaveBeenCalled();
   });
 
-  it('uses a conditional update so a concurrently published version is not overwritten', async () => {
+  it('locks the draft row before flipping and re-validates the draft as read inside the transaction', async () => {
     const { service, tx, audit } = setup();
-    tx.courseVersion.updateMany.mockResolvedValue({ count: 0 });
+    const staleOk = makeDraft();
+    // 校验通过后、翻转前草稿被改坏：事务内重读必须拦下，且不能写任何东西。
+    const changed = makeDraft({
+      modules: [
+        {
+          id: 'module-1',
+          position: 1,
+          title: '模块一',
+          lessons: [
+            {
+              ...lesson('a', 1, 5),
+              content: {
+                schemaVersion: 1,
+                blocks: [{ id: 'x', type: 'madeUp', props: {} }],
+              },
+            },
+          ],
+        },
+      ],
+    });
+    tx.courseVersion.findUnique.mockResolvedValue(changed);
+
+    await expect(
+      service.publish('demo', 'ops@example.com', 'release'),
+    ).rejects.toMatchObject({
+      response: { problems: expect.arrayContaining([expect.any(String)]) },
+    });
+    expect(staleOk.id).toBe('draft-2');
+    expect(tx.$queryRaw).toHaveBeenCalledTimes(1);
+    expect(tx.courseVersion.updateMany).not.toHaveBeenCalled();
+    expect(tx.course.update).not.toHaveBeenCalled();
+    expect(audit.record).not.toHaveBeenCalled();
+  });
+
+  it('treats a draft that is no longer unpublished as already published by someone else', async () => {
+    const { service, tx, audit } = setup();
+    tx.$queryRaw.mockResolvedValue([]);
     tx.courseVersion.findUnique.mockResolvedValue({
       id: 'draft-2',
       publishedAt: new Date(),
     });
 
     await service.publish('demo', 'ops@example.com', 'release');
-    expect(tx.courseVersion.updateMany).toHaveBeenCalledWith(
-      expect.objectContaining({
-        where: { id: 'draft-2', publishedAt: null },
-      }),
-    );
+    expect(tx.courseVersion.updateMany).not.toHaveBeenCalled();
     expect(tx.course.update).not.toHaveBeenCalled();
     expect(audit.record).toHaveBeenCalledTimes(1);
   });

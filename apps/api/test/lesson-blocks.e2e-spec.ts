@@ -244,4 +244,52 @@ describe('课时块 端到端', () => {
       (await prisma.course.findUniqueOrThrow({ where: { slug } })).level,
     ).toBe('INTERMEDIATE');
   });
+
+  it('后续版本：contentId 跨模块重复被拒；删光课时后发版 422，且发版前草稿写入被锁定在未发布版本上', async () => {
+    const draft = await admin(
+      request(app.getHttpServer())
+        .post(`/api/v1/admin/courses/${slug}/draft`)
+        .send(),
+    );
+    expect([200, 201]).toContain(draft.status);
+
+    const mod2 = await admin(
+      request(app.getHttpServer())
+        .post(`/api/v1/admin/courses/${slug}/draft/modules`)
+        .send({ title: '模块二', description: '', estimatedMinutes: 5 }),
+    ).expect(201);
+    const secondModuleId = (
+      mod2.body as { modules: { id: string; title: string }[] }
+    ).modules.find((m) => m.title === '模块二')!.id;
+    await admin(
+      request(app.getHttpServer())
+        .post(
+          `/api/v1/admin/courses/${slug}/draft/modules/${secondModuleId}/lessons`,
+        )
+        .send({
+          contentId: 'intro',
+          title: '重复',
+          estimatedMinutes: 1,
+          activity: { type: 'reading', prompt: '', completionType: 'manual' },
+        }),
+    ).expect(409);
+
+    const current = await admin(
+      request(app.getHttpServer()).get(`/api/v1/admin/courses/${slug}/draft`),
+    ).expect(200);
+    for (const m of (current.body as { modules: { id: string }[] }).modules) {
+      await admin(
+        request(app.getHttpServer()).delete(
+          `/api/v1/admin/courses/${slug}/draft/modules/${m.id}`,
+        ),
+      ).expect((res) => expect([200, 204]).toContain(res.status));
+    }
+    const publish = await admin(
+      request(app.getHttpServer())
+        .post(`/api/v1/admin/courses/${slug}/publish`)
+        .send({}),
+    );
+    expect(publish.status).toBe(422);
+    expect(JSON.stringify(publish.body.problems)).toContain('至少需要一个课时');
+  });
 });
