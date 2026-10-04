@@ -123,13 +123,18 @@ node -e "console.log(require('node:crypto').randomBytes(48).toString('base64url'
    SELECT "courseId", count(*) FROM "CourseVersion" WHERE "publishedAt" IS NULL GROUP BY 1 HAVING count(*) > 1;
    ```
 3. `npx prisma migrate deploy`（迁移 A，只加列和索引）。
-4. 回填：先 dry-run 看报告（`unresolved` / `skipped` / `pendingBody` 要为空或逐条确认），再加 `--execute`：
+4. 回填 dry-run，随时可以先跑、先审：`unresolved` / `skipped` / `pendingBody` 要为空或逐条确认。
    ```bash
    npm run cli -w api -- course:backfill-content-model -o "你的邮箱" -r "迁移 A 回填"
+   ```
+5. 真正回填（`--execute`）要**紧贴着部署**，选低峰期，执行完立刻部署：
+   ```bash
    npm run cli -w api -- course:backfill-content-model -o "你的邮箱" -r "迁移 A 回填" --execute
    ```
-5. 部署代码，观察学员读课和进度。
-6. 迁移 B（不可逆，删旧列）单独执行，必须有明确的批准，不随上面几步一起跑。
+6. 部署代码，观察学员读课和进度。**部署之后不要再跑回填。**
+7. 迁移 B（不可逆，删旧列）单独执行，必须有明确的批准，不随上面几步一起跑。
+
+**已知的上线窗口：** 旧代码一直在线到步骤 6，它只写旧字段 `currentLessonId`；回填只补 `currentLessonContentId` 为空的行，不会修正已经填过、之后又被旧代码推进的进度。所以步骤 5 执行之后、部署完成之前这几分钟里仍在推进课时的学员，部署后会回到回填时的位置；在这段时间里新开始学习的学员会显示未开始。其余学员不受影响。窗口越短越好，所以要求紧贴部署和低峰期。要做到零损失，需要新代码在迁移 B 之前同时写两个字段，这不在本 PR 范围内。
 
 代码上线后**不能直接回滚**：新代码不再写旧的 `currentLessonId`，回滚到旧版本会丢掉上线后产生的学员进度。
 
