@@ -1,3 +1,4 @@
+import type { TokenUsage } from '../domain/token-usage';
 import type { TokenWeights } from '../domain/token-weights';
 import { GetUsageReport } from './get-usage-report';
 import type {
@@ -30,11 +31,22 @@ const aggregate = (
   ...overrides,
 });
 
+const noUsage: TokenUsage = {
+  inputCacheHitTokens: 0,
+  inputCacheMissTokens: 0,
+  outputTokens: 0,
+};
+
 function fakeReadModel(
   rows: UsageAggregate[],
   granted: Record<string, number> = {},
+  lifetime: Record<string, TokenUsage> = {},
 ) {
-  const calls = { report: [] as unknown[], granted: [] as string[][] };
+  const calls = {
+    report: [] as unknown[],
+    granted: [] as string[][],
+    lifetime: [] as string[][],
+  };
   const readModel: UsageReportReadModel = {
     report: (query) => {
       calls.report.push(query);
@@ -44,6 +56,12 @@ function fakeReadModel(
       calls.granted.push(userIds);
       return Promise.resolve(
         new Map(userIds.map((id) => [id, granted[id] ?? 0])),
+      );
+    },
+    sumUsageByUser: (userIds) => {
+      calls.lifetime.push(userIds);
+      return Promise.resolve(
+        new Map(userIds.map((id) => [id, lifetime[id] ?? noUsage])),
       );
     },
   };
@@ -73,9 +91,11 @@ describe('GetUsageReport', () => {
   });
 
   it('按用户分组时附带累计发放额度和余额', async () => {
+    const sameAsWindow = aggregate().usage;
     const { readModel, calls } = fakeReadModel(
       [aggregate({ key: 'u1' }), aggregate({ key: 'u2' })],
       { u1: 1000 },
+      { u1: sameAsWindow, u2: sameAsWindow },
     );
     const rows = await new GetUsageReport(readModel, weights).execute({
       ...range,
@@ -83,9 +103,11 @@ describe('GetUsageReport', () => {
     });
 
     expect(calls.granted).toEqual([['u1', 'u2']]);
+    expect(calls.lifetime).toEqual([['u1', 'u2']]);
     expect(rows[0]).toMatchObject({
       key: 'u1',
       grantedTokens: 1000,
+      lifetimeConsumption: 500,
       balance: 500,
     });
     // 没发放过额度的用户：发放 0，余额为负（已超支）
@@ -94,6 +116,29 @@ describe('GetUsageReport', () => {
       grantedTokens: 0,
       balance: -500,
     });
+  });
+
+  it('余额按全期消耗计算（和 Guard 同口径），不受报表时间窗口影响', async () => {
+    // 窗口内只花了 500，但全期花了 5000：Guard 看到的是 5000，所以余额必须是 1000-5000。
+    const { readModel } = fakeReadModel(
+      [aggregate({ key: 'u1' })],
+      { u1: 1000 },
+      {
+        u1: {
+          inputCacheHitTokens: 10_000,
+          inputCacheMissTokens: 2_000,
+          outputTokens: 500,
+        },
+      },
+    );
+    const [row] = await new GetUsageReport(readModel, weights).execute({
+      ...range,
+      groupBy: 'user',
+    });
+
+    expect(row.weightedConsumption).toBe(500); // 窗口内
+    expect(row.lifetimeConsumption).toBe(1000 + 2000 + 2000);
+    expect(row.balance).toBe(1000 - 5000);
   });
 
   it.each(['course', 'day'] as const)(
@@ -106,7 +151,9 @@ describe('GetUsageReport', () => {
       });
 
       expect(calls.granted).toEqual([]);
+      expect(calls.lifetime).toEqual([]);
       expect(row).not.toHaveProperty('grantedTokens');
+      expect(row).not.toHaveProperty('lifetimeConsumption');
       expect(row).not.toHaveProperty('balance');
     },
   );
@@ -129,5 +176,6 @@ describe('GetUsageReport', () => {
       }),
     ).resolves.toEqual([]);
     expect(calls.granted).toEqual([]);
+    expect(calls.lifetime).toEqual([]);
   });
 });

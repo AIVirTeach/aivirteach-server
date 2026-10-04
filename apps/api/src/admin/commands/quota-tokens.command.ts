@@ -2,6 +2,9 @@ import { Command, CommandRunner, Option } from 'nest-commander';
 import { AdminService } from '../admin.service';
 import { OperatorSchema, ReasonSchema } from '../admin.schemas';
 
+// QuotaLedger.tokensDelta 是 32 位 Int，超过会在 --execute 写库时才报晦涩的 Prisma 错误。
+const MAX_GRANT_TOKENS = 2_147_483_647;
+
 interface QuotaGrantTokensOptions {
   operator: string;
   reason: string;
@@ -26,6 +29,11 @@ export class QuotaGrantTokensCommand extends CommandRunner {
     const tokens = Number(tokensRaw);
     if (!Number.isInteger(tokens) || tokens <= 0) {
       throw new Error(`token 数必须是正整数，收到：${tokensRaw}`);
+    }
+    if (tokens > MAX_GRANT_TOKENS) {
+      throw new Error(
+        `token 数不能超过 ${MAX_GRANT_TOKENS}，收到：${tokensRaw}`,
+      );
     }
 
     if (!options.execute) {

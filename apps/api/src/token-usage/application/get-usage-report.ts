@@ -1,4 +1,5 @@
 import { Inject, Injectable } from '@nestjs/common';
+import type { TokenUsage } from '../domain/token-usage';
 import {
   weightedConsumption,
   type TokenWeights,
@@ -10,6 +11,12 @@ import {
   type UsageReportReadModel,
 } from './usage-report-read-model';
 
+const NO_USAGE: TokenUsage = {
+  inputCacheHitTokens: 0,
+  inputCacheMissTokens: 0,
+  outputTokens: 0,
+};
+
 export interface UsageReportRow {
   key: string;
   label: string;
@@ -19,8 +26,10 @@ export interface UsageReportRow {
   weightedConsumption: number;
   meteredTurns: number;
   unmeteredTurns: number;
-  // 仅按用户分组时有：累计发放的额度和余额（发放 - 加权消耗）。
+  // 仅按用户分组时有。weightedConsumption 只统计报表时间窗口，而额度是全期的，
+  // 所以余额 = 累计发放 - 全期加权消耗（lifetimeConsumption），和 Guard 判定用的口径一致。
   grantedTokens?: number;
+  lifetimeConsumption?: number;
   balance?: number;
 }
 
@@ -34,12 +43,15 @@ export class GetUsageReport {
 
   async execute(query: UsageReportQuery): Promise<UsageReportRow[]> {
     const aggregates = await this.readModel.report(query);
-    const granted =
-      query.groupBy === 'user' && aggregates.length > 0
-        ? await this.readModel.sumGrantedTokensByUser(
-            aggregates.map((a) => a.key),
-          )
-        : null;
+    const userIds =
+      query.groupBy === 'user' ? aggregates.map((a) => a.key) : [];
+    const [granted, lifetime] =
+      userIds.length > 0
+        ? await Promise.all([
+            this.readModel.sumGrantedTokensByUser(userIds),
+            this.readModel.sumUsageByUser(userIds),
+          ])
+        : [null, null];
 
     return aggregates.map((aggregate) => {
       const consumed = weightedConsumption(aggregate.usage, this.weights);
@@ -53,10 +65,15 @@ export class GetUsageReport {
         meteredTurns: aggregate.meteredTurns,
         unmeteredTurns: aggregate.unmeteredTurns,
       };
-      if (granted) {
+      if (granted && lifetime) {
         const grantedTokens = granted.get(aggregate.key) ?? 0;
+        const lifetimeConsumption = weightedConsumption(
+          lifetime.get(aggregate.key) ?? NO_USAGE,
+          this.weights,
+        );
         row.grantedTokens = grantedTokens;
-        row.balance = grantedTokens - consumed;
+        row.lifetimeConsumption = lifetimeConsumption;
+        row.balance = grantedTokens - lifetimeConsumption;
       }
       return row;
     });

@@ -22,6 +22,8 @@ export interface UsageAggregate {
 export interface UsageReportReadModel {
   report(query: UsageReportQuery): Promise<UsageAggregate[]>;
   sumGrantedTokensByUser(userIds: string[]): Promise<Map<string, number>>;
+  // 全期（不受报表时间窗口限制）的用量，用来算和 Guard 同口径的余额。
+  sumUsageByUser(userIds: string[]): Promise<Map<string, TokenUsage>>;
 }
 
 export const USAGE_REPORT_READ_MODEL = Symbol('USAGE_REPORT_READ_MODEL');

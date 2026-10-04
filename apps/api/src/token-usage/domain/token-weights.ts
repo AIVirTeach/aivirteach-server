@@ -7,7 +7,8 @@ export interface TokenWeights {
   output: number;
 }
 
-// 向上取整：零头也要扣，否则大量小请求会永远扣不到额度。
+// 对汇总后的用量向上取整，只在汇总值上有 < 1 个单位的零头，不是逐请求取整；
+// 报表里分组之间各自取整，所以各组之和可能和用户总额差 1 个单位以内。
 export function weightedConsumption(
   usage: TokenUsage,
   weights: TokenWeights,

@@ -96,6 +96,25 @@ describe('QuotaGrantTokensCommand', () => {
     },
   );
 
+  it('token 数超过 32 位整数上限时在 dry-run 就拒绝，而不是等到写库才报错', async () => {
+    const grantTokenQuota = jest.fn();
+    const command = await buildCommand({ grantTokenQuota });
+
+    await expect(
+      command.run(['a@b.com', '2147483648'], {
+        operator: OPERATOR,
+        reason: REASON,
+      }),
+    ).rejects.toThrow('2147483647');
+    await expect(
+      command.run(['a@b.com', '2147483647'], {
+        operator: OPERATOR,
+        reason: REASON,
+      }),
+    ).resolves.toBeUndefined();
+    expect(grantTokenQuota).not.toHaveBeenCalled();
+  });
+
   it('operator 不是合法邮箱时拒绝', async () => {
     const grantTokenQuota = jest.fn();
     const command = await buildCommand({ grantTokenQuota });

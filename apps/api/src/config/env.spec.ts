@@ -56,6 +56,20 @@ describe('loadEnv', () => {
     ).toThrow(/TOKEN_WEIGHT_OUTPUT/);
   });
 
+  it('token 权重留空（如 TOKEN_WEIGHT_OUTPUT=）按未设置处理，不会变成 0', () => {
+    const env = loadEnv({
+      ...validSource,
+      TOKEN_WEIGHT_CACHE_HIT: '',
+      TOKEN_WEIGHT_INPUT_MISS: '',
+      TOKEN_WEIGHT_OUTPUT: '',
+    });
+    expect([
+      env.TOKEN_WEIGHT_CACHE_HIT,
+      env.TOKEN_WEIGHT_INPUT_MISS,
+      env.TOKEN_WEIGHT_OUTPUT,
+    ]).toEqual([0.02, 1, 4]);
+  });
+
   it('把数字型变量从字符串强制转换', () => {
     const env = loadEnv({
       ...validSource,

@@ -147,13 +147,13 @@ AI 助教每次回复消耗的 token 由 Labs 从 DeepSeek 的 `usage` 里取出
 
 **额度**是一个按用户的余额：`余额 = SUM(QuotaLedger.tokensDelta) - 加权消耗`，加权消耗 = `ceil(命中 × 0.02 + 未命中 × 1 + 输出 × 4)`（权重见环境变量）。余额 ≤ 0 时，聊天的两条 POST 路由（含流式）在 handler 之前返回 HTTP 429 `TOKEN_QUOTA_EXHAUSTED`，不写任何 Conversation。额度检查本身失败时放行（fail-open），只记错误日志。token 额度不支持过期。
 
-**运营报表**：`GET /api/v1/admin/token-usage?groupBy=user|course|day&from=…&to=…`（Bearer `ADMIN_API_TOKEN`；区间左闭右开，默认最近 7 天，按天分组用 UTC 日期）。每行带三类原始 token、加权消耗、`meteredTurns` 和 `unmeteredTurns`（真实 Agent 回复里没计上量的条数，非 0 说明数字被低估）；按用户分组时还有 `grantedTokens` 和 `balance`。
+**运营报表**：`GET /api/v1/admin/token-usage?groupBy=user|course|day&from=…&to=…`（Bearer `ADMIN_API_TOKEN`；区间左闭右开，默认最近 7 天，按天分组用 UTC 日期）。每行带三类原始 token、加权消耗、`meteredTurns` 和 `unmeteredTurns`（真实 Agent 回复里没计上量的条数，非 0 说明数字被低估）；按用户分组时还有 `grantedTokens`（累计发放）、`lifetimeConsumption`（**全期**加权消耗）和 `balance`（`grantedTokens - lifetimeConsumption`，和上面 429 判定同一口径）。注意 `weightedConsumption` 只统计报表时间窗口，所以不等于 `grantedTokens - balance`。
 
 ### 上线顺序
 
 1. 先部署 server 和迁移：`usage` 在响应里是可选的，Labs 还没改时一切照旧。
 2. 再部署 Labs，开始返回 usage，server 开始记录。
-3. 观察一段时间报表（看 `unmeteredTurns`），用 `quota:grant-tokens` 给用户发额度。
+3. 观察一段时间报表（看 `unmeteredTurns`），用 `quota:grant-tokens` 给用户发额度。**消耗从第一条被计量的回复开始累计，不是从发放额度开始**：观察期里已经用掉的量会从新发的额度里扣。发放前先看报表里该用户的 `lifetimeConsumption`，发放量要覆盖它再加上想给的新额度，否则开启强制后刚发完额度的用户可能立刻被 429。
 4. 最后把 `TOKEN_QUOTA_ENFORCED` 设为 `true`。**先开强制再发额度，所有没有额度的用户会立刻被 429。**
 
 ## 造第一个账号（联调用）

@@ -48,6 +48,20 @@ describe('GET /admin/token-usage 端到端', () => {
         outputTokens: 50,
       },
     });
+    // 窗口（2031-04-01 当天）之外的历史消耗：Guard 会算，窗口报表的 weightedConsumption 不算。
+    await prisma.conversation.create({
+      data: {
+        enrollmentId,
+        threadId: enrollmentId,
+        role: ConversationRole.ASSISTANT,
+        content: 'older reply',
+        contextRef: {},
+        createdAt: new Date('2031-03-01T10:00:00Z'),
+        inputCacheHitTokens: 0,
+        inputCacheMissTokens: 100,
+        outputTokens: 0,
+      },
+    });
     await prisma.quotaLedger.create({ data: { userId, tokensDelta: 1000 } });
   });
 
@@ -77,7 +91,8 @@ describe('GET /admin/token-usage 端到端', () => {
       .set('Authorization', `Bearer ${adminToken}`)
       .expect(200);
 
-    // 默认权重 0.02 / 1 / 4：ceil(1000*0.02 + 200*1 + 50*4) = 420
+    // 默认权重 0.02 / 1 / 4：窗口内 ceil(1000*0.02 + 200*1 + 50*4) = 420；
+    // 全期再加窗口外的 100 个 miss = 520，余额必须按全期算（和 Guard 一致）。
     expect(response.body).toContainEqual({
       key: userId,
       label: email,
@@ -88,7 +103,8 @@ describe('GET /admin/token-usage 端到端', () => {
       meteredTurns: 1,
       unmeteredTurns: 0,
       grantedTokens: 1000,
-      balance: 580,
+      lifetimeConsumption: 520,
+      balance: 480,
     });
   });
 

@@ -34,6 +34,13 @@ interface ReportRow {
   unmetered: number;
 }
 
+interface UserUsageRow {
+  userId: string;
+  hit: number;
+  miss: number;
+  output: number;
+}
+
 @Injectable()
 export class PrismaUsageReadModel
   implements UsageReadModel, UsageReportReadModel
@@ -102,6 +109,30 @@ export class PrismaUsageReadModel
       meteredTurns: row.metered,
       unmeteredTurns: row.unmetered,
     }));
+  }
+
+  async sumUsageByUser(userIds: string[]): Promise<Map<string, TokenUsage>> {
+    const usage = new Map<string, TokenUsage>();
+    if (userIds.length === 0) return usage;
+    const rows = await this.prisma.$queryRaw<UserUsageRow[]>(Prisma.sql`
+      SELECT
+        e."userId" AS "userId",
+        COALESCE(SUM(c."inputCacheHitTokens"), 0)::float8 AS hit,
+        COALESCE(SUM(c."inputCacheMissTokens"), 0)::float8 AS miss,
+        COALESCE(SUM(c."outputTokens"), 0)::float8 AS output
+      FROM "Conversation" c
+      JOIN "Enrollment" e ON e."id" = c."enrollmentId"
+      WHERE e."userId" IN (${Prisma.join(userIds)})
+      GROUP BY e."userId"
+    `);
+    for (const row of rows) {
+      usage.set(row.userId, {
+        inputCacheHitTokens: row.hit,
+        inputCacheMissTokens: row.miss,
+        outputTokens: row.output,
+      });
+    }
+    return usage;
   }
 
   async sumGrantedTokensByUser(

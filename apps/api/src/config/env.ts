@@ -1,5 +1,13 @@
 import { z } from 'zod';
 
+// 留空（如 TOKEN_WEIGHT_OUTPUT=）按未设置处理：z.coerce.number() 会把 '' 变成 0，
+// 等于悄悄让这一类 token 免费。
+const tokenWeight = (fallback: number) =>
+  z.preprocess(
+    (value) => (value === '' ? undefined : value),
+    z.coerce.number().nonnegative().default(fallback),
+  );
+
 // 在进程启动时一次性校验，缺配置就直接崩，不要等到第一个请求进来才发现。
 const EnvSchema = z.object({
   DATABASE_URL: z.string().min(1, 'DATABASE_URL 不能为空'),
@@ -51,9 +59,9 @@ const EnvSchema = z.object({
   // 三类 token 折算成额度的权重，以未命中输入 = 1 为基准。默认值取自 DeepSeek flash 的
   // 价格比例（缓存命中 0.003 : 未命中 0.15 : 输出 0.6 美元/百万 token，高峰/低谷同比例）；
   // 换模型或价格变了要同步调整。
-  TOKEN_WEIGHT_CACHE_HIT: z.coerce.number().nonnegative().default(0.02),
-  TOKEN_WEIGHT_INPUT_MISS: z.coerce.number().nonnegative().default(1),
-  TOKEN_WEIGHT_OUTPUT: z.coerce.number().nonnegative().default(4),
+  TOKEN_WEIGHT_CACHE_HIT: tokenWeight(0.02),
+  TOKEN_WEIGHT_INPUT_MISS: tokenWeight(1),
+  TOKEN_WEIGHT_OUTPUT: tokenWeight(4),
 });
 
 export type Env = z.infer<typeof EnvSchema>;
