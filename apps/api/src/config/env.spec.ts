@@ -18,7 +18,42 @@ describe('loadEnv', () => {
       PORT: 4000,
       CORS_ORIGINS: 'tauri://localhost',
       WORKSPACE_IDLE_TIMEOUT_MINUTES: 15,
+      TOKEN_QUOTA_ENFORCED: false,
+      TOKEN_WEIGHT_CACHE_HIT: 0.02,
+      TOKEN_WEIGHT_INPUT_MISS: 1,
+      TOKEN_WEIGHT_OUTPUT: 4,
     });
+  });
+
+  it('TOKEN_QUOTA_ENFORCED 只认 true/false 字符串，"false" 不能被当成真值', () => {
+    expect(
+      loadEnv({ ...validSource, TOKEN_QUOTA_ENFORCED: 'true' })
+        .TOKEN_QUOTA_ENFORCED,
+    ).toBe(true);
+    expect(
+      loadEnv({ ...validSource, TOKEN_QUOTA_ENFORCED: 'false' })
+        .TOKEN_QUOTA_ENFORCED,
+    ).toBe(false);
+    expect(() =>
+      loadEnv({ ...validSource, TOKEN_QUOTA_ENFORCED: 'yes' }),
+    ).toThrow(/TOKEN_QUOTA_ENFORCED/);
+  });
+
+  it('token 权重从字符串转成数字，不接受负数', () => {
+    const env = loadEnv({
+      ...validSource,
+      TOKEN_WEIGHT_CACHE_HIT: '0.1',
+      TOKEN_WEIGHT_INPUT_MISS: '2',
+      TOKEN_WEIGHT_OUTPUT: '8',
+    });
+    expect([
+      env.TOKEN_WEIGHT_CACHE_HIT,
+      env.TOKEN_WEIGHT_INPUT_MISS,
+      env.TOKEN_WEIGHT_OUTPUT,
+    ]).toEqual([0.1, 2, 8]);
+    expect(() =>
+      loadEnv({ ...validSource, TOKEN_WEIGHT_OUTPUT: '-1' }),
+    ).toThrow(/TOKEN_WEIGHT_OUTPUT/);
   });
 
   it('把数字型变量从字符串强制转换', () => {

@@ -335,15 +335,20 @@ model Attempt {
 }
 
 model Conversation {
-  id           String           @id @default(cuid())
-  enrollmentId String
-  enrollment   Enrollment       @relation(fields: [enrollmentId], references: [id], onDelete: Cascade)
-  threadId     String
-  role         ConversationRole
-  content      String
+  id                   String           @id @default(cuid())
+  enrollmentId         String
+  enrollment           Enrollment       @relation(fields: [enrollmentId], references: [id], onDelete: Cascade)
+  threadId             String
+  role                 ConversationRole
+  content              String
   // 拼给 Labs /v1/agent/diagnose 的素材（当前步骤、截图、评测结果等）。
-  contextRef   Json?
-  createdAt    DateTime         @default(now())
+  contextRef           Json?
+  // 这条 Agent 回复消耗的 token，按计费口径分三类；Labs 没返回 usage 时留空。
+  // 不存 total（三项之和）；推理 token 已含在 outputTokens 里。
+  inputCacheHitTokens  Int?
+  inputCacheMissTokens Int?
+  outputTokens         Int?
+  createdAt            DateTime         @default(now())
 
   @@index([enrollmentId, threadId])
 }
@@ -387,7 +392,9 @@ model QuotaLedger {
   id           String    @id @default(cuid())
   userId       String
   user         User      @relation(fields: [userId], references: [id], onDelete: Cascade)
-  minutesDelta Int
+  // 一行要么发分钟额度，要么发 token 额度，另一个字段保持默认 0。
+  minutesDelta Int       @default(0)
+  tokensDelta  Int       @default(0)
   expiresAt    DateTime?
   createdAt    DateTime  @default(now())
 

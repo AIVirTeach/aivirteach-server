@@ -366,3 +366,54 @@ describe('AdminService.setCourseCover', () => {
     expect(asset.id).toBe('asset_1');
   });
 });
+
+describe('AdminService.grantTokenQuota', () => {
+  it('给不存在的用户发 token 额度抛 NotFoundException，不写账本', async () => {
+    const prisma = buildPrisma();
+    prisma.user.findUnique.mockResolvedValue(null);
+    const { service } = await buildService(prisma);
+
+    await expect(
+      service.grantTokenQuota('ghost@example.com', 1_000_000, OPERATOR, REASON),
+    ).rejects.toBeInstanceOf(NotFoundException);
+    expect(prisma.quotaLedger.create).not.toHaveBeenCalled();
+  });
+
+  it('写入 QuotaLedger 的 tokensDelta 正数流水（minutesDelta 留默认 0），并带审计', async () => {
+    const prisma = buildPrisma();
+    prisma.user.findUnique.mockResolvedValue({
+      id: 'user_1',
+      email: 'a@b.com',
+    });
+    prisma.quotaLedger.create.mockResolvedValue({
+      id: 'ledger_2',
+      userId: 'user_1',
+      minutesDelta: 0,
+      tokensDelta: 1_000_000,
+    });
+    const { service, audit } = await buildService(prisma);
+
+    const entry = await service.grantTokenQuota(
+      'a@b.com',
+      1_000_000,
+      OPERATOR,
+      REASON,
+    );
+
+    expect(entry.tokensDelta).toBe(1_000_000);
+    expect(prisma.quotaLedger.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: { userId: 'user_1', tokensDelta: 1_000_000 },
+      }),
+    );
+    expect(audit.record).toHaveBeenCalledWith(
+      expect.objectContaining({
+        actor: { type: AuditActorType.OPERATOR, id: OPERATOR },
+        action: 'admin.grantTokenQuota',
+        targetType: 'QuotaLedger',
+        targetId: 'ledger_2',
+        reason: REASON,
+      }),
+    );
+  });
+});

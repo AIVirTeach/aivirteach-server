@@ -223,6 +223,30 @@ export class AdminService {
     return entry;
   }
 
+  async grantTokenQuota(
+    email: string,
+    tokens: number,
+    operator: string,
+    reason: string,
+  ): Promise<QuotaLedger> {
+    const user = await this.requireUser(email);
+
+    const entry = await this.prisma.quotaLedger.create({
+      data: { userId: user.id, tokensDelta: tokens },
+    });
+
+    await this.audit.record({
+      actor: { type: AuditActorType.OPERATOR, id: operator },
+      action: 'admin.grantTokenQuota',
+      success: true,
+      targetType: 'QuotaLedger',
+      targetId: entry.id,
+      reason,
+    });
+
+    return entry;
+  }
+
   private async requireUser(email: string) {
     const user = await this.prisma.user.findUnique({ where: { email } });
     if (!user) {

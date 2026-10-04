@@ -13,6 +13,10 @@ const BASE_ENV: Env = {
   PORT: 4000,
   CORS_ORIGINS: 'http://localhost:3001',
   WORKSPACE_IDLE_TIMEOUT_MINUTES: 15,
+  TOKEN_QUOTA_ENFORCED: false,
+  TOKEN_WEIGHT_CACHE_HIT: 0.02,
+  TOKEN_WEIGHT_INPUT_MISS: 1,
+  TOKEN_WEIGHT_OUTPUT: 4,
 };
 
 async function buildClient(envOverrides: Partial<Env>) {
