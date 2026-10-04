@@ -60,7 +60,7 @@
 | `annotatedCode` | `title?` ≤120；`fileLabel?` ≤80；`steps` 1–20 项，每项 `label` 1–80、`code` 1–10000、`explanationTitle?` ≤80、`explanation?` *行内* ≤1000、`terms` 0–10 项（`term` ≤60、`description` *行内* ≤300） | 容器够宽（≥640px）时左代码右讲解，窄（侧栏）时上下堆叠；每步有 `STEP n` 标签和独立 Copy |
 | `diagram` | `title?` ≤120；`nodes` 2–12 个（`id`、`title` ≤60、`description?` ≤200）；`connections` 数组（`from`、`to`、`label?` ≤40） | v1 只做纵向流程，不做分叉和横向；`connections` 引用的节点必须存在 |
 
-**行内 Markdown 子集：** `**粗体**`、`*斜体*`、`==高亮==`（渲染为加粗，无背景）、`` `行内代码` ``、`[文字](url)`、换行。链接只放行 http / https / mailto，其余当普通文字。反斜杠转义：`\*`、`\``、`\[`、`\]`、`\=`、`\\` 取字面字符（Markdown 转换时保证源文字里的字面符号不被当成格式）。不支持原始 HTML，所有文字一律转义。
+**行内 Markdown 子集：** `**粗体**`、`*斜体*`、`==高亮==`（渲染为加粗，无背景）、`` `行内代码` ``、`[文字](url)`、换行。链接只放行 http / https / mailto：带显式协议（`scheme:`）的目标只有这三种合法，其余协议（javascript、data、ftp 等）发版校验报 `invalid-link`、client 渲染时当普通文字；不带协议的目标（`#锚点`、相对路径）放行。校验前先去掉链接标题、尖括号和制表/换行符；超长标签/目标或扫描量超预算同样报错。反斜杠转义：`\*`、`\``、`\[`、`\]`、`\=`、`\\` 取字面字符（Markdown 转换时保证源文字里的字面符号不被当成格式）。不支持原始 HTML，所有文字一律转义。
 
 ## 5. 渲染规则（client）
 
