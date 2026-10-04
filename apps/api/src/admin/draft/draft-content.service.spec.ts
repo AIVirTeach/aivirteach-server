@@ -95,13 +95,39 @@ describe('DraftContentService', () => {
       },
       courseModule: {
         findFirst: jest.fn().mockResolvedValue({ position: 2 }),
+        findMany: jest.fn().mockResolvedValue([]),
         create: jest.fn().mockResolvedValue({ id: 'm3' }),
         update: jest.fn(),
         updateMany: jest.fn(),
         delete: jest.fn(),
       },
       courseLesson: {
-        findMany: jest.fn(),
+        // 带 contentId 的是按 contentId 找课时行；不带的是删除后读兄弟序号（各用例自行 mock）。
+        findMany: jest
+          .fn()
+          .mockImplementation((args: { where: { contentId?: string } }) => {
+            const modules = (draft.modules ?? []) as {
+              id: string;
+              title: string;
+              lessons: { id: string; contentId: string; position: number }[];
+            }[];
+            return Promise.resolve(
+              args.where.contentId === undefined
+                ? []
+                : modules.flatMap((module) =>
+                    module.lessons
+                      .filter(
+                        (lesson) => lesson.contentId === args.where.contentId,
+                      )
+                      .map((lesson) => ({
+                        id: lesson.id,
+                        moduleId: module.id,
+                        position: lesson.position,
+                        module: { title: module.title },
+                      })),
+                  ),
+            );
+          }),
         findFirst: jest
           .fn()
           .mockImplementation((args: { where: { contentId?: string } }) =>
@@ -356,7 +382,7 @@ describe('DraftContentService', () => {
     expect(prisma.courseLesson.updateMany).not.toHaveBeenCalled();
   });
 
-  it('rejects ambiguous deleteLesson before opening a write transaction', async () => {
+  it('rejects ambiguous deleteLesson without writing', async () => {
     const dup = {
       id: 'draft',
       modules: [
@@ -372,7 +398,6 @@ describe('DraftContentService', () => {
     await expect(
       service.deleteLesson('demo', 'same', 'op'),
     ).rejects.toBeInstanceOf(ConflictException);
-    expect(prisma.$transaction).not.toHaveBeenCalled();
     expect(prisma.courseLesson.delete).not.toHaveBeenCalled();
     expect(prisma.courseLesson.updateMany).not.toHaveBeenCalled();
   });
@@ -410,6 +435,7 @@ describe('DraftContentService', () => {
   it('renumbers after deletes, updates assessment and throws when draft is missing', async () => {
     const { service, prisma } = setup();
     prisma.courseModule.findFirst.mockResolvedValue({ id: 'm1', position: 1 });
+    prisma.courseModule.findMany.mockResolvedValue([{ id: 'm2', position: 2 }]);
     prisma.courseModule.delete.mockResolvedValue({});
     prisma.courseModule.updateMany.mockResolvedValue({ count: 1 });
     await service.deleteModule('demo', 'm1', 'op');
@@ -445,11 +471,21 @@ describe('DraftContentService', () => {
       ],
     };
     const lessonSetup = setup(lessonDraft);
-    lessonSetup.prisma.courseLesson.findFirst.mockResolvedValue({
-      id: 'l1',
-      moduleId: 'm1',
-      position: 1,
-    });
+    lessonSetup.prisma.courseLesson.findMany.mockImplementation(
+      (args: { where: { contentId?: string } }) =>
+        Promise.resolve(
+          args.where.contentId
+            ? [
+                {
+                  id: 'l1',
+                  moduleId: 'm1',
+                  position: 1,
+                  module: { title: 'Module 1' },
+                },
+              ]
+            : [{ id: 'l1b', position: 2 }],
+        ),
+    );
     lessonSetup.prisma.courseLesson.delete.mockResolvedValue({});
     lessonSetup.prisma.courseLesson.updateMany.mockResolvedValue({ count: 1 });
     await lessonSetup.service.deleteLesson('demo', 'one', 'op');
@@ -490,5 +526,61 @@ describe('DraftContentService', () => {
     await expect(
       service.deleteModule('demo', 'm1', 'op'),
     ).rejects.toBeInstanceOf(NotFoundException);
+  });
+  it('locks the draft before reading siblings, so renumbering uses live rows', async () => {
+    const { service, prisma } = setup();
+    prisma.courseModule.findFirst.mockResolvedValue({ id: 'm1', position: 1 });
+    // 锁之后才出现的新模块（position 3）也必须被重新编号。
+    prisma.courseModule.findMany.mockResolvedValue([
+      { id: 'm2', position: 2 },
+      { id: 'm-new', position: 3 },
+    ]);
+    await service.deleteModule('demo', 'm1', 'op');
+    expect(prisma.$queryRaw.mock.invocationCallOrder[0]).toBeLessThan(
+      prisma.courseModule.findMany.mock.invocationCallOrder[0],
+    );
+    expect(prisma.courseModule.update).toHaveBeenCalledWith({
+      where: { id: 'm-new' },
+      data: { position: 2 },
+    });
+  });
+
+  it('validates reorder against the snapshot read after the lock', async () => {
+    const { service, prisma, draft } = setup();
+    // 锁之后的快照里多了一个并发创建的模块：只含旧两个模块的排列必须被拒。
+    prisma.courseVersion.findUnique.mockResolvedValue({
+      ...draft,
+      modules: [
+        ...draft.modules,
+        { id: 'm3', title: 'Module 3', position: 3, lessons: [] },
+      ],
+    });
+    await expect(
+      service.reorder(
+        'demo',
+        {
+          modules: [
+            { id: 'm2', lessons: ['two'] },
+            { id: 'm1', lessons: ['one'] },
+          ],
+        },
+        'op',
+      ),
+    ).rejects.toBeInstanceOf(BadRequestException);
+    expect(prisma.courseModule.update).not.toHaveBeenCalled();
+  });
+
+  it('answers writes with a summary that omits lesson body and content', async () => {
+    const { service, prisma } = setup();
+    await service.createModule(
+      'demo',
+      { title: 'M', description: '', estimatedMinutes: 1 },
+      'op',
+    );
+    const arg = prisma.courseVersion.findUnique.mock.calls.at(-1)[0];
+    expect(arg.include.modules.include.lessons.omit).toEqual({
+      body: true,
+      content: true,
+    });
   });
 });

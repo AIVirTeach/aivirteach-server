@@ -3,6 +3,7 @@ import { Prisma } from '@prisma/client';
 import { AuditService } from '../../audit/audit.service';
 import { CourseDraftService } from './course-draft.service';
 import { CourseMetaPatchSchema, WelcomePatchSchema } from './draft.schemas';
+import { DRAFT_SUMMARY_INCLUDE } from './draft-version';
 
 describe('draft schemas', () => {
   it('accepts partial known course metadata and rejects unknown fields/levels', () => {
@@ -304,31 +305,19 @@ describe('CourseDraftService', () => {
 
   it('merges metadata on the draft and keeps the level in its client-facing form without touching Course', async () => {
     const { prisma, audit, service } = setup();
-    const draft = { id: 'draft', meta: { title: 'Old', tags: ['one'] } };
+    const draft = { id: 'draft', courseId: 'course-1' };
     prisma.course.findUnique.mockResolvedValue({
       id: 'course-1',
       slug: 'demo',
     });
-    prisma.courseVersion.findFirst
-      .mockResolvedValueOnce(draft)
+    prisma.courseVersion.findFirst.mockResolvedValue(draft);
+    // meta 在锁内重读：第二次 PATCH 读到的是第一次已写入的结果。
+    prisma.courseVersion.findUnique
+      .mockResolvedValueOnce({ meta: { title: 'Old', tags: ['one'] } })
       .mockResolvedValueOnce({
-        ...draft,
         meta: { title: 'New', tags: ['one'], level: 'Intermediate' },
       });
-    prisma.courseVersion.update
-      .mockResolvedValueOnce({
-        ...draft,
-        meta: { title: 'New', tags: ['one'], level: 'Intermediate' },
-      })
-      .mockResolvedValueOnce({
-        ...draft,
-        meta: {
-          title: 'New',
-          tags: ['one'],
-          level: 'Intermediate',
-          description: 'Added',
-        },
-      });
+    prisma.courseVersion.update.mockResolvedValue(draft);
     await service.updateCourse(
       'demo',
       { title: 'New', level: 'Intermediate' },
@@ -338,7 +327,7 @@ describe('CourseDraftService', () => {
     expect(prisma.courseVersion.update).toHaveBeenNthCalledWith(1, {
       where: { id: 'draft' },
       data: { meta: { title: 'New', tags: ['one'], level: 'Intermediate' } },
-      include: expect.any(Object),
+      include: DRAFT_SUMMARY_INCLUDE,
     });
     expect(prisma.courseVersion.update).toHaveBeenNthCalledWith(2, {
       where: { id: 'draft' },
@@ -350,8 +339,11 @@ describe('CourseDraftService', () => {
           description: 'Added',
         },
       },
-      include: expect.any(Object),
+      include: DRAFT_SUMMARY_INCLUDE,
     });
+    expect(prisma.$queryRaw.mock.invocationCallOrder[0]).toBeLessThan(
+      prisma.courseVersion.findUnique.mock.invocationCallOrder[0],
+    );
     expect(prisma.course.update).not.toHaveBeenCalled();
     expect(audit.record).toHaveBeenCalledWith(
       expect.objectContaining({

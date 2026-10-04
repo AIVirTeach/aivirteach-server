@@ -52,7 +52,6 @@ function setup({
     course: { update: jest.fn().mockResolvedValue({}) },
     progress: { updateMany: jest.fn().mockResolvedValue({ count: 1 }) },
   };
-  let transactionCommitted = false;
   const prisma = {
     course: {
       findUnique: jest.fn().mockResolvedValue({
@@ -87,17 +86,12 @@ function setup({
     courseAsset: { findMany: jest.fn().mockResolvedValue([{ id: 'asset-1' }]) },
     $transaction: jest.fn(
       async (callback: (client: typeof tx) => Promise<unknown>) => {
-        const result = await callback(tx);
-        transactionCommitted = true;
-        return result;
+        return callback(tx);
       },
     ),
   };
   const audit = {
-    // eslint-disable-next-line @typescript-eslint/require-await -- mock 需要返回 Promise
-    record: jest.fn(async () => {
-      expect(transactionCommitted).toBe(true);
-    }),
+    record: jest.fn().mockResolvedValue(undefined),
   };
   const drafts = { requireDraft: jest.fn().mockResolvedValue(draft) };
   const service = new CoursePublishService(
@@ -119,7 +113,7 @@ describe('CoursePublishService.publish', () => {
     );
   });
 
-  it('publishes atomically, recomputes course summary, remaps only active removed pointers, then audits', async () => {
+  it('publishes atomically, recomputes course summary, remaps only active removed pointers, and audits inside the transaction', async () => {
     const { service, prisma, tx, audit } = setup();
     const result = await service.publish('demo', 'ops@example.com', 'release');
 
@@ -149,15 +143,18 @@ describe('CoursePublishService.publish', () => {
       data: { currentLessonContentId: 'c' },
     });
     // Null and completed progress pointers are outside the exact removed-id predicate.
-    expect(audit.record).toHaveBeenCalledWith({
-      actor: { type: AuditActorType.OPERATOR, id: 'ops@example.com' },
-      action: 'admin.publishCourse',
-      success: true,
-      targetType: 'CourseVersion',
-      targetId: 'draft-2',
-      reason: 'release',
-      metadata: { slug: 'demo', version: 2 },
-    });
+    expect(audit.record).toHaveBeenCalledWith(
+      {
+        actor: { type: AuditActorType.OPERATOR, id: 'ops@example.com' },
+        action: 'admin.publishCourse',
+        success: true,
+        targetType: 'CourseVersion',
+        targetId: 'draft-2',
+        reason: 'release',
+        metadata: { slug: 'demo', version: 2 },
+      },
+      tx,
+    );
     expect(prisma.$transaction).toHaveBeenCalledTimes(1);
   });
 
@@ -260,6 +257,15 @@ describe('CoursePublishService.publish', () => {
     await service.publish('demo', 'ops@example.com', 'release');
     expect(tx.courseVersion.updateMany).not.toHaveBeenCalled();
     expect(tx.course.update).not.toHaveBeenCalled();
-    expect(audit.record).toHaveBeenCalledTimes(1);
+    // 别人已经发布了：这次调用是空操作，不重复记审计（赢家在自己的事务里已记过）。
+    expect(audit.record).not.toHaveBeenCalled();
+  });
+
+  it('rolls the publish back when the audit write fails', async () => {
+    const { service, audit } = setup();
+    audit.record.mockRejectedValue(new Error('audit down'));
+    await expect(
+      service.publish('demo', 'ops@example.com', 'release'),
+    ).rejects.toThrow('audit down');
   });
 });

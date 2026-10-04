@@ -10,7 +10,11 @@ import { mapCourseLevel } from '../courses/course-content.schemas';
 import { PrismaService } from '../prisma/prisma.service';
 import { CourseDraftService } from './draft/course-draft.service';
 import { CourseMetaPatchSchema } from './draft/draft.schemas';
-import { DRAFT_INCLUDE, lockUnpublishedVersion } from './draft/draft-version';
+import {
+  DRAFT_INCLUDE,
+  DRAFT_TX_OPTIONS,
+  lockUnpublishedVersion,
+} from './draft/draft-version';
 import { validateDraftForPublish } from './publish-validation';
 import { remapRemovedLessons } from './progress-remap';
 
@@ -165,18 +169,21 @@ export class CoursePublishService {
         include: DRAFT_INCLUDE,
       });
       if (!version) throw new NotFoundException(`课程草稿 ${slug} 不存在`);
+      // 审计和发版同一事务：审计写失败则整个发版回滚，重试时不会走"已发布"空操作而漏掉审计。
+      await this.audit.record(
+        {
+          actor: { type: AuditActorType.OPERATOR, id: operator },
+          action: 'admin.publishCourse',
+          success: true,
+          targetType: 'CourseVersion',
+          targetId: version.id,
+          reason,
+          metadata: { slug, version: version.version },
+        },
+        tx,
+      );
       return version;
-    });
-
-    await this.audit.record({
-      actor: { type: AuditActorType.OPERATOR, id: operator },
-      action: 'admin.publishCourse',
-      success: true,
-      targetType: 'CourseVersion',
-      targetId: published.id,
-      reason,
-      metadata: { slug, version: published.version },
-    });
+    }, DRAFT_TX_OPTIONS);
 
     return published;
   }

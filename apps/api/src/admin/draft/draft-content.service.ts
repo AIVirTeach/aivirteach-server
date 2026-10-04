@@ -27,13 +27,18 @@ import {
   type UpdateModulePatch,
 } from './draft.schemas';
 import {
-  DRAFT_INCLUDE,
+  DRAFT_SUMMARY_INCLUDE,
+  DRAFT_TX_OPTIONS,
   requireUnpublishedVersion,
-  type DraftVersion,
+  type DraftSummary,
 } from './draft-version';
 
 const POSITION_OFFSET = 1_000_000;
 
+type Snapshot = () => Promise<DraftSummary>;
+
+// 草稿写入的约定：入口只取草稿 id（requireDraftRef），真正依赖的数据（兄弟序号、课时行、全量排列）
+// 都在加锁后的事务内重读，所以并发的创建/删除/重排不会基于过期快照互相破坏。
 @Injectable()
 export class DraftContentService {
   constructor(
@@ -46,10 +51,10 @@ export class DraftContentService {
     slug: string,
     input: CreateModuleInput,
     operator: string,
-  ): Promise<DraftVersion> {
+  ): Promise<DraftSummary> {
     const data = CreateModuleSchema.parse(input);
-    const draft = await this.drafts.requireDraft(slug);
-    return this.mutate(slug, draft, operator, 'createModule', async (tx) => {
+    const draft = await this.drafts.requireDraftRef(slug);
+    return this.mutate(slug, draft.id, operator, 'createModule', async (tx) => {
       const last = await tx.courseModule.findFirst({
         where: { courseVersionId: draft.id },
         orderBy: { position: 'desc' },
@@ -70,10 +75,10 @@ export class DraftContentService {
     moduleId: string,
     patchInput: UpdateModulePatch,
     operator: string,
-  ): Promise<DraftVersion> {
+  ): Promise<DraftSummary> {
     const patch = UpdateModulePatchSchema.parse(patchInput);
-    const draft = await this.drafts.requireDraft(slug);
-    return this.mutate(slug, draft, operator, 'updateModule', async (tx) => {
+    const draft = await this.drafts.requireDraftRef(slug);
+    return this.mutate(slug, draft.id, operator, 'updateModule', async (tx) => {
       const module = await tx.courseModule.findFirst({
         where: { id: moduleId, courseVersionId: draft.id },
         select: { id: true },
@@ -87,18 +92,20 @@ export class DraftContentService {
     slug: string,
     moduleId: string,
     operator: string,
-  ): Promise<DraftVersion> {
-    const draft = await this.drafts.requireDraft(slug);
-    return this.mutate(slug, draft, operator, 'deleteModule', async (tx) => {
+  ): Promise<DraftSummary> {
+    const draft = await this.drafts.requireDraftRef(slug);
+    return this.mutate(slug, draft.id, operator, 'deleteModule', async (tx) => {
       const module = await tx.courseModule.findFirst({
         where: { id: moduleId, courseVersionId: draft.id },
         select: { id: true, position: true },
       });
       if (!module) throw new NotFoundException(`草稿模块 ${moduleId} 不存在`);
       await tx.courseModule.delete({ where: { id: moduleId } });
-      const remaining = draft.modules
-        .filter((item) => item.position > module.position)
-        .sort((a, b) => a.position - b.position);
+      const remaining = await tx.courseModule.findMany({
+        where: { courseVersionId: draft.id, position: { gt: module.position } },
+        orderBy: { position: 'asc' },
+        select: { id: true, position: true },
+      });
       await tx.courseModule.updateMany({
         where: { courseVersionId: draft.id, position: { gt: module.position } },
         data: { position: { increment: POSITION_OFFSET } },
@@ -117,19 +124,19 @@ export class DraftContentService {
     moduleId: string,
     input: CreateLessonInput,
     operator: string,
-  ): Promise<{ draft: DraftVersion; problems: ValidationReport }> {
+  ): Promise<{ draft: DraftSummary; problems: ValidationReport }> {
     const data = CreateLessonSchema.parse(input);
     const content =
       data.content === undefined
         ? { schemaVersion: 1 as const, blocks: [] }
         : data.content;
     assertWritableContent(content);
-    const draft = await this.drafts.requireDraft(slug);
+    const draft = await this.drafts.requireDraftRef(slug);
     const courseAssetIds = await this.courseAssetIds(draft.courseId);
     const problems = validateLessonContent(content, { courseAssetIds });
     const updatedDraft = await this.mutate(
       slug,
-      draft,
+      draft.id,
       operator,
       'createLesson',
       async (tx) => {
@@ -178,10 +185,9 @@ export class DraftContentService {
     contentId: string,
     patchInput: UpdateLessonPatch,
     operator: string,
-  ): Promise<{ draft: DraftVersion; problems: ValidationReport }> {
+  ): Promise<{ draft: DraftSummary; problems: ValidationReport }> {
     const patch = UpdateLessonPatchSchema.parse(patchInput);
-    const draft = await this.drafts.requireDraft(slug);
-    const lesson = this.findLesson(draft, contentId);
+    const draft = await this.drafts.requireDraftRef(slug);
     let problems: ValidationReport | undefined;
     if (patch.content !== undefined) {
       assertWritableContent(patch.content);
@@ -190,10 +196,11 @@ export class DraftContentService {
     }
     const updatedDraft = await this.mutate(
       slug,
-      draft,
+      draft.id,
       operator,
       'updateLesson',
       async (tx) => {
+        const lesson = await findLessonRow(tx, draft.id, contentId);
         const { activity, content, ...fields } = patch;
         await tx.courseLesson.update({
           where: { id: lesson.id },
@@ -231,15 +238,16 @@ export class DraftContentService {
     slug: string,
     contentId: string,
     operator: string,
-  ): Promise<DraftVersion> {
-    const draft = await this.drafts.requireDraft(slug);
-    const lesson = this.findLesson(draft, contentId);
-    return this.mutate(slug, draft, operator, 'deleteLesson', async (tx) => {
+  ): Promise<DraftSummary> {
+    const draft = await this.drafts.requireDraftRef(slug);
+    return this.mutate(slug, draft.id, operator, 'deleteLesson', async (tx) => {
+      const lesson = await findLessonRow(tx, draft.id, contentId);
       await tx.courseLesson.delete({ where: { id: lesson.id } });
-      const remaining = draft.modules
-        .find((module) => module.id === lesson.moduleId)!
-        .lessons.filter((item) => item.position > lesson.position)
-        .sort((a, b) => a.position - b.position);
+      const remaining = await tx.courseLesson.findMany({
+        where: { moduleId: lesson.moduleId, position: { gt: lesson.position } },
+        orderBy: { position: 'asc' },
+        select: { id: true, position: true },
+      });
       await tx.courseLesson.updateMany({
         where: { moduleId: lesson.moduleId, position: { gt: lesson.position } },
         data: { position: { increment: POSITION_OFFSET } },
@@ -257,75 +265,82 @@ export class DraftContentService {
     slug: string,
     input: ReorderInput,
     operator: string,
-  ): Promise<DraftVersion> {
+  ): Promise<DraftSummary> {
     const order = ReorderSchema.parse(input);
-    const draft = await this.drafts.requireDraft(slug);
-    const modules = draft.modules;
-    assertPermutation(
-      order.modules.map((item) => item.id),
-      modules.map((module) => module.id),
-      '模块',
-    );
-    const lessons = modules.flatMap((module) =>
-      module.lessons.map((lesson) => ({
-        ...lesson,
-        moduleTitle: module.title,
-      })),
-    );
-    const contentIds = order.modules.flatMap((module) => module.lessons);
-    if (new Set(contentIds).size !== contentIds.length)
-      throw new BadRequestException('重排课时不能重复');
-    assertPermutation(
-      contentIds,
-      lessons.map((lesson) => lesson.contentId),
-      '课时',
-    );
-    if (
-      lessons.some(
-        (lesson) =>
-          lessons.filter((item) => item.contentId === lesson.contentId).length >
-          1,
-      )
-    ) {
-      throw new ConflictException(
-        `草稿中存在重复 contentId：${[...new Set(lessons.filter((lesson, i) => lessons.findIndex((item) => item.contentId === lesson.contentId) !== i).map((lesson) => lesson.contentId))].join(', ')}`,
-      );
-    }
-    const lessonByContentId = new Map(
-      lessons.map((lesson) => [lesson.contentId, lesson]),
-    );
-    return this.mutate(slug, draft, operator, 'reorder', async (tx) => {
-      await tx.courseModule.updateMany({
-        where: { courseVersionId: draft.id },
-        data: { position: { increment: POSITION_OFFSET } },
-      });
-      for (const [index, item] of order.modules.entries()) {
-        await tx.courseModule.update({
-          where: { id: item.id },
-          data: { position: index + 1 },
+    const draft = await this.drafts.requireDraftRef(slug);
+    return this.mutate(
+      slug,
+      draft.id,
+      operator,
+      'reorder',
+      async (tx, snapshot) => {
+        // 排列是否完整必须对照加锁后的最新草稿，否则并发新建的课时/模块会被漏排。
+        const modules = (await snapshot()).modules;
+        assertPermutation(
+          order.modules.map((item) => item.id),
+          modules.map((module) => module.id),
+          '模块',
+        );
+        const lessons = modules.flatMap((module) =>
+          module.lessons.map((lesson) => ({
+            ...lesson,
+            moduleTitle: module.title,
+          })),
+        );
+        const contentIds = order.modules.flatMap((module) => module.lessons);
+        if (new Set(contentIds).size !== contentIds.length)
+          throw new BadRequestException('重排课时不能重复');
+        assertPermutation(
+          contentIds,
+          lessons.map((lesson) => lesson.contentId),
+          '课时',
+        );
+        if (
+          lessons.some(
+            (lesson) =>
+              lessons.filter((item) => item.contentId === lesson.contentId)
+                .length > 1,
+          )
+        ) {
+          throw new ConflictException(
+            `草稿中存在重复 contentId：${[...new Set(lessons.filter((lesson, i) => lessons.findIndex((item) => item.contentId === lesson.contentId) !== i).map((lesson) => lesson.contentId))].join(', ')}`,
+          );
+        }
+        const lessonByContentId = new Map(
+          lessons.map((lesson) => [lesson.contentId, lesson]),
+        );
+        await tx.courseModule.updateMany({
+          where: { courseVersionId: draft.id },
+          data: { position: { increment: POSITION_OFFSET } },
         });
-      }
-      await tx.courseLesson.updateMany({
-        where: { moduleId: { in: modules.map((module) => module.id) } },
-        data: { position: { increment: POSITION_OFFSET } },
-      });
-      // Temporary IDs free the per-module unique constraint while lessons move between modules.
-      for (const lesson of lessons) {
-        await tx.courseLesson.update({
-          where: { id: lesson.id },
-          data: { contentId: `reorder-${draft.id}-${lesson.id}` },
-        });
-      }
-      for (const item of order.modules) {
-        for (const [index, id] of item.lessons.entries()) {
-          const lesson = lessonByContentId.get(id)!;
-          await tx.courseLesson.update({
-            where: { id: lesson.id },
-            data: { moduleId: item.id, position: index + 1, contentId: id },
+        for (const [index, item] of order.modules.entries()) {
+          await tx.courseModule.update({
+            where: { id: item.id },
+            data: { position: index + 1 },
           });
         }
-      }
-    });
+        await tx.courseLesson.updateMany({
+          where: { moduleId: { in: modules.map((module) => module.id) } },
+          data: { position: { increment: POSITION_OFFSET } },
+        });
+        // Temporary IDs free the per-module unique constraint while lessons move between modules.
+        for (const lesson of lessons) {
+          await tx.courseLesson.update({
+            where: { id: lesson.id },
+            data: { contentId: `reorder-${draft.id}-${lesson.id}` },
+          });
+        }
+        for (const item of order.modules) {
+          for (const [index, id] of item.lessons.entries()) {
+            const lesson = lessonByContentId.get(id)!;
+            await tx.courseLesson.update({
+              where: { id: lesson.id },
+              data: { moduleId: item.id, position: index + 1, contentId: id },
+            });
+          }
+        }
+      },
+    );
   }
 
   async updateAssessment(
@@ -333,12 +348,12 @@ export class DraftContentService {
     assessmentId: string,
     patchInput: UpdateAssessmentPatch,
     operator: string,
-  ): Promise<DraftVersion> {
+  ): Promise<DraftSummary> {
     const patch = UpdateAssessmentPatchSchema.parse(patchInput);
-    const draft = await this.drafts.requireDraft(slug);
+    const draft = await this.drafts.requireDraftRef(slug);
     return this.mutate(
       slug,
-      draft,
+      draft.id,
       operator,
       'updateAssessment',
       async (tx) => {
@@ -355,55 +370,63 @@ export class DraftContentService {
     );
   }
 
-  private findLesson(draft: DraftVersion, contentId: string) {
-    const matches = draft.modules.flatMap((module) =>
-      module.lessons
-        .filter((lesson) => lesson.contentId === contentId)
-        .map((lesson) => ({ ...lesson, moduleTitle: module.title })),
-    );
-    if (!matches.length)
-      throw new NotFoundException(`草稿课时 ${contentId} 不存在`);
-    if (matches.length > 1)
-      throw new ConflictException(
-        `contentId ${contentId} 对应多个模块：${matches.map((item) => item.moduleTitle).join('、')}`,
-      );
-    return {
-      ...matches[0],
-      moduleId: draft.modules.find((module) =>
-        module.lessons.some((item) => item.id === matches[0].id),
-      )!.id,
-    };
-  }
-
   private async mutate(
     slug: string,
-    draft: DraftVersion,
+    draftId: string,
     operator: string,
     method: string,
-    write: (tx: Prisma.TransactionClient) => Promise<void>,
-  ): Promise<DraftVersion> {
+    write: (tx: Prisma.TransactionClient, snapshot: Snapshot) => Promise<void>,
+  ): Promise<DraftSummary> {
     return this.prisma.$transaction(async (tx) => {
-      await requireUnpublishedVersion(tx, draft.id);
-      await write(tx);
-      const updated = await tx.courseVersion.findUnique({
-        where: { id: draft.id },
-        include: DRAFT_INCLUDE,
-      });
-      if (!updated) throw new NotFoundException(`草稿 ${slug} 不存在`);
+      const load: Snapshot = async () => {
+        const version = await tx.courseVersion.findUnique({
+          where: { id: draftId },
+          include: DRAFT_SUMMARY_INCLUDE,
+        });
+        if (!version) throw new NotFoundException(`草稿 ${slug} 不存在`);
+        return version;
+      };
+      await requireUnpublishedVersion(tx, draftId);
+      await write(tx, load);
+      const updated = await load();
       await this.audit.record(
         {
           actor: { type: AuditActorType.OPERATOR, id: operator },
           action: `admin.draft.${method}`,
           success: true,
           targetType: 'CourseVersion',
-          targetId: draft.id,
+          targetId: draftId,
           metadata: { slug },
         },
         tx,
       );
       return updated;
-    });
+    }, DRAFT_TX_OPTIONS);
   }
+}
+
+// 在加锁后的事务内按 contentId 找课时行（草稿内 contentId 应唯一，重复则拒绝）。
+async function findLessonRow(
+  tx: Prisma.TransactionClient,
+  draftId: string,
+  contentId: string,
+) {
+  const matches = await tx.courseLesson.findMany({
+    where: { contentId, module: { courseVersionId: draftId } },
+    select: {
+      id: true,
+      moduleId: true,
+      position: true,
+      module: { select: { title: true } },
+    },
+  });
+  if (!matches.length)
+    throw new NotFoundException(`草稿课时 ${contentId} 不存在`);
+  if (matches.length > 1)
+    throw new ConflictException(
+      `contentId ${contentId} 对应多个模块：${matches.map((item) => item.module.title).join('、')}`,
+    );
+  return matches[0];
 }
 
 function assertWritableContent(

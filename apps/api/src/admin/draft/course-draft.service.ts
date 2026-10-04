@@ -14,7 +14,10 @@ import {
 } from './draft.schemas';
 import {
   DRAFT_INCLUDE,
+  DRAFT_SUMMARY_INCLUDE,
+  DRAFT_TX_OPTIONS,
   requireUnpublishedVersion,
+  type DraftSummary,
   type DraftVersion,
 } from './draft-version';
 
@@ -126,7 +129,7 @@ export class CourseDraftService {
           tx,
         );
         return created;
-      });
+      }, DRAFT_TX_OPTIONS);
       return { draft, created: true };
     } catch (error) {
       if (
@@ -153,7 +156,7 @@ export class CourseDraftService {
     if (!published) {
       throw new ConflictException('未发版课程的草稿不能丢弃');
     }
-    const draft = await this.requireDraft(slug);
+    const draft = await this.requireDraftRef(slug);
     await this.prisma.$transaction(async (tx) => {
       await requireUnpublishedVersion(tx, draft.id);
       await tx.courseVersion.delete({ where: { id: draft.id } });
@@ -177,11 +180,26 @@ export class CourseDraftService {
       select: { id: true },
     });
     const draft = course ? await this.findDraft(course.id) : null;
-    if (!draft) {
-      throw new NotFoundException(
-        `课程 ${slug} 没有草稿，请先 POST /admin/courses/${slug}/draft 创建`,
-      );
-    }
+    if (!draft) throw draftNotFound(slug);
+    return draft;
+  }
+
+  // 写入路径只需要草稿的 id 和所属课程；真正依赖的数据在加锁后的事务内重读。
+  async requireDraftRef(
+    slug: string,
+  ): Promise<{ id: string; courseId: string }> {
+    const course = await this.prisma.course.findUnique({
+      where: { slug },
+      select: { id: true },
+    });
+    const draft = course
+      ? await this.prisma.courseVersion.findFirst({
+          where: { courseId: course.id, publishedAt: null },
+          orderBy: { version: 'desc' },
+          select: { id: true, courseId: true },
+        })
+      : null;
+    if (!draft) throw draftNotFound(slug);
     return draft;
   }
 
@@ -189,19 +207,25 @@ export class CourseDraftService {
     slug: string,
     patchInput: CourseMetaPatch,
     operator: string,
-  ): Promise<DraftVersion> {
+  ): Promise<DraftSummary> {
     const patch = CourseMetaPatchSchema.parse(patchInput);
-    const draft = await this.requireDraft(slug);
-    const currentMeta = isJsonObject(draft.meta) ? draft.meta : {};
-    // meta 存客户端形态（如 'Intermediate'）：发版校验和发版写入都按这个形态解析，枚举映射只在发版时做。
-    const meta = { ...currentMeta, ...patch } as Prisma.InputJsonObject;
+    const draft = await this.requireDraftRef(slug);
 
     return this.prisma.$transaction(async (tx) => {
       await requireUnpublishedVersion(tx, draft.id);
+      // 在锁内读当前 meta 再合并，避免两个并发 PATCH 互相覆盖。
+      const current = await tx.courseVersion.findUnique({
+        where: { id: draft.id },
+        select: { meta: true },
+      });
+      const raw = current?.meta ?? null;
+      const currentMeta = isJsonObject(raw) ? raw : {};
+      // meta 存客户端形态（如 'Intermediate'）：发版校验和发版写入都按这个形态解析，枚举映射只在发版时做。
+      const meta = { ...currentMeta, ...patch } as Prisma.InputJsonObject;
       const updated = await tx.courseVersion.update({
         where: { id: draft.id },
         data: { meta },
-        include: DRAFT_INCLUDE,
+        include: DRAFT_SUMMARY_INCLUDE,
       });
       await this.audit.record(
         {
@@ -215,14 +239,14 @@ export class CourseDraftService {
         tx,
       );
       return updated;
-    });
+    }, DRAFT_TX_OPTIONS);
   }
 
   async updateWelcome(
     slug: string,
     patchInput: WelcomePatch,
     operator: string,
-  ): Promise<DraftVersion> {
+  ): Promise<DraftSummary> {
     const parsed = WelcomePatchSchema.parse(patchInput);
     const patch: Prisma.CourseWelcomeUncheckedUpdateInput = {
       overviewAssetId: parsed.overviewAssetId,
@@ -236,7 +260,7 @@ export class CourseDraftService {
           ? Prisma.DbNull
           : parsed.howItWorksSteps;
     }
-    const draft = await this.requireDraft(slug);
+    const draft = await this.requireDraftRef(slug);
     await this.prisma.$transaction(async (tx) => {
       await requireUnpublishedVersion(tx, draft.id);
       await tx.courseWelcome.upsert({
@@ -261,8 +285,8 @@ export class CourseDraftService {
     });
     return (await this.prisma.courseVersion.findUnique({
       where: { id: draft.id },
-      include: DRAFT_INCLUDE,
-    })) as DraftVersion;
+      include: DRAFT_SUMMARY_INCLUDE,
+    })) as DraftSummary;
   }
 
   private findDraft(courseId: string): Promise<DraftVersion | null> {
@@ -272,6 +296,12 @@ export class CourseDraftService {
       include: DRAFT_INCLUDE,
     });
   }
+}
+
+function draftNotFound(slug: string): NotFoundException {
+  return new NotFoundException(
+    `课程 ${slug} 没有草稿，请先 POST /admin/courses/${slug}/draft 创建`,
+  );
 }
 
 function isJsonObject(
