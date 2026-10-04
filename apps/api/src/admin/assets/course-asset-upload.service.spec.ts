@@ -11,6 +11,7 @@ describe('CourseAssetUploadService', () => {
   const prisma = {
     course: { findUnique: jest.fn() },
     courseAsset: { create: jest.fn() },
+    $transaction: jest.fn(),
   };
   const storage = { uploadBuffer: jest.fn(), delete: jest.fn() };
   const audit = { record: jest.fn() };
@@ -18,6 +19,9 @@ describe('CourseAssetUploadService', () => {
 
   beforeEach(() => {
     jest.clearAllMocks();
+    prisma.$transaction.mockImplementation((fn: (tx: unknown) => unknown) =>
+      fn(prisma),
+    );
     prisma.course.findUnique.mockResolvedValue({
       id: 'course-id',
       slug: 'demo',
@@ -55,19 +59,22 @@ describe('CourseAssetUploadService', () => {
       select: { id: true },
     });
     expect(audit.record).toHaveBeenCalledTimes(1);
-    expect(audit.record).toHaveBeenCalledWith({
-      actor: { type: AuditActorType.OPERATOR, id: 'editor' },
-      action: 'admin.course.uploadAsset',
-      success: true,
-      targetType: 'CourseAsset',
-      targetId: 'asset-id',
-      metadata: {
-        slug: 'demo',
-        assetId: 'asset-id',
-        mimeType: 'image/png',
-        size: png.length,
+    expect(audit.record).toHaveBeenCalledWith(
+      {
+        actor: { type: AuditActorType.OPERATOR, id: 'editor' },
+        action: 'admin.course.uploadAsset',
+        success: true,
+        targetType: 'CourseAsset',
+        targetId: 'asset-id',
+        metadata: {
+          slug: 'demo',
+          assetId: 'asset-id',
+          mimeType: 'image/png',
+          size: png.length,
+        },
       },
-    });
+      prisma,
+    );
     expect(result).toEqual({
       id: 'asset-id',
       url: 'https://blob.test/asset.png',
@@ -167,6 +174,19 @@ describe('CourseAssetUploadService', () => {
     ).rejects.toThrow('db down');
     expect(storage.delete).toHaveBeenCalledWith('https://blob.test/asset.png');
     expect(audit.record).not.toHaveBeenCalled();
+  });
+
+  it('removes the blob and creates no asset when the audit write fails', async () => {
+    audit.record.mockRejectedValue(new Error('audit down'));
+    await expect(
+      service.upload(
+        'demo',
+        { buffer: png, size: png.length },
+        undefined,
+        'editor',
+      ),
+    ).rejects.toThrow('audit down');
+    expect(storage.delete).toHaveBeenCalledWith('https://blob.test/asset.png');
   });
 
   it('still surfaces the database error when blob cleanup also fails', async () => {

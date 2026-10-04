@@ -269,6 +269,21 @@ describe('AdminCoursesController', () => {
     expect(assetUploads.upload).not.toHaveBeenCalled();
   });
 
+  it('POST /admin/courses/:slug/assets rejects altText over 300 characters', async () => {
+    const response = await request(app.getHttpServer())
+      .post('/admin/courses/demo/assets')
+      .set('Authorization', `Bearer ${TOKEN}`)
+      .set('X-Operator', OPERATOR)
+      .field('altText', 'x'.repeat(301))
+      .attach(
+        'file',
+        Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+        'a.png',
+      );
+    expect(response.status).toBe(400);
+    expect(assetUploads.upload).not.toHaveBeenCalled();
+  });
+
   it('POST /admin/courses/:slug/assets maps file-size overflow to Chinese 400', async () => {
     const response = await request(app.getHttpServer())
       .post('/admin/courses/demo/assets')

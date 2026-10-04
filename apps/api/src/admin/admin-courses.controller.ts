@@ -116,7 +116,7 @@ const OperatorHeader = createParamDecorator((_data, context) => {
 });
 const UploadAssetBodySchema = z.preprocess(
   (body) => body ?? {},
-  z.object({ altText: z.string().optional() }),
+  z.object({ altText: z.string().max(300).optional() }),
 );
 const PublishBodySchema = z.preprocess(
   (body) => (body === undefined ? {} : body),

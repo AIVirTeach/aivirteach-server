@@ -65,29 +65,36 @@ export class CourseAssetUploadService {
     );
     let asset: { id: string };
     try {
-      asset = await this.prisma.courseAsset.create({
-        data: {
-          courseId: course.id,
-          type: 'image',
-          objectKey: url,
-          altText: altText ?? null,
-          mimeType,
-        },
-        select: { id: true },
+      // 素材行和审计同一事务：审计写失败不会留下没有审计记录的素材。
+      asset = await this.prisma.$transaction(async (tx) => {
+        const created = await tx.courseAsset.create({
+          data: {
+            courseId: course.id,
+            type: 'image',
+            objectKey: url,
+            altText: altText ?? null,
+            mimeType,
+          },
+          select: { id: true },
+        });
+        await this.audit.record(
+          {
+            actor: { type: AuditActorType.OPERATOR, id: operator },
+            action: 'admin.course.uploadAsset',
+            success: true,
+            targetType: 'CourseAsset',
+            targetId: created.id,
+            metadata: { slug, assetId: created.id, mimeType, size: file.size },
+          },
+          tx,
+        );
+        return created;
       });
     } catch (error) {
-      // 入库失败时别留下无主的 blob；清理失败不能盖掉真正的数据库错误。
+      // 入库失败时别留下无主的 blob；清理失败不能盖掉真正的错误。
       await this.storage.delete(url).catch(() => undefined);
       throw error;
     }
-    await this.audit.record({
-      actor: { type: AuditActorType.OPERATOR, id: operator },
-      action: 'admin.course.uploadAsset',
-      success: true,
-      targetType: 'CourseAsset',
-      targetId: asset.id,
-      metadata: { slug, assetId: asset.id, mimeType, size: file.size },
-    });
     return { id: asset.id, url, altText: altText ?? null, mimeType };
   }
 }

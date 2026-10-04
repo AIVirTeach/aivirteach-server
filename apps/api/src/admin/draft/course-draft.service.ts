@@ -261,7 +261,7 @@ export class CourseDraftService {
           : parsed.howItWorksSteps;
     }
     const draft = await this.requireDraftRef(slug);
-    await this.prisma.$transaction(async (tx) => {
+    return this.prisma.$transaction(async (tx) => {
       await requireUnpublishedVersion(tx, draft.id);
       await tx.courseWelcome.upsert({
         where: { courseVersionId: draft.id },
@@ -282,11 +282,12 @@ export class CourseDraftService {
         },
         tx,
       );
-    });
-    return (await this.prisma.courseVersion.findUnique({
-      where: { id: draft.id },
-      include: DRAFT_SUMMARY_INCLUDE,
-    })) as DraftSummary;
+      // 响应在锁内读：发版/丢弃交错时不会读到 null 而返回空的 200。
+      return (await tx.courseVersion.findUnique({
+        where: { id: draft.id },
+        include: DRAFT_SUMMARY_INCLUDE,
+      })) as DraftSummary;
+    }, DRAFT_TX_OPTIONS);
   }
 
   private findDraft(courseId: string): Promise<DraftVersion | null> {

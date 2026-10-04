@@ -2,6 +2,7 @@ import { AuditActorType } from '@prisma/client';
 import { AuditService } from '../audit/audit.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { CourseDraftService } from './draft/course-draft.service';
+import { DRAFT_SUMMARY_INCLUDE } from './draft/draft-version';
 import { CoursePublishService } from './course-publish.service';
 
 const lesson = (contentId: string, position: number, minutes = 10) => ({
@@ -259,6 +260,15 @@ describe('CoursePublishService.publish', () => {
     expect(tx.course.update).not.toHaveBeenCalled();
     // 别人已经发布了：这次调用是空操作，不重复记审计（赢家在自己的事务里已记过）。
     expect(audit.record).not.toHaveBeenCalled();
+  });
+
+  it('answers with a body-free summary of the published version', async () => {
+    const { service, tx } = setup();
+    await service.publish('demo', 'ops@example.com', 'release');
+    const last = tx.courseVersion.findUnique.mock.calls.at(-1)?.[0] as {
+      include: typeof DRAFT_SUMMARY_INCLUDE;
+    };
+    expect(last.include).toBe(DRAFT_SUMMARY_INCLUDE);
   });
 
   it('rolls the publish back when the audit write fails', async () => {

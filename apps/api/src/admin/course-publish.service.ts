@@ -12,6 +12,7 @@ import { CourseDraftService } from './draft/course-draft.service';
 import { CourseMetaPatchSchema } from './draft/draft.schemas';
 import {
   DRAFT_INCLUDE,
+  DRAFT_SUMMARY_INCLUDE,
   DRAFT_TX_OPTIONS,
   lockUnpublishedVersion,
 } from './draft/draft-version';
@@ -164,9 +165,10 @@ export class CoursePublishService {
         });
       }
 
+      // 响应不带课时正文（最多 300 × 256 KB）；调用方要完整草稿用 GET draft。
       const version = await tx.courseVersion.findUnique({
         where: { id: draft.id },
-        include: DRAFT_INCLUDE,
+        include: DRAFT_SUMMARY_INCLUDE,
       });
       if (!version) throw new NotFoundException(`课程草稿 ${slug} 不存在`);
       // 审计和发版同一事务：审计写失败则整个发版回滚，重试时不会走"已发布"空操作而漏掉审计。

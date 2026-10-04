@@ -13,7 +13,11 @@ describe('草稿写入与发版（真库）', () => {
   const prisma = new PrismaClient();
   const adminToken = process.env.ADMIN_API_TOKEN ?? '';
   const stamp = Date.now();
-  const slugs = [`draft-writes-${stamp}`, `draft-remap-${stamp}`];
+  const slugs = [
+    `draft-writes-${stamp}`,
+    `draft-remap-${stamp}`,
+    `draft-lock-${stamp}`,
+  ];
   const email = `draft-remap-${stamp}@example.com`;
 
   const admin = (req: request.Test) =>
@@ -212,5 +216,144 @@ describe('草稿写入与发版（真库）', () => {
       },
     });
     expect(audits).toBe(1);
+  });
+
+  describe('行锁（确定性：测试自己持有锁，而不是碰时序）', () => {
+    const slug = slugs[2];
+    const sleep = (ms: number) =>
+      new Promise((resolve) => setTimeout(resolve, ms));
+    // 持有草稿行的 FOR UPDATE 直到 release()；同时可选地在持锁期间翻转 publishedAt，模拟"发版先赢"。
+    const holdLock = async (versionId: string, flip: boolean) => {
+      let release!: () => void;
+      const released = new Promise<void>((resolve) => (release = resolve));
+      let locked!: () => void;
+      const lockedReady = new Promise<void>((resolve) => (locked = resolve));
+      const tx = prisma.$transaction(
+        async (client) => {
+          await client.$queryRaw`SELECT id FROM "CourseVersion" WHERE id = ${versionId} FOR UPDATE`;
+          if (flip) {
+            await client.courseVersion.update({
+              where: { id: versionId },
+              data: { publishedAt: new Date() },
+            });
+          }
+          locked();
+          await released;
+        },
+        { timeout: 20_000 },
+      );
+      await lockedReady;
+      return { release, done: tx };
+    };
+    const settled = (promise: Promise<unknown>) => {
+      let state: 'pending' | 'settled' = 'pending';
+      void promise.then(
+        () => (state = 'settled'),
+        () => (state = 'settled'),
+      );
+      return () => state;
+    };
+    let versionId: string;
+    let moduleId: string;
+
+    beforeAll(async () => {
+      moduleId = await addModule(slug, '锁测试模块');
+      await addLesson(slug, moduleId, 'locked-lesson').expect(201);
+      versionId = (
+        await prisma.courseVersion.findFirstOrThrow({
+          where: { course: { slug } },
+        })
+      ).id;
+    });
+
+    it('草稿写入在别人持有行锁时一直挂起，释放后才完成并落库', async () => {
+      const lock = await holdLock(versionId, false);
+      const write = admin(
+        request(app.getHttpServer())
+          .patch(api(slug, '/draft/lessons/locked-lesson'))
+          .send({ title: '锁后改名' }),
+      ).then((res) => res);
+      const state = settled(write);
+
+      await sleep(400);
+      expect(state()).toBe('pending');
+      expect(
+        (await prisma.courseLesson.findFirstOrThrow({ where: { moduleId } }))
+          .title,
+      ).not.toBe('锁后改名');
+
+      lock.release();
+      await lock.done;
+      expect((await write).status).toBe(200);
+      expect(
+        (await prisma.courseLesson.findFirstOrThrow({ where: { moduleId } }))
+          .title,
+      ).toBe('锁后改名');
+    });
+
+    it('发版在别人持有行锁时一直挂起，释放后才完成', async () => {
+      const lock = await holdLock(versionId, false);
+      const publish = admin(
+        request(app.getHttpServer()).post(api(slug, '/publish')).send({}),
+      ).then((res) => res);
+      const state = settled(publish);
+
+      await sleep(400);
+      expect(state()).toBe('pending');
+      expect(
+        (
+          await prisma.courseVersion.findUniqueOrThrow({
+            where: { id: versionId },
+          })
+        ).publishedAt,
+      ).toBeNull();
+
+      lock.release();
+      await lock.done;
+      expect((await publish).status).toBe(201);
+      expect(
+        (
+          await prisma.courseVersion.findUniqueOrThrow({
+            where: { id: versionId },
+          })
+        ).publishedAt,
+      ).not.toBeNull();
+    });
+
+    it('发版先赢（锁内翻转 publishedAt）：排队的草稿写入得到 409，已发布版本不被改动', async () => {
+      // 上一个用例已发布 v1；为它再开一个草稿 v2，让别人"发版"它。
+      const draft = await admin(
+        request(app.getHttpServer()).post(api(slug, '/draft')).send(),
+      );
+      expect([200, 201]).toContain(draft.status);
+      const v2 = (
+        await prisma.courseVersion.findFirstOrThrow({
+          where: { course: { slug }, publishedAt: null },
+        })
+      ).id;
+      const before = await prisma.courseLesson.findMany({
+        where: { module: { courseVersionId: v2 } },
+        select: { id: true, title: true },
+      });
+
+      const lock = await holdLock(v2, true);
+      const write = admin(
+        request(app.getHttpServer())
+          .patch(api(slug, '/draft/lessons/locked-lesson'))
+          .send({ title: '不该写进已发布版本' }),
+      ).then((res) => res);
+      const state = settled(write);
+      await sleep(400);
+      expect(state()).toBe('pending');
+
+      lock.release();
+      await lock.done;
+      expect((await write).status).toBe(409);
+      const after = await prisma.courseLesson.findMany({
+        where: { module: { courseVersionId: v2 } },
+        select: { id: true, title: true },
+      });
+      expect(after).toEqual(before);
+    });
   });
 });
