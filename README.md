@@ -23,15 +23,30 @@ NestJS 模块化单体，AIVirTeach 三个代码仓库之一（另外两个：`a
 - 校验：Zod，`ZodValidationPipe` 统一在 controller 层拦
 - 运营侧：`nest-commander` 写的 CLI，不是 admin 后台网页
 
+## 仓库结构
+
+```text
+apps/api/              NestJS API、Prisma schema/migrations、CLI 和测试
+packages/*/            可复用的工作区包
+docker-compose.yml      本地 Postgres
+docs/                  设计与开发文档
+```
+
+仓库根使用 npm workspaces；依赖安装和 `build`、`test`、`test:e2e`、`test:cov`、`lint` 从根目录运行。API 自有脚本（例如数据库迁移和 CLI）在 `apps/api` 工作区运行。
+
 ## 本地开发
 
 ```bash
 npm install
-cp .env.example .env      # 至少要填 JWT_SECRET，见下方生成方式
+cp apps/api/.env.example apps/api/.env  # 至少要填 JWT_SECRET，见下方生成方式
 npm run db:up              # 起本地 Postgres（docker-compose，端口 55432）
-npx prisma migrate dev
-npm run start:dev          # http://localhost:4000/docs
+npm run db:migrate -w api
+npm run start:dev -w api   # http://localhost:4000/docs
 ```
+
+环境文件放在 `apps/api/.env`（以及可选的 `apps/api/.env.local`），Prisma 和应用都以 API 工作区为基准读取它们。
+
+Vercel 的 Root Directory 需要设为 `apps/api`，并开启 **Include source files outside of the Root Directory in the Build Step**，以便构建时也能访问根目录下的 `packages/*`。线上 Vercel 项目设置应在迁移预览部署通过后再调整。
 
 生成本地 `JWT_SECRET`：
 
@@ -41,7 +56,7 @@ node -e "console.log(require('node:crypto').randomBytes(48).toString('base64url'
 
 ## 环境变量
 
-由 `src/config/env.ts` 用 Zod 在启动时强校验，缺一个直接崩，不会带着错配置跑起来。
+由 `apps/api/src/config/env.ts` 用 Zod 在启动时强校验，缺一个直接崩，不会带着错配置跑起来。
 
 | 变量 | 必填 | 说明 |
 |---|---|---|
@@ -50,6 +65,7 @@ node -e "console.log(require('node:crypto').randomBytes(48).toString('base64url'
 | `ACCESS_TOKEN_TTL` | 否，默认 `15m` | jose 简单格式：数字+单位 |
 | `REFRESH_TOKEN_TTL_DAYS` | 否，默认 `30` | |
 | `INVITATION_TTL_DAYS` | 否，默认 `7` | |
+| `ADMIN_API_TOKEN` | 是 | ≥32 字符，`/admin/*` 接口的 Bearer 令牌（没有默认值，漏配整个 API 启动即崩，学员接口也会一起挂）。不要和 `JWT_SECRET` 共用 |
 | `PORT` | 否，默认 `4000` | Vercel 上由平台接管，本地开发才用得到 |
 | `CORS_ORIGINS` | 否，默认 `tauri://localhost` | 逗号分隔白名单；client 桌面端（Tauri v2 webview）的源是 `tauri://localhost`，本地网页调试再加 `http://localhost:3001` |
 
@@ -73,30 +89,67 @@ node -e "console.log(require('node:crypto').randomBytes(48).toString('base64url'
 
 ## 运营 CLI 是什么
 
-封测期没有 admin 后台网页——发邀请、建课程、开课、发额度这些运营操作量很小，做一整套带鉴权的管理网页不划算，所以做成了一个命令行工具（`nest-commander`），入口是 `npm run cli`。谁要执行，就在自己电脑上（或有权限访问生产库的机器上）跑这个命令，天然就是"内部人员本机操作"的权限模型，不用另外造一套 admin 登录态。
+封测期没有 admin 后台网页——发邀请、建课程、开课、发额度这些运营操作量很小，做一整套带鉴权的管理网页不划算，所以做成了一个命令行工具（`nest-commander`），入口是 `npm run cli -w api -- <args>`。谁要执行，就在自己电脑上（或有权限访问生产库的机器上）跑这个命令，天然就是"内部人员本机操作"的权限模型，不用另外造一套 admin 登录态。
 
 | 命令 | 参数 | 作用 |
 |---|---|---|
 | `invite <email>` | | 邀请一个用户，生成一次性 `invitationToken` |
 | `course:create <contentDir>` | `--image-digest`（可选） | 从课程内容目录（含 `course.json`）摄取新建课程，同时建第一个未发布的版本 |
 | `course:publish <slug>` | | 发布课程的最新版本 |
+| `course:backfill-content-model` | `--execute`（默认 dry-run） | 回填课时 `body`、课时块 `content` 和学员进度的 `currentLessonContentId`（迁移 A 之后跑，见下方"课时块上线顺序"） |
 | `enroll <email> <courseSlug>` | | 给用户开课 |
 | `quota:grant <email> <minutes>` | | 给用户发运行额度（分钟） |
 
 所有命令都要求 `--operator`（谁在操作）和 `--reason`（为什么），并且**默认 dry-run**——不加 `--execute` 只打印将要发生的变更、不落库。这两点不是可选的：目的是让审计日志（`AuditEvent` 表）永远能查到"谁、为什么、改了什么"，而不是留一堆无主的写操作。
 
+## 课时块 / admin API
+
+课时正文 `CourseLesson.content` 是课时块 JSON（`{schemaVersion:1, blocks:[…]}`，13 种块，最多 300 块、256 KB），由 client 渲染；`body`（Markdown）是弃用的兜底字段，管理员新建或编辑的课时只写 `content`，老客户端读到的 `markdown` 可能为空或过期。
+
+`/api/v1/admin/*` 供运营后台用，每个请求要带：
+
+- `Authorization: Bearer <ADMIN_API_TOKEN>`
+- `X-Operator: <操作者邮箱>`（写入审计日志；目前是自报身份，block 4 的 `OperatorAuthGuard` 会替换）
+
+草稿写接口（`PATCH/PUT/DELETE /admin/courses/:slug/draft*`、模块和课时的 `POST`）只返回不含课时正文的摘要，完整草稿用 `GET /admin/courses/:slug/draft`，单课预览用 `GET /admin/courses/:slug/draft/lessons/:contentId`。发版（`POST /admin/courses/:slug/publish`）会在事务内锁住草稿并重新校验，校验未通过返回 422 和 `problems`。
+
+### 课时块上线顺序
+
+学员进度现在只读 `Progress.currentLessonContentId`。**代码比迁移 A 和回填先上线，所有已有学员会显示未开始（0%），下一次完成课时还会覆盖进度指针**，所以必须按这个顺序：
+
+1. 在 Vercel 配好 `ADMIN_API_TOKEN`，并核对项目的 Root Directory / "include files outside root"（仓库是 npm workspaces monorepo）。
+2. 预检：同一课程不能有多个未发布版本，否则迁移 A 的部分唯一索引会失败：
+   ```sql
+   SELECT "courseId", count(*) FROM "CourseVersion" WHERE "publishedAt" IS NULL GROUP BY 1 HAVING count(*) > 1;
+   ```
+3. `npx prisma migrate deploy`（迁移 A，只加列和索引）。
+4. 回填 dry-run，随时可以先跑、先审：`unresolved` / `skipped` / `pendingBody` 要为空或逐条确认。
+   ```bash
+   npm run cli -w api -- course:backfill-content-model -o "你的邮箱" -r "迁移 A 回填"
+   ```
+5. 真正回填（`--execute`）要**紧贴着部署**，选低峰期，执行完立刻部署：
+   ```bash
+   npm run cli -w api -- course:backfill-content-model -o "你的邮箱" -r "迁移 A 回填" --execute
+   ```
+6. 部署代码，观察学员读课和进度。**部署之后不要再跑回填。**
+7. 迁移 B（不可逆，删旧列）单独执行，必须有明确的批准，不随上面几步一起跑。
+
+**已知的上线窗口：** 旧代码一直在线到步骤 6，它只写旧字段 `currentLessonId`；回填只补 `currentLessonContentId` 为空的行，不会修正已经填过、之后又被旧代码推进的进度。所以步骤 5 执行之后、部署完成之前这几分钟里仍在推进课时的学员，部署后会回到回填时的位置；在这段时间里新开始学习的学员会显示未开始。其余学员不受影响。窗口越短越好，所以要求紧贴部署和低峰期。要做到零损失，需要新代码在迁移 B 之前同时写两个字段，这不在本 PR 范围内。
+
+代码上线后**不能直接回滚**：新代码不再写旧的 `currentLessonId`，回滚到旧版本会丢掉上线后产生的学员进度。
+
 ## 造第一个账号（联调用）
 
 ```bash
 # 本地跑（连的是 .env 里配置的库）
-npm run cli -- invite someone@example.com -o "你的邮箱" -r "联调测试账号" --execute
+npm run cli -w api -- invite someone@example.com -o "你的邮箱" -r "联调测试账号" --execute
 # 拿到返回的 invitationToken，再调 POST /auth/invitations/accept 激活
 
-npm run cli -- course:create /path/to/course-content-dir -o "你的邮箱" -r "联调用课程" --execute
-# course-content-dir 下要有 course.json（定义课程/模块/课时结构，见 src/courses/course-content.schemas.ts）
-npm run cli -- course:publish <slug> -o "你的邮箱" -r "发布" --execute
-npm run cli -- enroll someone@example.com <slug> -o "你的邮箱" -r "开课" --execute
-npm run cli -- quota:grant someone@example.com 60 -o "你的邮箱" -r "发额度" --execute
+npm run cli -w api -- course:create /path/to/course-content-dir -o "你的邮箱" -r "联调用课程" --execute
+# course-content-dir 下要有 course.json（定义课程/模块/课时结构，见 apps/api/src/courses/course-content.schemas.ts）
+npm run cli -w api -- course:publish <slug> -o "你的邮箱" -r "发布" --execute
+npm run cli -w api -- enroll someone@example.com <slug> -o "你的邮箱" -r "开课" --execute
+npm run cli -w api -- quota:grant someone@example.com 60 -o "你的邮箱" -r "发额度" --execute
 ```
 
 要对生产库操作，先 `vercel env pull .env.production --environment production --yes`，`source` 进去再跑同样的命令，跑完把临时文件删掉。
@@ -104,7 +157,7 @@ npm run cli -- quota:grant someone@example.com 60 -o "你的邮箱" -r "发额�
 ## 测试
 
 ```bash
-npm run test        # 单元测试
+npm test            # 单元测试
 npm run test:e2e    # e2e
 npm run test:cov    # 覆盖率
 ```

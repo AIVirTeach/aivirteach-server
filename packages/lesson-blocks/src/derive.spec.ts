@@ -1,0 +1,101 @@
+import { blocksToPlainText, collectImageAssetIds, countRenderableBlocks } from './derive';
+
+const block = (id: string, type: string, props: unknown) => ({ id, type, props });
+const content = (blocks: unknown[]) => ({ schemaVersion: 1, blocks });
+
+describe('lesson content derived helpers', () => {
+  it('counts known valid blocks except empty headings and all-empty lists', () => {
+    expect(countRenderableBlocks(content([
+      block('h', 'heading', { level: 2, text: '  ' }), block('l', 'bulletList', { items: [' ', '\n'] }),
+      block('bad', 'paragraph', {}), block('unknown', 'custom', {}), block('p', 'paragraph', { text: 'Visible' }),
+    ]))).toBe(1);
+  });
+
+  it('collects unique image asset ids and handles invalid input', () => {
+    expect(collectImageAssetIds(content([
+      block('a', 'image', { assetId: 'asset-1', alt: 'A' }), block('b', 'image', { assetId: 'asset-1', alt: 'B' }),
+      block('c', 'image', { assetId: 'asset-2', alt: 'C' }), block('bad', 'image', { assetId: '', alt: 'D' }),
+    ]))).toEqual(['asset-1', 'asset-2']);
+    expect(collectImageAssetIds(null)).toEqual([]);
+  });
+
+  it('extracts plain text from inline marks and links', () => {
+    expect(blocksToPlainText(content([block('p', 'paragraph', { text: '**a** *b* ==c== `d` [e](https://x.y) \\*f\\* \\=g\\=' })])))
+      .toBe('a b c d e *f* =g=');
+  });
+
+  it('preserves code source and extracts links with balanced destinations', () => {
+    const code = '*value* `literal` [label](url)';
+    expect(blocksToPlainText(content([
+      block('c', 'code', { kind: 'plain', code }),
+      block('a', 'annotatedCode', { steps: [{ label: 'Step', code, terms: [] }] }),
+      block('p', 'paragraph', { text: '[x](https://a.test/a_(b))' }),
+      block('label', 'paragraph', { text: '[a `]` b](url)' }),
+    ]))).toBe(`${code}\nStep\n${code}\nx\na ] b`);
+  });
+
+  it('keeps inline code contents literal and handles bracket escapes by parity', () => {
+    const evenSlashLink = String.raw`\\[even](url)`;
+    const oddSlashLink = String.raw`\[odd](url)`;
+    const text = `\`[x](url)\` and \`**literal**\` / ${evenSlashLink} / ${oddSlashLink} / \`unmatched`;
+    expect(blocksToPlainText(content([block('p', 'paragraph', { text })])))
+      .toBe('[x](url) and **literal** / \\even / [odd](url) / `unmatched');
+  });
+
+  it('treats backslashes as literal inside inline code spans', () => {
+    expect(blocksToPlainText(content([block('p', 'paragraph', { text: '`foo\\`' })]))).toBe('foo\\');
+  });
+
+  it('preserves literal sentinel-shaped text', () => {
+    expect(blocksToPlainText(content([block('p', 'paragraph', { text: '\u0000123\u0000 and \\*literal\\*' })])))
+      .toBe('\u0000123\u0000 and *literal*');
+  });
+
+  it('includes code descriptions in visible plain text', () => {
+    expect(blocksToPlainText(content([block('c', 'code', { kind: 'plain', code: 'const x = 1', description: 'Example code' })])))
+      .toBe('const x = 1\nExample code');
+  });
+
+  it('includes table cells and image alt text', () => {
+    const tableText = blocksToPlainText(content([block('t', 'table', { columns: ['A', 'B'], rows: [['1', '2']] })]));
+    expect(tableText.split('\n')).toEqual(['A', 'B', '1', '2']);
+    expect(blocksToPlainText(content([block('i', 'image', { assetId: 'asset', alt: 'Diagram', caption: 'Caption' })]))).toContain('Diagram');
+  });
+});
+
+describe('blocksToPlainText covers every block type', () => {
+  it('lists, step, callout, resourceLink, divider in block order', () => {
+    expect(blocksToPlainText(content([
+      block('l', 'bulletList', { items: ['one', '**two**'] }),
+      block('n', 'numberedList', { items: ['three'] }),
+      block('s', 'step', { number: 1, title: 'Install', body: 'Run it' }),
+      block('c', 'callout', { variant: 'tip', title: 'Tip', body: 'Be careful' }),
+      block('r', 'resourceLink', { url: 'https://a.test', title: 'Docs', description: 'Read me' }),
+      block('d', 'divider', {}),
+    ]))).toBe('one\ntwo\nthree\nInstall\nRun it\nTip\nBe careful\nDocs\nRead me');
+  });
+
+  it('annotatedCode includes labels, raw code, explanations and terms', () => {
+    expect(blocksToPlainText(content([block('a', 'annotatedCode', {
+      title: 'T', fileLabel: 'main.ts',
+      steps: [{
+        label: 'Step 1', code: '*raw*', explanationTitle: 'Why', explanation: 'Because',
+        terms: [{ term: 'Term', description: 'Meaning' }],
+      }],
+    })]))).toBe('T\nmain.ts\nStep 1\n*raw*\nWhy\nBecause\nTerm\nMeaning');
+  });
+
+  it('diagram includes title, node text and connection labels', () => {
+    expect(blocksToPlainText(content([block('g', 'diagram', {
+      title: 'Flow',
+      nodes: [{ id: 'a', title: 'A', description: 'first' }, { id: 'b', title: 'B' }],
+      connections: [{ from: 'a', to: 'b', label: 'then' }],
+    })]))).toBe('Flow\nA\nfirst\nB\nthen');
+  });
+
+  it('leaves unclosed marks as literal text and skips invalid content', () => {
+    expect(blocksToPlainText(content([block('p', 'paragraph', { text: '**open and ==also and `tick' })])))
+      .toBe('**open and ==also and `tick');
+    expect(blocksToPlainText(null)).toBe('');
+  });
+});

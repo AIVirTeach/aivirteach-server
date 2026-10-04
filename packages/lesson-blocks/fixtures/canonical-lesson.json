@@ -1,0 +1,310 @@
+{
+  "fixtureVersion": 1,
+  "assets": {
+    "lesson-deploy-terminal": {
+      "url": "https://cdn.example.com/lessons/deploy-terminal.png",
+      "alt": "A terminal showing a successful staging deployment"
+    }
+  },
+  "valid": {
+    "schemaVersion": 1,
+    "blocks": [
+      {
+        "id": "deploy-heading",
+        "type": "heading",
+        "props": { "level": 2, "text": "Deploy a service safely" }
+      },
+      {
+        "id": "deploy-intro",
+        "type": "paragraph",
+        "props": {
+          "text": "A reliable release starts in **staging**. Read the *health check* and compare ==the expected build== before you promote it. Run `npm run deploy:staging`, then follow the [deployment guide](https://example.com/docs/deployment).\nKeep the shell pattern `echo \\*` literal, and write escaped marks as \\*star\\*, \\`tick\\`, \\[brackets\\], \\=equals\\=, and \\\\backslash."
+        }
+      },
+      {
+        "id": "deploy-prerequisites",
+        "type": "bulletList",
+        "props": {
+          "items": [
+            "Confirm the release owner and maintenance window.",
+            "Check that database changes have already been approved.",
+            "Keep the previous image available for rollback."
+          ]
+        }
+      },
+      {
+        "id": "deploy-sequence",
+        "type": "numberedList",
+        "props": {
+          "items": [
+            "Build the candidate from the reviewed commit.",
+            "Deploy it to staging and inspect health checks.",
+            "Promote the same image only after the smoke check passes."
+          ]
+        }
+      },
+      {
+        "id": "deploy-terminal-command",
+        "type": "code",
+        "props": {
+          "kind": "terminal",
+          "code": "npm run deploy:staging",
+          "label": "Deploy to staging",
+          "description": "Publishes the reviewed build to the staging environment."
+        }
+      },
+      {
+        "id": "deploy-config-file",
+        "type": "code",
+        "props": {
+          "kind": "file",
+          "label": "release.yml",
+          "language": "yaml",
+          "code": "environment: staging\nimage: registry.example.com/app:release-candidate",
+          "description": "Pin the image tag so staging and production use the same artifact."
+        }
+      },
+      {
+        "id": "deploy-example-output",
+        "type": "code",
+        "props": {
+          "kind": "plain",
+          "language": "text",
+          "code": "Health check: passed\nRelease: 2026.10.01-rc1"
+        }
+      },
+      {
+        "id": "deploy-step-one",
+        "type": "step",
+        "props": {
+          "number": 1,
+          "title": "Verify the candidate",
+          "body": "Compare the deployed commit with the reviewed release and confirm that the service reports healthy."
+        }
+      },
+      {
+        "id": "deploy-tip",
+        "type": "callout",
+        "props": {
+          "variant": "tip",
+          "title": "Keep releases repeatable",
+          "body": "Promote the exact staging image instead of rebuilding from a moving branch."
+        }
+      },
+      {
+        "id": "deploy-warning",
+        "type": "callout",
+        "props": {
+          "variant": "warning",
+          "title": "Stop on a failed health check",
+          "body": "Do not promote while the service is unhealthy or the release version is unexpected."
+        }
+      },
+      {
+        "id": "deploy-note",
+        "type": "callout",
+        "props": {
+          "variant": "note",
+          "body": "Database migrations have their own approval and rollout sequence."
+        }
+      },
+      {
+        "id": "deploy-settings-table",
+        "type": "table",
+        "props": {
+          "columns": ["Release setting", "Expected value"],
+          "rows": [
+            ["Environment", "staging"],
+            ["Image tag", "Reviewed release candidate"],
+            ["Health check", "Passed before promotion"]
+          ]
+        }
+      },
+      {
+        "id": "deploy-terminal-image",
+        "type": "image",
+        "props": {
+          "assetId": "lesson-deploy-terminal",
+          "alt": "A terminal showing the staging release and passing health check",
+          "caption": "Confirm the release identifier before promoting the image."
+        }
+      },
+      {
+        "id": "deploy-runbook-link",
+        "type": "resourceLink",
+        "props": {
+          "url": "https://example.com/runbooks/release",
+          "title": "Release runbook",
+          "description": "Health checks, promotion steps, and rollback instructions."
+        }
+      },
+      {
+        "id": "deploy-divider",
+        "type": "divider",
+        "props": {}
+      },
+      {
+        "id": "deploy-annotated-config",
+        "type": "annotatedCode",
+        "props": {
+          "title": "Read the release configuration",
+          "fileLabel": "release.yml",
+          "steps": [
+            {
+              "label": "Select the target environment",
+              "code": "environment: staging",
+              "explanationTitle": "Start with staging",
+              "explanation": "The first deployment exercises the candidate without sending production traffic.",
+              "terms": [
+                {
+                  "term": "environment",
+                  "description": "The named target where this release will run."
+                }
+              ]
+            }
+          ]
+        }
+      },
+      {
+        "id": "deploy-flow",
+        "type": "diagram",
+        "props": {
+          "title": "Release promotion path",
+          "nodes": [
+            { "id": "reviewed", "title": "Reviewed build", "description": "Build from the approved commit." },
+            { "id": "staging", "title": "Staging", "description": "Run health and smoke checks." },
+            { "id": "production", "title": "Production", "description": "Promote the same image." }
+          ],
+          "connections": [
+            { "from": "reviewed", "to": "staging", "label": "deploy" },
+            { "from": "staging", "to": "production", "label": "checks pass" }
+          ]
+        }
+      }
+    ]
+  },
+  "invalid": [
+    {
+      "name": "unknown block type",
+      "content": {
+        "schemaVersion": 1,
+        "blocks": [{ "id": "unknown", "type": "quiz-widget", "props": {} }]
+      },
+      "expectedCodes": ["unknown-type"]
+    },
+    {
+      "name": "empty image alt text",
+      "content": {
+        "schemaVersion": 1,
+        "blocks": [
+          {
+            "id": "empty-alt",
+            "type": "image",
+            "props": {
+              "assetId": "lesson-deploy-terminal",
+              "alt": ""
+            }
+          }
+        ]
+      },
+      "expectedCodes": ["invalid-props"]
+    },
+    {
+      "name": "table row has a different number of cells than columns",
+      "content": {
+        "schemaVersion": 1,
+        "blocks": [
+          {
+            "id": "uneven-table",
+            "type": "table",
+            "props": {
+              "columns": ["Setting", "Value"],
+              "rows": [["Environment"]]
+            }
+          }
+        ]
+      },
+      "expectedCodes": ["invalid-props"]
+    },
+    {
+      "name": "diagram connection points to a missing node",
+      "content": {
+        "schemaVersion": 1,
+        "blocks": [
+          {
+            "id": "dangling-diagram",
+            "type": "diagram",
+            "props": {
+              "nodes": [
+                { "id": "start", "title": "Start" },
+                { "id": "end", "title": "End" }
+              ],
+              "connections": [
+                { "from": "start", "to": "missing" }
+              ]
+            }
+          }
+        ]
+      },
+      "expectedCodes": ["invalid-props"]
+    },
+    {
+      "name": "javascript resource link",
+      "content": {
+        "schemaVersion": 1,
+        "blocks": [
+          {
+            "id": "unsafe-link",
+            "type": "resourceLink",
+            "props": {
+              "url": "javascript:alert(1)",
+              "title": "Unsafe"
+            }
+          }
+        ]
+      },
+      "expectedCodes": ["invalid-props"]
+    },
+    {
+      "name": "duplicate block id",
+      "content": {
+        "schemaVersion": 1,
+        "blocks": [
+          {
+            "id": "repeated",
+            "type": "paragraph",
+            "props": { "text": "First block." }
+          },
+          {
+            "id": "repeated",
+            "type": "paragraph",
+            "props": { "text": "Second block." }
+          }
+        ]
+      },
+      "expectedCodes": ["duplicate-id"]
+    },
+    {
+      "name": "image references an asset outside the lesson",
+      "content": {
+        "schemaVersion": 1,
+        "blocks": [
+          {
+            "id": "missing-asset",
+            "type": "image",
+            "props": {
+              "assetId": "not-in-assets",
+              "alt": "Missing image"
+            }
+          }
+        ]
+      },
+      "expectedCodes": ["unknown-asset"]
+    },
+    {
+      "name": "content is not an object",
+      "content": "not a lesson object",
+      "expectedCodes": ["invalid-envelope"]
+    }
+  ]
+}
