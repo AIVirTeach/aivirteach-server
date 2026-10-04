@@ -1,10 +1,11 @@
+import { collectInlineLinkTargets } from './derive';
 import { LessonEnvelopeSchema } from './envelope';
 import { BLOCK_REGISTRY } from './registry';
 import type { BlockType } from './index.js';
 
 export type ProblemCode =
   | 'invalid-envelope' | 'too-many-blocks' | 'too-large' | 'unknown-type'
-  | 'invalid-props' | 'duplicate-id' | 'unknown-asset' | 'step-gap'
+  | 'invalid-props' | 'invalid-link' | 'duplicate-id' | 'unknown-asset' | 'step-gap'
   | 'heading-skip' | 'empty-heading' | 'no-blocks';
 
 export type Problem = {
@@ -21,6 +22,15 @@ const knownBlockType = (type: string): type is BlockType => Object.hasOwn(BLOCK_
 const problem = (level: Problem['level'], code: ProblemCode, message: string, blockId?: string, blockIndex?: number): Problem => ({
   level, code, message, ...(blockId === undefined ? {} : { blockId }), ...(blockIndex === undefined ? {} : { blockIndex }),
 });
+
+function isAllowedLinkTarget(target: string): boolean {
+  try {
+    const protocol = new URL(target).protocol;
+    return protocol === 'http:' || protocol === 'https:' || protocol === 'mailto:';
+  } catch {
+    return false;
+  }
+}
 
 export function validateLessonContent(input: unknown, ctx: { courseAssetIds: ReadonlySet<string> }): ValidationReport {
   const errors: Problem[] = [];
@@ -68,6 +78,12 @@ export function validateLessonContent(input: unknown, ctx: { courseAssetIds: Rea
       }
     } else {
       const value = result.data as Record<string, unknown>;
+      // 行内链接只放行 http/https/mailto；客户端渲染器也会过滤，这里是不依赖客户端实现的第二道防线。
+      for (const target of collectInlineLinkTargets(type, value)) {
+        if (!isAllowedLinkTarget(target)) {
+          errors.push(problem('error', 'invalid-link', `链接只允许 http、https 或 mailto：${target}`, id, blockIndex));
+        }
+      }
       if (type === 'step' && typeof value.number === 'number') {
         if (previousStep !== undefined && value.number !== previousStep + 1) {
           warnings.push(problem('warning', 'step-gap', `步骤编号应从 ${previousStep + 1} 开始`, id, blockIndex));

@@ -79,4 +79,36 @@ describe('validateLessonContent', () => {
     expect(empty.warnings.map((p) => p.code)).toContain('no-blocks');
     expect(empty.errors).toEqual([]);
   });
+
+  describe('inline link targets', () => {
+    const ctx = { courseAssetIds: new Set<string>() };
+    const codes = (blocks: unknown[]) => validateLessonContent(valid(blocks), ctx).errors.map((p) => p.code);
+
+    it.each([
+      ['paragraph', { text: '见 [x](javascript:alert(1))' }],
+      ['bulletList', { items: ['ok', '[x](data:text/html,hi)'] }],
+      ['callout', { variant: 'note', body: '[x](/relative)' }],
+      ['step', { number: 1, title: '[x](vbscript:run)' }],
+      ['table', { columns: ['a'], rows: [['[x](javascript:1)']] }],
+      ['annotatedCode', { steps: [{ label: 'a', code: ' ', explanation: '[x](javascript:1)', terms: [] }] }],
+      ['paragraph', { text: '**[x](javascript:1)**' }],
+    ])('rejects a disallowed link in %s', (type, props) => {
+      expect(codes([block('b', type, props)])).toContain('invalid-link');
+    });
+
+    it('accepts http, https and mailto links and ignores link-looking text inside code spans', () => {
+      expect(codes([
+        block('a', 'paragraph', { text: '[a](https://example.com) [b](http://example.com/x?y=(1)) [c](mailto:a@b.co)' }),
+        block('b', 'paragraph', { text: '`[x](javascript:1)` 只是代码' }),
+      ])).toEqual([]);
+    });
+
+    it('reports the block that holds the bad link', () => {
+      const result = validateLessonContent(valid([
+        block('ok', 'paragraph', { text: 'fine' }),
+        block('bad', 'paragraph', { text: '[x](javascript:1)' }),
+      ]), ctx);
+      expect(result.errors).toEqual([expect.objectContaining({ code: 'invalid-link', blockId: 'bad', blockIndex: 1 })]);
+    });
+  });
 });

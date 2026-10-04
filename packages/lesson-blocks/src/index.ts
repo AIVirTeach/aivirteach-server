@@ -39,4 +39,4 @@ export {
 export { BLOCK_REGISTRY } from './registry';
 export { validateLessonContent } from './validate';
 export type { Problem, ProblemCode, ValidationReport } from './validate';
-export { blocksToPlainText, collectImageAssetIds, countRenderableBlocks } from './derive';
+export { blocksToPlainText, collectImageAssetIds, collectInlineLinkTargets, countRenderableBlocks } from './derive';

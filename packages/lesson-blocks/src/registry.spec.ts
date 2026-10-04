@@ -12,7 +12,7 @@ describe('lesson block registry', () => {
       const props = BLOCK_REGISTRY[type].defaultProps();
       if (type === 'image') {
         // Image defaults are intentionally incomplete until an operator chooses an asset and writes alt text.
-        expect(props).toBe('');
+        expect(props).toEqual({ assetId: '', alt: '' });
         expect(BLOCK_REGISTRY[type].schema.safeParse(props).success).toBe(false);
       } else {
         expect(BLOCK_REGISTRY[type].schema.safeParse(props).success).toBe(true);

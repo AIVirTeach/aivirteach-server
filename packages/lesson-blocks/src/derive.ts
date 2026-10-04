@@ -110,7 +110,7 @@ function findMarkEnd(value: string, delimiter: string, start: number): number {
   return -1;
 }
 
-function plain(value: string): string {
+function plain(value: string, links?: string[]): string {
   let output = '';
   for (let index = 0; index < value.length;) {
     const char = value[index];
@@ -139,7 +139,8 @@ function plain(value: string): string {
     if (char === '[') {
       const link = findLinkEnd(value, index);
       if (link) {
-        output += plain(value.slice(index + 1, link.labelEnd));
+        links?.push(value.slice(link.labelEnd + 2, link.end - 1));
+        output += plain(value.slice(index + 1, link.labelEnd), links);
         index = link.end;
         continue;
       }
@@ -151,7 +152,7 @@ function plain(value: string): string {
     if (delimiter) {
       const end = findMarkEnd(value, delimiter, index + delimiter.length);
       if (end >= 0) {
-        output += plain(value.slice(index + delimiter.length, end));
+        output += plain(value.slice(index + delimiter.length, end), links);
         index = end + delimiter.length;
         continue;
       }
@@ -162,48 +163,57 @@ function plain(value: string): string {
   return output;
 }
 
-export function blocksToPlainText(content: unknown): string {
+function blockLines(type: BlockType, props: Record<string, unknown>, links?: string[]): string[] {
   const lines: string[] = [];
-  for (const { type, props } of validBlocks(content)) {
-    const add = (value: unknown) => { if (typeof value === 'string') lines.push(plain(value)); };
-    const addRaw = (value: unknown) => { if (typeof value === 'string') lines.push(value); };
-    switch (type) {
-      case 'heading': case 'paragraph': add(props.text); break;
-      case 'bulletList': case 'numberedList':
-        if (Array.isArray(props.items)) props.items.forEach(add);
-        break;
-      case 'code': addRaw(props.code); add(props.description); break;
-      case 'step': add(props.title); add(props.body); break;
-      case 'callout': add(props.title); add(props.body); break;
-      case 'table':
-        if (Array.isArray(props.columns)) props.columns.forEach(add);
-        if (Array.isArray(props.rows)) props.rows.forEach((row) => { if (Array.isArray(row)) row.forEach(add); });
-        break;
-      case 'image': add(props.alt); add(props.caption); break;
-      case 'resourceLink': add(props.title); add(props.description); break;
-      case 'divider': break;
-      case 'annotatedCode':
-        add(props.title); add(props.fileLabel);
-        if (Array.isArray(props.steps)) props.steps.forEach((step) => {
-          if (typeof step === 'object' && step !== null) {
-            const item = step as Record<string, unknown>;
-            add(item.label); addRaw(item.code); add(item.explanationTitle); add(item.explanation);
-            if (Array.isArray(item.terms)) item.terms.forEach((term) => {
-              if (typeof term === 'object' && term !== null) { add((term as Record<string, unknown>).term); add((term as Record<string, unknown>).description); }
-            });
-          }
-        });
-        break;
-      case 'diagram':
-        add(props.title);
-        if (Array.isArray(props.nodes)) props.nodes.forEach((node) => {
-          if (typeof node === 'object' && node !== null) { add((node as Record<string, unknown>).title); add((node as Record<string, unknown>).description); }
-        });
-        if (Array.isArray(props.connections)) props.connections.forEach((connection) => {
-          if (typeof connection === 'object' && connection !== null) add((connection as Record<string, unknown>).label);
-        });
-        break;
-    }
+  const add = (value: unknown) => { if (typeof value === 'string') lines.push(plain(value, links)); };
+  const addRaw = (value: unknown) => { if (typeof value === 'string') lines.push(value); };
+  switch (type) {
+    case 'heading': case 'paragraph': add(props.text); break;
+    case 'bulletList': case 'numberedList':
+      if (Array.isArray(props.items)) props.items.forEach(add);
+      break;
+    case 'code': addRaw(props.code); add(props.description); break;
+    case 'step': add(props.title); add(props.body); break;
+    case 'callout': add(props.title); add(props.body); break;
+    case 'table':
+      if (Array.isArray(props.columns)) props.columns.forEach(add);
+      if (Array.isArray(props.rows)) props.rows.forEach((row) => { if (Array.isArray(row)) row.forEach(add); });
+      break;
+    case 'image': add(props.alt); add(props.caption); break;
+    case 'resourceLink': add(props.title); add(props.description); break;
+    case 'divider': break;
+    case 'annotatedCode':
+      add(props.title); add(props.fileLabel);
+      if (Array.isArray(props.steps)) props.steps.forEach((step) => {
+        if (typeof step === 'object' && step !== null) {
+          const item = step as Record<string, unknown>;
+          add(item.label); addRaw(item.code); add(item.explanationTitle); add(item.explanation);
+          if (Array.isArray(item.terms)) item.terms.forEach((term) => {
+            if (typeof term === 'object' && term !== null) { add((term as Record<string, unknown>).term); add((term as Record<string, unknown>).description); }
+          });
+        }
+      });
+      break;
+    case 'diagram':
+      add(props.title);
+      if (Array.isArray(props.nodes)) props.nodes.forEach((node) => {
+        if (typeof node === 'object' && node !== null) { add((node as Record<string, unknown>).title); add((node as Record<string, unknown>).description); }
+      });
+      if (Array.isArray(props.connections)) props.connections.forEach((connection) => {
+        if (typeof connection === 'object' && connection !== null) add((connection as Record<string, unknown>).label);
+      });
+      break;
   }
-  return lines.join('\n');
+  return lines;
+}
+
+export function blocksToPlainText(content: unknown): string {
+  return validBlocks(content).flatMap(({ type, props }) => blockLines(type, props)).join('\n');
+}
+
+/** 一个块的行内文本里出现的 Markdown 链接目标（代码片段内的不算）。 */
+export function collectInlineLinkTargets(type: BlockType, props: Record<string, unknown>): string[] {
+  const links: string[] = [];
+  blockLines(type, props, links);
+  return links;
 }
