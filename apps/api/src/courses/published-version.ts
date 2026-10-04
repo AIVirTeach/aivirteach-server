@@ -8,7 +8,13 @@ export const LATEST_PUBLISHED_VERSION = {
   include: {
     modules: {
       orderBy: { position: 'asc' },
-      include: { lessons: { orderBy: { position: 'asc' } } },
+      include: {
+        // 版本树只用于标题、顺序、进度；正文 body/content 单课读取时再单独取。
+        lessons: {
+          orderBy: { position: 'asc' },
+          omit: { body: true, content: true },
+        },
+      },
     },
     welcome: true,
   },

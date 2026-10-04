@@ -124,18 +124,29 @@ export class CoursesService {
   async getLesson(slug: string, lessonId: string): Promise<LessonResponse> {
     const course = await this.requirePublishedCourseWithLatestVersion(slug);
     const version = course.versions[0];
-    const lesson = version.modules
+    const summary = version.modules
       .flatMap((courseModule) => courseModule.lessons)
       .find((candidate) => candidate.contentId === lessonId);
-    const assetIds = collectImageAssetIds(lesson?.content);
+    const bodyRow = summary
+      ? await this.prisma.courseLesson.findUnique({
+          where: { id: summary.id },
+          select: { body: true, content: true },
+        })
+      : null;
+    const modules = version.modules.map((courseModule) => ({
+      ...courseModule,
+      lessons: courseModule.lessons.map((candidate) =>
+        candidate.id === summary?.id ? { ...candidate, ...bodyRow } : candidate,
+      ),
+    }));
     const courseAssets = await loadCourseAssets(
       this.prisma,
       course.id,
-      assetIds,
+      collectImageAssetIds(bodyRow?.content),
     );
     return buildLessonResponse({
       courseSlug: course.slug,
-      modules: version.modules,
+      modules,
       lessonId,
       courseAssets,
     });

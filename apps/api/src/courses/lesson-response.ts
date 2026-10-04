@@ -6,9 +6,14 @@ import {
 } from '@aivirteach/lesson-blocks';
 import type { LessonBlock } from '@aivirteach/lesson-blocks';
 
-type ModuleRow = Prisma.CourseModuleGetPayload<{
-  include: { lessons: true };
-}>;
+type LessonRow = Prisma.CourseLessonGetPayload<object>;
+type ModuleRow = Prisma.CourseModuleGetPayload<object> & {
+  // body/content 只在被读取的那一课上必须有；其余课时只用来算导航。
+  lessons: Array<
+    Omit<LessonRow, 'body' | 'content'> &
+      Partial<Pick<LessonRow, 'body' | 'content'>>
+  >;
+};
 
 export type LessonResponse = {
   courseId: string;
@@ -57,9 +62,11 @@ export function buildLessonResponse(input: {
   }
 
   const { courseModule, lesson } = flattened[index];
-  const parsedContent = LessonEnvelopeSchema.safeParse(lesson.content);
+  const parsedContent = LessonEnvelopeSchema.safeParse(lesson.content ?? null);
   const blocks = parsedContent.success ? parsedContent.data.blocks : null;
-  const referencedAssetIds = new Set(collectImageAssetIds(lesson.content));
+  const referencedAssetIds = new Set(
+    collectImageAssetIds(lesson.content ?? null),
+  );
   const assets = Object.fromEntries(
     input.courseAssets
       .filter((asset) => referencedAssetIds.has(asset.id))
@@ -90,7 +97,7 @@ export function buildLessonResponse(input: {
         completionType: lesson.activityCompletionType,
       },
     },
-    markdown: lesson.body,
+    markdown: lesson.body ?? '',
     blocks,
     assets,
     // LessonAssessment 行要等 assessments.json 落地才会存在，这轮之前先固定返回 null。

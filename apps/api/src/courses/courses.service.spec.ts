@@ -8,6 +8,7 @@ import { LATEST_PUBLISHED_VERSION } from './published-version';
 const buildPrisma = () => ({
   course: { findMany: jest.fn(), findUnique: jest.fn() },
   courseAsset: { findUnique: jest.fn(), findMany: jest.fn() },
+  courseLesson: { findUnique: jest.fn() },
 });
 
 const buildService = async (prisma: ReturnType<typeof buildPrisma>) => {
@@ -24,6 +25,12 @@ describe('LATEST_PUBLISHED_VERSION', () => {
       orderBy: { version: 'desc' },
       take: 1,
     });
+  });
+
+  it('does not load lesson body/content with the version tree', () => {
+    expect(
+      LATEST_PUBLISHED_VERSION.include.modules.include.lessons,
+    ).toMatchObject({ omit: { body: true, content: true } });
   });
 });
 
@@ -179,6 +186,41 @@ describe('CoursesService.getWelcome', () => {
   });
 });
 
+// 学员读取只在版本树里拿到不含 body/content 的课时，正文单独按 id 取一节。
+function givenPublishedVersion(
+  prisma: ReturnType<typeof buildPrisma>,
+  version: {
+    modules: {
+      lessons: Array<{ id: string; body: string; content: unknown }>;
+    }[];
+  },
+) {
+  const full = new Map(
+    version.modules.flatMap((m) =>
+      m.lessons.map(
+        (l) => [l.id, { body: l.body, content: l.content }] as const,
+      ),
+    ),
+  );
+  const slim = {
+    ...version,
+    modules: version.modules.map((m) => ({
+      ...m,
+      lessons: m.lessons.map(({ body: _b, content: _c, ...rest }) => rest),
+    })),
+  };
+  prisma.course.findUnique.mockResolvedValue({
+    id: 'course_cuid_1',
+    slug: 'sample',
+    published: true,
+    versions: [slim],
+  });
+  prisma.courseLesson.findUnique.mockImplementation(
+    (args: { where: { id: string } }) =>
+      Promise.resolve(full.get(args.where.id) ?? null),
+  );
+}
+
 describe('CoursesService.getLesson', () => {
   const versionWithTwoLessons = {
     id: 'version_1',
@@ -225,12 +267,7 @@ describe('CoursesService.getLesson', () => {
 
   it('从 lesson body 读取正文并计算 navigation', async () => {
     const prisma = buildPrisma();
-    prisma.course.findUnique.mockResolvedValue({
-      id: 'course_cuid_1',
-      slug: 'sample',
-      published: true,
-      versions: [versionWithTwoLessons],
-    });
+    givenPublishedVersion(prisma, versionWithTwoLessons);
     const service = await buildService(prisma);
 
     const lesson = await service.getLesson('sample', 'verify-virtual-machine');
@@ -269,12 +306,7 @@ describe('CoursesService.getLesson', () => {
         },
       ],
     };
-    prisma.course.findUnique.mockResolvedValue({
-      id: 'course_cuid_1',
-      slug: 'sample',
-      published: true,
-      versions: [version],
-    });
+    givenPublishedVersion(prisma, version);
     prisma.courseAsset.findMany.mockResolvedValue([
       { id: 'owned', objectKey: 'https://cdn.test/owned.png', altText: null },
     ]);
@@ -290,14 +322,28 @@ describe('CoursesService.getLesson', () => {
     });
   });
 
+  it('只按 id 取被读的那一课的正文，找不到课时时不查正文', async () => {
+    const prisma = buildPrisma();
+    givenPublishedVersion(prisma, versionWithTwoLessons);
+    const service = await buildService(prisma);
+
+    await service.getLesson('sample', 'verify-network');
+    expect(prisma.courseLesson.findUnique).toHaveBeenCalledTimes(1);
+    expect(prisma.courseLesson.findUnique).toHaveBeenCalledWith({
+      where: { id: 'lesson_cuid_2' },
+      select: { body: true, content: true },
+    });
+
+    prisma.courseLesson.findUnique.mockClear();
+    await expect(service.getLesson('sample', 'nope')).rejects.toThrow(
+      NotFoundException,
+    );
+    expect(prisma.courseLesson.findUnique).not.toHaveBeenCalled();
+  });
+
   it('第二课的 navigation 指回第一课，且没有 next', async () => {
     const prisma = buildPrisma();
-    prisma.course.findUnique.mockResolvedValue({
-      id: 'course_cuid_1',
-      slug: 'sample',
-      published: true,
-      versions: [versionWithTwoLessons],
-    });
+    givenPublishedVersion(prisma, versionWithTwoLessons);
     const service = await buildService(prisma);
 
     const lesson = await service.getLesson('sample', 'verify-network');
@@ -313,12 +359,7 @@ describe('CoursesService.getLesson', () => {
 
   it('lessonId 不属于该课程时抛 NotFoundException', async () => {
     const prisma = buildPrisma();
-    prisma.course.findUnique.mockResolvedValue({
-      id: 'course_cuid_1',
-      slug: 'sample',
-      published: true,
-      versions: [versionWithTwoLessons],
-    });
+    givenPublishedVersion(prisma, versionWithTwoLessons);
     const service = await buildService(prisma);
 
     await expect(service.getLesson('sample', 'nope')).rejects.toThrow(
@@ -328,12 +369,7 @@ describe('CoursesService.getLesson', () => {
 
   it('用内部 cuid（而不是 content id）查询时抛 NotFoundException——路由参数不能是内部 id', async () => {
     const prisma = buildPrisma();
-    prisma.course.findUnique.mockResolvedValue({
-      id: 'course_cuid_1',
-      slug: 'sample',
-      published: true,
-      versions: [versionWithTwoLessons],
-    });
+    givenPublishedVersion(prisma, versionWithTwoLessons);
     const service = await buildService(prisma);
 
     await expect(service.getLesson('sample', 'lesson_cuid_1')).rejects.toThrow(
