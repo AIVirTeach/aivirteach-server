@@ -52,6 +52,9 @@ type ProgressBackfillRow = {
   currentLesson: { contentId: string } | null;
 };
 
+// 写库事务可能很大（每课一条 updateMany），远程库上要远超 Prisma 默认的 5 秒。
+export const BACKFILL_TX_OPTIONS = { timeout: 120_000 };
+
 @Injectable()
 export class ContentModelBackfillService {
   constructor(private readonly prisma: PrismaService) {}
@@ -90,20 +93,26 @@ export class ContentModelBackfillService {
     for (const row of lessons as unknown as LessonBackfillRow[]) {
       // Keep the invariant even if a mocked/stale read returns a non-empty body.
       if (row.body !== '') continue;
+      // 已经有 content 的课时是管理员新建/编辑的：body 本来就是空的弃用字段，不算"未解决"，否则每次都会混进报告。
+      const authored = row.content !== null;
       const markdown = row.module.courseVersion.sourceMarkdown;
       if (markdown === null) {
-        unresolved.push({
-          lessonId: row.id,
-          reason: '版本没有 sourceMarkdown',
-        });
+        if (!authored) {
+          unresolved.push({
+            lessonId: row.id,
+            reason: '版本没有 sourceMarkdown',
+          });
+        }
         continue;
       }
       const range = parseSourceRange(row.sourceRange);
       if (!range) {
-        unresolved.push({
-          lessonId: row.id,
-          reason: '课时没有有效 sourceRange',
-        });
+        if (!authored) {
+          unresolved.push({
+            lessonId: row.id,
+            reason: '课时没有有效 sourceRange',
+          });
+        }
         continue;
       }
       bodyUpdates.push({ id: row.id, body: sliceLessonBody(markdown, range) });
@@ -250,8 +259,9 @@ export class ContentModelBackfillService {
   async run(options: { execute: boolean }): Promise<BackfillReport> {
     const plan = await this.prepare();
     if (!options.execute) return plan.report;
-    return this.prisma.$transaction((transaction) =>
-      this.apply(plan, transaction),
+    return this.prisma.$transaction(
+      (transaction) => this.apply(plan, transaction),
+      BACKFILL_TX_OPTIONS,
     );
   }
 }

@@ -4,6 +4,7 @@ import { AuditService } from '../../audit/audit.service';
 import { PrismaService } from '../../prisma/prisma.service';
 import { OperatorSchema, ReasonSchema } from '../admin.schemas';
 import {
+  BACKFILL_TX_OPTIONS,
   ContentModelBackfillService,
   type BackfillReport,
 } from '../backfill/content-model-backfill.service';
@@ -80,7 +81,7 @@ export class CourseBackfillCommand extends CommandRunner {
           );
           return result;
         },
-        { maxWait: 10_000, timeout: 120_000 },
+        { maxWait: 10_000, ...BACKFILL_TX_OPTIONS },
       );
     } else {
       report = plan.report;

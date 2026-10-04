@@ -66,6 +66,7 @@ describe('ContentModelBackfillService', () => {
       {
         id: 'unresolved',
         body: '',
+        content: null,
         sourceRange: { startLine: 1, endLine: 1 },
         module: { courseVersion: { sourceMarkdown: null } },
       },
@@ -92,7 +93,15 @@ describe('ContentModelBackfillService', () => {
         ],
       },
       progress: { filled: 1, total: 2 },
-      content: { filled: 0, skipped: [], reports: [], pendingBody: [] },
+      // 没有 content 的遗留课时拿不到来源正文：还要再跑一轮，所以也列在 pendingBody。
+      content: {
+        filled: 0,
+        skipped: [],
+        reports: [],
+        pendingBody: [
+          { lessonId: 'unresolved', reason: '版本没有 sourceMarkdown' },
+        ],
+      },
     });
     expect(prisma.courseLesson.updateMany).toHaveBeenNthCalledWith(1, {
       where: { id: 'l1', body: '' },
@@ -420,5 +429,52 @@ describe('ContentModelBackfillService', () => {
       { lessonId: 'missing-source', reason: '版本没有 sourceMarkdown' },
     ]);
     expect(prisma.courseLesson.updateMany).not.toHaveBeenCalled();
+  });
+
+  it('does not list admin-authored lessons (content set, body empty) as unresolved', async () => {
+    const prisma = createPrisma();
+    prisma.courseLesson.findMany.mockResolvedValue([
+      {
+        id: 'authored',
+        body: '',
+        content: { schemaVersion: 1, blocks: [] },
+        sourceRange: null,
+        module: {
+          courseVersion: { courseId: 'course-1', sourceMarkdown: null },
+        },
+      },
+      {
+        id: 'legacy',
+        body: '',
+        content: null,
+        sourceRange: null,
+        module: {
+          courseVersion: { courseId: 'course-1', sourceMarkdown: null },
+        },
+      },
+    ]);
+    prisma.progress.findMany.mockResolvedValue([]);
+    const service = new ContentModelBackfillService(
+      prisma as unknown as PrismaService,
+    );
+
+    const report = await service.run({ execute: false });
+
+    expect(report.bodies.unresolved).toEqual([
+      { lessonId: 'legacy', reason: '版本没有 sourceMarkdown' },
+    ]);
+  });
+
+  it('run() uses the same long transaction timeout as the CLI', async () => {
+    const prisma = createPrisma();
+    prisma.courseLesson.findMany.mockResolvedValue([]);
+    prisma.progress.findMany.mockResolvedValue([]);
+    const service = new ContentModelBackfillService(
+      prisma as unknown as PrismaService,
+    );
+    await service.run({ execute: true });
+    expect(prisma.$transaction).toHaveBeenCalledWith(expect.any(Function), {
+      timeout: 120_000,
+    });
   });
 });
