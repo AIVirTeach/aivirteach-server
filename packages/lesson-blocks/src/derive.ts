@@ -56,9 +56,19 @@ function findInlineCodeEnd(value: string, start: number, delimiterLength: number
   return -1;
 }
 
-function findLinkEnd(value: string, start: number): { labelEnd: number; end: number } | undefined {
+// 链接标签/目标的最大扫描长度：没有上限时，大量未闭合的 `[` 会让每个 `[` 都扫到文末，整体变成二次复杂度。
+const MAX_LINK_LABEL = 500;
+const MAX_LINK_TARGET = 2000;
+// 单个字符串里所有链接扫描的总步数预算；正常内容远用不完，病态输入（成千上万个未闭合的 `[`）超出后
+// 不再识别链接，并标记 exceeded，由校验当作错误处理，保证耗时有上界。
+const LINK_SCAN_BUDGET = 50_000;
+
+type LinkScan = { links?: string[]; budget: number; exceeded: boolean };
+
+function findLinkEnd(value: string, start: number, scan: LinkScan): { labelEnd: number; end: number } | undefined {
   let labelEnd = -1;
-  for (let index = start + 1; index < value.length;) {
+  for (let index = start + 1; index < Math.min(value.length, start + 1 + MAX_LINK_LABEL);) {
+    if (--scan.budget < 0) { scan.exceeded = true; return undefined; }
     if (value[index] === '\\') {
       const runLength = countRun(value, index, '\\');
       index += runLength;
@@ -76,7 +86,8 @@ function findLinkEnd(value: string, start: number): { labelEnd: number; end: num
   }
   if (labelEnd < 0 || value[labelEnd + 1] !== '(') return undefined;
   let depth = 1;
-  for (let index = labelEnd + 2; index < value.length;) {
+  for (let index = labelEnd + 2; index < Math.min(value.length, labelEnd + 2 + MAX_LINK_TARGET);) {
+    if (--scan.budget < 0) { scan.exceeded = true; return undefined; }
     if (value[index] === '\\') {
       const runLength = countRun(value, index, '\\');
       index += runLength;
@@ -110,7 +121,7 @@ function findMarkEnd(value: string, delimiter: string, start: number): number {
   return -1;
 }
 
-function plain(value: string, links?: string[]): string {
+function plain(value: string, scan: LinkScan): string {
   let output = '';
   for (let index = 0; index < value.length;) {
     const char = value[index];
@@ -137,10 +148,10 @@ function plain(value: string, links?: string[]): string {
       continue;
     }
     if (char === '[') {
-      const link = findLinkEnd(value, index);
+      const link = findLinkEnd(value, index, scan);
       if (link) {
-        links?.push(value.slice(link.labelEnd + 2, link.end - 1));
-        output += plain(value.slice(index + 1, link.labelEnd), links);
+        scan.links?.push(value.slice(link.labelEnd + 2, link.end - 1));
+        output += plain(value.slice(index + 1, link.labelEnd), scan);
         index = link.end;
         continue;
       }
@@ -152,7 +163,7 @@ function plain(value: string, links?: string[]): string {
     if (delimiter) {
       const end = findMarkEnd(value, delimiter, index + delimiter.length);
       if (end >= 0) {
-        output += plain(value.slice(index + delimiter.length, end), links);
+        output += plain(value.slice(index + delimiter.length, end), scan);
         index = end + delimiter.length;
         continue;
       }
@@ -163,9 +174,14 @@ function plain(value: string, links?: string[]): string {
   return output;
 }
 
-function blockLines(type: BlockType, props: Record<string, unknown>, links?: string[]): string[] {
+function blockLines(type: BlockType, props: Record<string, unknown>, scans?: LinkScan[]): string[] {
   const lines: string[] = [];
-  const add = (value: unknown) => { if (typeof value === 'string') lines.push(plain(value, links)); };
+  const add = (value: unknown) => {
+    if (typeof value !== 'string') return;
+    const scan: LinkScan = { links: scans ? [] : undefined, budget: LINK_SCAN_BUDGET, exceeded: false };
+    lines.push(plain(value, scan));
+    scans?.push(scan);
+  };
   const addRaw = (value: unknown) => { if (typeof value === 'string') lines.push(value); };
   switch (type) {
     case 'heading': case 'paragraph': add(props.text); break;
@@ -211,9 +227,12 @@ export function blocksToPlainText(content: unknown): string {
   return validBlocks(content).flatMap(({ type, props }) => blockLines(type, props)).join('\n');
 }
 
-/** 一个块的行内文本里出现的 Markdown 链接目标（代码片段内的不算）。 */
-export function collectInlineLinkTargets(type: BlockType, props: Record<string, unknown>): string[] {
-  const links: string[] = [];
-  blockLines(type, props, links);
-  return links;
+/**
+ * 一个块的行内文本里出现的 Markdown 链接目标（代码片段内的不算）。
+ * complete=false 表示某个字符串的链接扫描超出了预算，目标列表可能不全，调用方应当按错误处理。
+ */
+export function collectInlineLinkTargets(type: BlockType, props: Record<string, unknown>): { targets: string[]; complete: boolean } {
+  const scans: LinkScan[] = [];
+  blockLines(type, props, scans);
+  return { targets: scans.flatMap((scan) => scan.links ?? []), complete: scans.every((scan) => !scan.exceeded) };
 }

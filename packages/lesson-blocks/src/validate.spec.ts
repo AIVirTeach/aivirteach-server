@@ -87,11 +87,15 @@ describe('validateLessonContent', () => {
     it.each([
       ['paragraph', { text: '见 [x](javascript:alert(1))' }],
       ['bulletList', { items: ['ok', '[x](data:text/html,hi)'] }],
-      ['callout', { variant: 'note', body: '[x](/relative)' }],
+      ['callout', { variant: 'note', body: '[x](ftp://example.com/file)' }],
       ['step', { number: 1, title: '[x](vbscript:run)' }],
       ['table', { columns: ['a'], rows: [['[x](javascript:1)']] }],
       ['annotatedCode', { steps: [{ label: 'a', code: ' ', explanation: '[x](javascript:1)', terms: [] }] }],
       ['paragraph', { text: '**[x](javascript:1)**' }],
+      ['paragraph', { text: '[x](java\tscript:alert(1))' }],
+      ['paragraph', { text: '[x]( javascript:alert(1))' }],
+      ['paragraph', { text: '[x](<javascript:alert(1)>)' }],
+      ['paragraph', { text: '[x](JaVaScRiPt:alert(1) "title")' }],
     ])('rejects a disallowed link in %s', (type, props) => {
       expect(codes([block('b', type, props)])).toContain('invalid-link');
     });
@@ -101,6 +105,24 @@ describe('validateLessonContent', () => {
         block('a', 'paragraph', { text: '[a](https://example.com) [b](http://example.com/x?y=(1)) [c](mailto:a@b.co)' }),
         block('b', 'paragraph', { text: '`[x](javascript:1)` 只是代码' }),
       ])).toEqual([]);
+    });
+
+    it('lets scheme-less targets through (the client renders them as plain text) and strips titles and angle brackets', () => {
+      expect(codes([
+        block('a', 'paragraph', { text: '[a](#anchor) [b](/relative/path) [c](page.html) array[0](x)' }),
+        block('b', 'paragraph', { text: '[d](http://example.com "A title") [e](<https://example.com/a b>)' }),
+      ])).toEqual([]);
+    });
+
+    it('flags pathological bracket structure as an error instead of scanning it quadratically', () => {
+      expect(codes([block('p', 'paragraph', { text: '['.repeat(5000) })])).toContain('invalid-link');
+    });
+
+    it('does not take quadratic time on bracket-heavy text', () => {
+      const text = '['.repeat(5000);
+      const started = Date.now();
+      validateLessonContent(valid(Array.from({ length: 50 }, (_, i) => block(`p${i}`, 'paragraph', { text }))), ctx);
+      expect(Date.now() - started).toBeLessThan(1000);
     });
 
     it('reports the block that holds the bad link', () => {
