@@ -1,4 +1,7 @@
--- Migration A: additive course content model changes. This file is intentionally not applied.
+-- Migration A: additive course content model changes (nullable/defaulted columns, one partial unique index).
+-- Before applying to a database that already holds courses, check that no course has more than one
+-- unpublished version, otherwise the partial unique index below fails:
+--   SELECT "courseId", count(*) FROM "CourseVersion" WHERE "publishedAt" IS NULL GROUP BY 1 HAVING count(*) > 1;
 BEGIN;
 
 ALTER TABLE "CourseLesson"

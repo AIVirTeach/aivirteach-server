@@ -1,5 +1,4 @@
 import 'dotenv/config';
-import { INestApplication } from '@nestjs/common';
 import type { NestExpressApplication } from '@nestjs/platform-express';
 import { Test } from '@nestjs/testing';
 import { PrismaClient } from '@prisma/client';
@@ -17,7 +16,7 @@ const PNG = Buffer.from([
 const STUB_URL = 'https://blob.example.test/courses/stub.png';
 
 describe('课时块 端到端', () => {
-  let app: INestApplication;
+  let app: NestExpressApplication;
   const prisma = new PrismaClient();
   const adminToken = process.env.ADMIN_API_TOKEN ?? '';
   const jwtSecret = process.env.JWT_SECRET ?? '';
