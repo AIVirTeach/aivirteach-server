@@ -12,7 +12,7 @@ describe('CourseAssetUploadService', () => {
     course: { findUnique: jest.fn() },
     courseAsset: { create: jest.fn() },
   };
-  const storage = { uploadBuffer: jest.fn() };
+  const storage = { uploadBuffer: jest.fn(), delete: jest.fn() };
   const audit = { record: jest.fn() };
   let service: CourseAssetUploadService;
 
@@ -23,6 +23,7 @@ describe('CourseAssetUploadService', () => {
       slug: 'demo',
     });
     storage.uploadBuffer.mockResolvedValue('https://blob.test/asset.png');
+    storage.delete.mockResolvedValue(undefined);
     prisma.courseAsset.create.mockResolvedValue({ id: 'asset-id' });
     service = new CourseAssetUploadService(
       prisma as unknown as PrismaService,
@@ -152,6 +153,33 @@ describe('CourseAssetUploadService', () => {
     ).rejects.toThrow('storage down');
     expect(prisma.courseAsset.create).not.toHaveBeenCalled();
     expect(audit.record).not.toHaveBeenCalled();
+  });
+
+  it('removes the stored blob when the database insert fails', async () => {
+    prisma.courseAsset.create.mockRejectedValue(new Error('db down'));
+    await expect(
+      service.upload(
+        'demo',
+        { buffer: png, size: png.length },
+        undefined,
+        'editor',
+      ),
+    ).rejects.toThrow('db down');
+    expect(storage.delete).toHaveBeenCalledWith('https://blob.test/asset.png');
+    expect(audit.record).not.toHaveBeenCalled();
+  });
+
+  it('still surfaces the database error when blob cleanup also fails', async () => {
+    prisma.courseAsset.create.mockRejectedValue(new Error('db down'));
+    storage.delete.mockRejectedValue(new Error('blob down'));
+    await expect(
+      service.upload(
+        'demo',
+        { buffer: png, size: png.length },
+        undefined,
+        'editor',
+      ),
+    ).rejects.toThrow('db down');
   });
 
   it('returns 404 for an unknown course and validates alt text length', async () => {

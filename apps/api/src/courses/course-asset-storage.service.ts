@@ -1,6 +1,6 @@
 import { readFile } from 'node:fs/promises';
 import { Injectable } from '@nestjs/common';
-import { put } from '@vercel/blob';
+import { del, put } from '@vercel/blob';
 
 @Injectable()
 export class CourseAssetStorageService {
@@ -23,5 +23,9 @@ export class CourseAssetStorageService {
       addRandomSuffix: true,
     });
     return blob.url;
+  }
+
+  async delete(url: string): Promise<void> {
+    await del(url);
   }
 }

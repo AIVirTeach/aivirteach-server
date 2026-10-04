@@ -1,9 +1,10 @@
 import { join } from 'node:path';
-import { put } from '@vercel/blob';
+import { del, put } from '@vercel/blob';
 import { CourseAssetStorageService } from './course-asset-storage.service';
 
 jest.mock('@vercel/blob', () => ({
   put: jest.fn(),
+  del: jest.fn(),
 }));
 
 const FIXTURE_FILE = join(
@@ -49,5 +50,11 @@ describe('CourseAssetStorageService.upload', () => {
       contentType: 'image/png',
       addRandomSuffix: true,
     });
+  });
+
+  it('deletes a stored blob by URL', async () => {
+    (del as jest.Mock).mockResolvedValue(undefined);
+    await new CourseAssetStorageService().delete('https://blob.test/image.png');
+    expect(del).toHaveBeenCalledWith('https://blob.test/image.png');
   });
 });

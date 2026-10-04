@@ -114,6 +114,10 @@ const OperatorHeader = createParamDecorator((_data, context) => {
     .getRequest<{ headers: Record<string, string | undefined> }>();
   return request.headers['x-operator'] ?? '';
 });
+const UploadAssetBodySchema = z.preprocess(
+  (body) => body ?? {},
+  z.object({ altText: z.string().optional() }),
+);
 const PublishBodySchema = z.preprocess(
   (body) => (body === undefined ? {} : body),
   z.object({ reason: z.string().min(1).optional() }).strict(),
@@ -303,7 +307,8 @@ export class AdminCoursesController {
     @Param('slug') slug: string,
     @OperatorHeader(new ZodValidationPipe(OperatorSchema)) operator: string,
     @UploadedFile() file: { buffer: Buffer; size: number } | undefined,
-    @Body() body: { altText?: string },
+    @Body(new ZodValidationPipe(UploadAssetBodySchema))
+    body: z.infer<typeof UploadAssetBodySchema>,
   ) {
     if (!file) throw new BadRequestException('请上传图片文件');
     return this.assetUploads.upload(slug, file, body.altText, operator);

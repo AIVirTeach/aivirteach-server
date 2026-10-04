@@ -63,16 +63,23 @@ export class CourseAssetUploadService {
       file.buffer,
       mimeType,
     );
-    const asset = await this.prisma.courseAsset.create({
-      data: {
-        courseId: course.id,
-        type: 'image',
-        objectKey: url,
-        altText: altText ?? null,
-        mimeType,
-      },
-      select: { id: true },
-    });
+    let asset: { id: string };
+    try {
+      asset = await this.prisma.courseAsset.create({
+        data: {
+          courseId: course.id,
+          type: 'image',
+          objectKey: url,
+          altText: altText ?? null,
+          mimeType,
+        },
+        select: { id: true },
+      });
+    } catch (error) {
+      // 入库失败时别留下无主的 blob；清理失败不能盖掉真正的数据库错误。
+      await this.storage.delete(url).catch(() => undefined);
+      throw error;
+    }
     await this.audit.record({
       actor: { type: AuditActorType.OPERATOR, id: operator },
       action: 'admin.course.uploadAsset',
