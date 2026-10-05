@@ -29,7 +29,8 @@ import { AdminTokenUsageController } from './interface/admin-token-usage.control
     CheckTokenQuota,
     GetUsageReport,
   ],
-  // TokenQuotaGuard 由用它的 controller 所在模块实例化，所以这里导出它依赖的用例。
-  exports: [CheckTokenQuota],
+  // TokenQuotaGuard 由用它的 controller 所在模块实例化，所以这里导出它依赖的用例；
+  // 权重也导出，restart 清空对话前要用同一套权重结算已消耗的额度。
+  exports: [CheckTokenQuota, TOKEN_WEIGHTS],
 })
 export class TokenUsageModule {}

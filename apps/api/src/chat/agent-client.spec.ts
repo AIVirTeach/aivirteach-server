@@ -1,5 +1,5 @@
 import { Test } from '@nestjs/testing';
-import { ServiceUnavailableException } from '@nestjs/common';
+import { Logger, ServiceUnavailableException } from '@nestjs/common';
 import { ENV, type Env } from '../config/env';
 import { AgentClient, type DiagnoseRequestBody } from './agent-client';
 
@@ -440,9 +440,16 @@ describe('AgentClient.diagnose — usage', () => {
   ])(
     'usage 格式非法（%s）时丢弃 usage，但不能让整个诊断响应失败',
     async (_label, usage) => {
+      const warn = jest
+        .spyOn(Logger.prototype, 'warn')
+        .mockImplementation(() => undefined);
       const result = await diagnoseWith({ ...BASE_RESPONSE, usage });
       expect(result.answer).toBe(BASE_RESPONSE.answer);
       expect(result.usage).toBeUndefined();
+      // 丢弃不能是静默的：Labs 改了协议时，靠这条日志才能第一时间发现计量停了。
+      expect(warn).toHaveBeenCalledWith(
+        expect.stringContaining('usage 格式非法'),
+      );
     },
   );
 });

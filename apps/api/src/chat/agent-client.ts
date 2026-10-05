@@ -33,6 +33,7 @@ export type DiagnoseRequestBody = {
 // 这是计量数据，不是诊断内容：格式非法时 .catch(undefined) 丢弃 usage，绝不能让整个响应
 // 校验失败——否则计量的 bug 会让学生收到"助教不可用"，丢掉本来正确的答案。
 const TokenCount = z.number().int().nonnegative();
+const usageLogger = new Logger('AgentClient');
 const AgentUsageSchema = z
   .object({
     input_cache_hit_tokens: TokenCount,
@@ -40,7 +41,16 @@ const AgentUsageSchema = z
     output_tokens: TokenCount,
   })
   .nullish()
-  .catch(undefined);
+  .catch((ctx) => {
+    // 只记哪个字段错了，不记原值。静默丢弃会让 Labs 改协议后计量悄悄停掉。
+    const fields = ctx.error.issues.map(
+      (issue) => issue.path.join('.') || '(root)',
+    );
+    usageLogger.warn(
+      `Labs 返回的 usage 格式非法，已丢弃该回复的用量：${fields.join(', ')}`,
+    );
+    return undefined;
+  });
 
 export const DiagnoseResponseSchema = z.object({
   request_id: z.string(),

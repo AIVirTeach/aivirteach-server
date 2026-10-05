@@ -149,6 +149,13 @@ AI 助教每次回复消耗的 token 由 Labs 从 DeepSeek 的 `usage` 里取出
 
 **运营报表**：`GET /api/v1/admin/token-usage?groupBy=user|course|day&from=…&to=…`（Bearer `ADMIN_API_TOKEN`；区间左闭右开，默认最近 7 天，按天分组用 UTC 日期）。每行带三类原始 token、加权消耗、`meteredTurns` 和 `unmeteredTurns`（真实 Agent 回复里没计上量的条数，非 0 说明数字被低估）；按用户分组时还有 `grantedTokens`（累计发放）、`lifetimeConsumption`（**全期**加权消耗）和 `balance`（`grantedTokens - lifetimeConsumption`，和上面 429 判定同一口径）。注意 `weightedConsumption` 只统计报表时间窗口，所以不等于 `grantedTokens - balance`。
 
+**已知边界（都是少计，不会多扣学生）：**
+
+- 只有成功落库的 AI 助教回复带 usage。Labs 报错走兜底话术、流式中途出错或被截断、客户端中途断开时，上游可能已经花掉 token，但这些调用没有记录，`unmeteredTurns` 也看不出来。Labs 的 usage 只在最终 `result` 事件里上报，要补需要改 SSE 协议。
+- 额度检查在 Labs 返回之前，扣减在返回之后，所以同一用户并发发起的多条消息会各自通过检查，超额量没有上限（软上限）。
+- 课程 restart 会清空对话，所以 restart 的事务里会先把被清空对话的加权消耗写成一条负的 `QuotaLedger`（`tokensDelta < 0`）。余额不变，但该用户的 `grantedTokens` 会相应变小、`lifetimeConsumption` 也不再包含这部分，两者之差（`balance`）仍然正确。
+- Labs 返回的 usage 格式非法时 server 会丢弃该条用量并打 warn 日志（`Labs 返回的 usage 格式非法`）；上线后看到这条日志说明计量在静默丢数据。
+
 ### 上线顺序
 
 1. 先部署 server 和迁移：`usage` 在响应里是可选的，Labs 还没改时一切照旧。

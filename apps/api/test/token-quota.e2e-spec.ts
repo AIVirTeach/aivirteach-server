@@ -39,6 +39,10 @@ describe('Token 额度 Guard 端到端', () => {
       data: { slug: courseSlug, title: '额度测试课', published: true },
     });
     courseId = course.id;
+    // restart 要求课程至少有一个已发布版本。
+    await prisma.courseVersion.create({
+      data: { courseId, version: 1, publishedAt: new Date() },
+    });
     enrollmentId = (
       await prisma.enrollment.create({ data: { userId, courseId } })
     ).id;
@@ -119,6 +123,23 @@ describe('Token 额度 Guard 端到端', () => {
       .post(messagesUrl())
       .set('Authorization', `Bearer ${accessToken}`)
       .send({ text: '再问一次' })
+      .expect(429);
+  });
+
+  it('restart 清空对话后消耗不会被清零：额度仍然用尽，无法靠重来续杯', async () => {
+    // 上一条用例已把余额消耗到 0（对话里有 250 个 output token -> 加权 1000）。
+    await request(app.getHttpServer())
+      .post('/api/v1/courses/' + courseSlug + '/restart')
+      .set('Authorization', `Bearer ${accessToken}`)
+      .expect(201);
+
+    await expect(
+      prisma.conversation.count({ where: { enrollmentId } }),
+    ).resolves.toBe(0);
+    await request(app.getHttpServer())
+      .post(messagesUrl())
+      .set('Authorization', `Bearer ${accessToken}`)
+      .send({ text: '重来后再问' })
       .expect(429);
   });
 });
