@@ -168,6 +168,11 @@ export class WorkspaceService {
     try {
       await this.labsClient.startVm(workspace.labId!);
     } catch (error) {
+      // start 失败也不从错误码猜：再问一次 Labs 的真实状态，只有确认 VM 已不存在才重建；
+      // 查询失败（鉴权、网络……）或 VM 还在，都保持原状并报错，不能因为一次故障就重建丢掉学生的环境。
+      const observed = await this.observeVmState(workspace.labId!);
+      if (observed?.kind === 'missing') return this.rebuildMissingVm(workspace, userId);
+
       const message = error instanceof Error ? error.message : '未知错误';
       await this.audit.record({
         actor: { type: AuditActorType.USER, id: userId },
@@ -303,6 +308,27 @@ export class WorkspaceService {
     });
     this.gateway.broadcastStatus(updated);
     return updated;
+  }
+
+  // start 时发现 VM 在 Labs 上已不存在（被删、主机重置……）：直接回到 CREATING 并在后台重建，
+  // 学生看到的是"正在准备"而不是 502。重建出来的是全新环境，原 VM 里的数据已无法恢复。
+  private async rebuildMissingVm(workspace: Workspace, userId: string): Promise<Workspace> {
+    this.logger.warn(`workspace ${workspace.id} 的 VM ${workspace.labId} 在 Labs 上已不存在，重新创建`);
+    const rebuilding = await this.prisma.workspace.update({
+      where: { id: workspace.id },
+      data: { status: WorkspaceStatus.CREATING, errorMessage: null },
+    });
+    await this.audit.record({
+      actor: { type: AuditActorType.USER, id: userId },
+      action: 'workspace.start',
+      success: false,
+      targetType: 'Workspace',
+      targetId: workspace.id,
+      metadata: { vmMissing: true },
+    });
+    this.gateway.broadcastStatus(rebuilding);
+    waitUntil(this.provisionInBackground(workspace.id, userId));
+    return rebuilding;
   }
 
   private isStale(workspace: Workspace): boolean {

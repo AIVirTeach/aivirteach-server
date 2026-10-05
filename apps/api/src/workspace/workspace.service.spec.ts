@@ -533,6 +533,63 @@ describe('WorkspaceService.start', () => {
       expect.objectContaining({ action: 'workspace.start', success: false, targetId: 'ws_1' }),
     );
   });
+
+  describe('start 失败后按 Labs 的真实状态对账', () => {
+    const stopped = { id: 'ws_1', enrollmentId: 'enr_1', status: WorkspaceStatus.STOPPED, labId: 'ws_1' };
+
+    async function setup() {
+      const ctx = await buildService();
+      ctx.prisma.enrollment.findUnique.mockResolvedValue(ENROLLMENT);
+      ctx.prisma.workspace.findUnique.mockResolvedValue(stopped);
+      ctx.labsClient.startVm.mockRejectedValue(new Error('学习环境暂时无法使用，请稍后再试或联系客服。'));
+      return ctx;
+    }
+
+    it('Labs 确认 VM 已不存在：自动重建——落库 CREATING、后台重新创建、写 vmMissing 审计、广播，不抛错', async () => {
+      const { service, prisma, labsClient, audit, gateway } = await setup();
+      labsClient.getVmState.mockResolvedValue({ kind: 'missing' });
+      labsClient.createVm.mockReturnValue(new Promise(() => {})); // 挂起，模拟重建还没返回
+      const rebuilding = { ...stopped, status: WorkspaceStatus.CREATING, errorMessage: null };
+      prisma.workspace.update.mockResolvedValue(rebuilding);
+
+      await expect(service.start('user_1', 'enr_1')).resolves.toBe(rebuilding);
+
+      expect(prisma.workspace.update).toHaveBeenCalledWith({
+        where: { id: 'ws_1' },
+        data: { status: WorkspaceStatus.CREATING, errorMessage: null },
+      });
+      expect(labsClient.createVm).toHaveBeenCalledWith('ws_1');
+      expect(audit.record).toHaveBeenCalledWith(
+        expect.objectContaining({
+          action: 'workspace.start',
+          success: false,
+          targetId: 'ws_1',
+          metadata: { vmMissing: true },
+        }),
+      );
+      expect(gateway.broadcastStatus).toHaveBeenCalledWith(rebuilding);
+    });
+
+    it('VM 还在（只是启动失败）：不重建，照常抛 BadGatewayException', async () => {
+      const { service, prisma, labsClient } = await setup();
+      labsClient.getVmState.mockResolvedValue({ kind: 'present', state: 'shut off' });
+
+      await expect(service.start('user_1', 'enr_1')).rejects.toBeInstanceOf(BadGatewayException);
+
+      expect(labsClient.createVm).not.toHaveBeenCalled();
+      expect(prisma.workspace.update).not.toHaveBeenCalled();
+    });
+
+    it('对账本身也失败（状态未知）：不重建，照常抛 BadGatewayException', async () => {
+      const { service, prisma, labsClient } = await setup();
+      labsClient.getVmState.mockRejectedValue(new Error('网络故障'));
+
+      await expect(service.start('user_1', 'enr_1')).rejects.toBeInstanceOf(BadGatewayException);
+
+      expect(labsClient.createVm).not.toHaveBeenCalled();
+      expect(prisma.workspace.update).not.toHaveBeenCalled();
+    });
+  });
 });
 
 describe('WorkspaceService.heartbeat', () => {
