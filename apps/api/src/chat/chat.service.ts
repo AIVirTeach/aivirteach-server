@@ -13,6 +13,7 @@ import {
   AgentClient,
   DiagnoseResponseSchema,
   type DiagnoseRequestBody,
+  type DiagnoseResponseBody,
 } from './agent-client';
 
 export type ChatMessage = {
@@ -33,6 +34,17 @@ export type ChatStreamEvent =
     };
 
 const ResultFrameSchema = z.object({ response: DiagnoseResponseSchema });
+
+// Labs 没返回 usage 时返回空对象：三列保持为空（未计量），不能写成 0——否则分不清
+// "没计上量"和"真的零消耗"。
+function usageColumns(usage: DiagnoseResponseBody['usage']) {
+  if (!usage) return {};
+  return {
+    inputCacheHitTokens: usage.input_cache_hit_tokens,
+    inputCacheMissTokens: usage.input_cache_miss_tokens,
+    outputTokens: usage.output_tokens,
+  };
+}
 
 type DiagnoseInputs = Pick<
   DiagnoseRequestBody,
@@ -119,6 +131,7 @@ export class ChatService {
         role: ConversationRole.ASSISTANT,
         content: response.answer,
         contextRef: response as unknown as Prisma.InputJsonValue,
+        ...usageColumns(response.usage),
       },
     });
 
@@ -220,6 +233,7 @@ export class ChatService {
           role: ConversationRole.ASSISTANT,
           content: response.answer,
           contextRef: response as unknown as Prisma.InputJsonValue,
+          ...usageColumns(response.usage),
         },
       });
     } catch (error) {

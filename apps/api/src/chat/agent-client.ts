@@ -29,6 +29,29 @@ export type DiagnoseRequestBody = {
 // Labs 是外部服务，quick tunnel 地址还会变——2xx 不代表 body 形状可信，运行时必须校验
 // （不能只靠 TypeScript 的编译期类型断言），否则 answer 缺失会导致 ChatService 写 Conversation
 // 时因 content 非空约束抛出未捕获异常，变成 500，违反"聊天接口不返回 5xx"的设计约束。
+// Labs 归一化后的三类 token（见 Labs providers/openai_compatible.normalize_usage）。
+// 这是计量数据，不是诊断内容：格式非法时 .catch(undefined) 丢弃 usage，绝不能让整个响应
+// 校验失败——否则计量的 bug 会让学生收到"助教不可用"，丢掉本来正确的答案。
+const TokenCount = z.number().int().nonnegative();
+const usageLogger = new Logger('AgentClient');
+const AgentUsageSchema = z
+  .object({
+    input_cache_hit_tokens: TokenCount,
+    input_cache_miss_tokens: TokenCount,
+    output_tokens: TokenCount,
+  })
+  .nullish()
+  .catch((ctx) => {
+    // 只记哪个字段错了，不记原值。静默丢弃会让 Labs 改协议后计量悄悄停掉。
+    const fields = ctx.error.issues.map(
+      (issue) => issue.path.join('.') || '(root)',
+    );
+    usageLogger.warn(
+      `Labs 返回的 usage 格式非法，已丢弃该回复的用量：${fields.join(', ')}`,
+    );
+    return undefined;
+  });
+
 export const DiagnoseResponseSchema = z.object({
   request_id: z.string(),
   status: z.enum(['completed', 'partial']),
@@ -39,6 +62,7 @@ export const DiagnoseResponseSchema = z.object({
   suggested_actions: z.array(z.unknown()),
   limitations: z.array(z.string()),
   tool_trace: z.array(z.unknown()),
+  usage: AgentUsageSchema,
 });
 
 export type DiagnoseResponseBody = z.infer<typeof DiagnoseResponseSchema>;

@@ -1,5 +1,13 @@
 import { z } from 'zod';
 
+// 留空（如 TOKEN_WEIGHT_OUTPUT=）按未设置处理：z.coerce.number() 会把 '' 变成 0，
+// 等于悄悄让这一类 token 免费。
+const tokenWeight = (fallback: number) =>
+  z.preprocess(
+    (value) => (value === '' ? undefined : value),
+    z.coerce.number().nonnegative().default(fallback),
+  );
+
 // 在进程启动时一次性校验，缺配置就直接崩，不要等到第一个请求进来才发现。
 const EnvSchema = z.object({
   DATABASE_URL: z.string().min(1, 'DATABASE_URL 不能为空'),
@@ -41,6 +49,19 @@ const EnvSchema = z.object({
     .int()
     .positive()
     .default(15),
+  // token 额度强制开关。默认关闭：只记录用量、不拦截，等运营给用户发好额度（quota:grant-tokens）
+  // 再打开，否则上线瞬间所有没有额度的用户都会被 429。只认 'true'/'false'，不用
+  // z.coerce.boolean——它会把字符串 'false' 当成真值。
+  TOKEN_QUOTA_ENFORCED: z
+    .enum(['true', 'false'])
+    .default('false')
+    .transform((value) => value === 'true'),
+  // 三类 token 折算成额度的权重，以未命中输入 = 1 为基准。默认值取自 DeepSeek flash 的
+  // 价格比例（缓存命中 0.003 : 未命中 0.15 : 输出 0.6 美元/百万 token，高峰/低谷同比例）；
+  // 换模型或价格变了要同步调整。
+  TOKEN_WEIGHT_CACHE_HIT: tokenWeight(0.02),
+  TOKEN_WEIGHT_INPUT_MISS: tokenWeight(1),
+  TOKEN_WEIGHT_OUTPUT: tokenWeight(4),
 });
 
 export type Env = z.infer<typeof EnvSchema>;

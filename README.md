@@ -68,6 +68,8 @@ node -e "console.log(require('node:crypto').randomBytes(48).toString('base64url'
 | `ADMIN_API_TOKEN` | 是 | ≥32 字符，`/admin/*` 接口的 Bearer 令牌（没有默认值，漏配整个 API 启动即崩，学员接口也会一起挂）。不要和 `JWT_SECRET` 共用 |
 | `PORT` | 否，默认 `4000` | Vercel 上由平台接管，本地开发才用得到 |
 | `CORS_ORIGINS` | 否，默认 `tauri://localhost` | 逗号分隔白名单；client 桌面端（Tauri v2 webview）的源是 `tauri://localhost`，本地网页调试再加 `http://localhost:3001` |
+| `TOKEN_QUOTA_ENFORCED` | 否，默认 `false` | 是否强制 AI 助教的 token 额度。关闭时只记录用量、不拦截；只认 `true` / `false`。上线顺序见下方「Token 用量与额度」 |
+| `TOKEN_WEIGHT_CACHE_HIT` / `TOKEN_WEIGHT_INPUT_MISS` / `TOKEN_WEIGHT_OUTPUT` | 否，默认 `0.02` / `1` / `4` | 三类 token 折算成额度的权重（以未命中输入为 1）。默认值取自 DeepSeek flash 的价格比例，换模型或价格变了要同步调整 |
 
 生产环境变量用 `vercel env ls` / `vercel env add` 管理，不要手改 Vercel 控制台之外的地方。
 
@@ -99,6 +101,7 @@ node -e "console.log(require('node:crypto').randomBytes(48).toString('base64url'
 | `course:backfill-content-model` | `--execute`（默认 dry-run） | 回填课时 `body`、课时块 `content` 和学员进度的 `currentLessonContentId`（迁移 A 之后跑，见下方"课时块上线顺序"） |
 | `enroll <email> <courseSlug>` | | 给用户开课 |
 | `quota:grant <email> <minutes>` | | 给用户发运行额度（分钟） |
+| `quota:grant-tokens <email> <tokens>` | | 给用户发 AI 助教 token 额度（加权后的额度单位，见下方「Token 用量与额度」） |
 
 所有命令都要求 `--operator`（谁在操作）和 `--reason`（为什么），并且**默认 dry-run**——不加 `--execute` 只打印将要发生的变更、不落库。这两点不是可选的：目的是让审计日志（`AuditEvent` 表）永远能查到"谁、为什么、改了什么"，而不是留一堆无主的写操作。
 
@@ -137,6 +140,28 @@ node -e "console.log(require('node:crypto').randomBytes(48).toString('base64url'
 **已知的上线窗口：** 旧代码一直在线到步骤 6，它只写旧字段 `currentLessonId`；回填只补 `currentLessonContentId` 为空的行，不会修正已经填过、之后又被旧代码推进的进度。所以步骤 5 执行之后、部署完成之前这几分钟里仍在推进课时的学员，部署后会回到回填时的位置；在这段时间里新开始学习的学员会显示未开始。其余学员不受影响。窗口越短越好，所以要求紧贴部署和低峰期。要做到零损失，需要新代码在迁移 B 之前同时写两个字段，这不在本 PR 范围内。
 
 代码上线后**不能直接回滚**：新代码不再写旧的 `currentLessonId`，回滚到旧版本会丢掉上线后产生的学员进度。
+
+## Token 用量与额度
+
+AI 助教每次回复消耗的 token 由 Labs 从 DeepSeek 的 `usage` 里取出，按计费口径分三类（缓存命中输入 / 未命中输入 / 输出），记在 `Conversation` 的 `inputCacheHitTokens` / `inputCacheMissTokens` / `outputTokens` 三列上；Labs 没返回 usage 的回复三列留空（未计量，不是 0）。
+
+**额度**是一个按用户的余额：`余额 = SUM(QuotaLedger.tokensDelta) - 加权消耗`，加权消耗 = `ceil(命中 × 0.02 + 未命中 × 1 + 输出 × 4)`（权重见环境变量）。余额 ≤ 0 时，聊天的两条 POST 路由（含流式）在 handler 之前返回 HTTP 429 `TOKEN_QUOTA_EXHAUSTED`，不写任何 Conversation。额度检查本身失败时放行（fail-open），只记错误日志。token 额度不支持过期。
+
+**运营报表**：`GET /api/v1/admin/token-usage?groupBy=user|course|day&from=…&to=…`（Bearer `ADMIN_API_TOKEN`；区间左闭右开，默认最近 7 天，按天分组用 UTC 日期）。每行带三类原始 token、加权消耗、`meteredTurns` 和 `unmeteredTurns`（真实 Agent 回复里没计上量的条数，非 0 说明数字被低估）；按用户分组时还有 `grantedTokens`（累计发放）、`lifetimeConsumption`（**全期**加权消耗）和 `balance`（`grantedTokens - lifetimeConsumption`，和上面 429 判定同一口径）。注意 `weightedConsumption` 只统计报表时间窗口，所以不等于 `grantedTokens - balance`。
+
+**已知边界（都是少计，不会多扣学生）：**
+
+- 只有成功落库的 AI 助教回复带 usage。Labs 报错走兜底话术、流式中途出错或被截断、客户端中途断开时，上游可能已经花掉 token，但这些调用没有记录，`unmeteredTurns` 也看不出来。Labs 的 usage 只在最终 `result` 事件里上报，要补需要改 SSE 协议。
+- 额度检查在 Labs 返回之前，扣减在返回之后，所以同一用户并发发起的多条消息会各自通过检查，超额量没有上限（软上限）。
+- 课程 restart 会清空对话，所以 restart 的事务里会先把被清空对话的加权消耗写成一条负的 `QuotaLedger`（`tokensDelta < 0`）。余额不变，但该用户的 `grantedTokens` 会相应变小、`lifetimeConsumption` 也不再包含这部分，两者之差（`balance`）仍然正确。
+- Labs 返回的 usage 格式非法时 server 会丢弃该条用量并打 warn 日志（`Labs 返回的 usage 格式非法`）；上线后看到这条日志说明计量在静默丢数据。
+
+### 上线顺序
+
+1. 先部署 server 和迁移：`usage` 在响应里是可选的，Labs 还没改时一切照旧。
+2. 再部署 Labs，开始返回 usage，server 开始记录。
+3. 观察一段时间报表（看 `unmeteredTurns`），用 `quota:grant-tokens` 给用户发额度。**消耗从第一条被计量的回复开始累计，不是从发放额度开始**：观察期里已经用掉的量会从新发的额度里扣。发放前先看报表里该用户的 `lifetimeConsumption`，发放量要覆盖它再加上想给的新额度，否则开启强制后刚发完额度的用户可能立刻被 429。
+4. 最后把 `TOKEN_QUOTA_ENFORCED` 设为 `true`。**先开强制再发额度，所有没有额度的用户会立刻被 429。**
 
 ## 造第一个账号（联调用）
 

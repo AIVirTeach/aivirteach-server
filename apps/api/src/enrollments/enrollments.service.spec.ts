@@ -5,7 +5,10 @@ import { PrismaService } from '../prisma/prisma.service';
 import { AuditService } from '../audit/audit.service';
 import { CoursesService } from '../courses/courses.service';
 import { LATEST_PUBLISHED_VERSION } from '../courses/published-version';
+import { TOKEN_WEIGHTS } from '../token-usage/application/check-token-quota';
 import { EnrollmentsService } from './enrollments.service';
+
+const WEIGHTS = { inputCacheHit: 0.02, inputCacheMiss: 1, output: 4 };
 
 const buildPrisma = () => {
   const prisma = {
@@ -17,7 +20,17 @@ const buildPrisma = () => {
     },
     progress: { upsert: jest.fn() },
     activity: { create: jest.fn() },
-    conversation: { deleteMany: jest.fn().mockResolvedValue({ count: 0 }) },
+    conversation: {
+      deleteMany: jest.fn().mockResolvedValue({ count: 0 }),
+      aggregate: jest.fn().mockResolvedValue({
+        _sum: {
+          inputCacheHitTokens: null,
+          inputCacheMissTokens: null,
+          outputTokens: null,
+        },
+      }),
+    },
+    quotaLedger: { create: jest.fn().mockResolvedValue({}) },
     workspace: { deleteMany: jest.fn().mockResolvedValue({ count: 0 }) },
     $transaction: jest.fn(),
   };
@@ -44,6 +57,7 @@ const buildService = async (
       { provide: PrismaService, useValue: prisma },
       { provide: AuditService, useValue: audit },
       { provide: CoursesService, useValue: coursesService },
+      { provide: TOKEN_WEIGHTS, useValue: WEIGHTS },
     ],
   }).compile();
   return { service: moduleRef.get(EnrollmentsService), audit, coursesService };
@@ -226,6 +240,61 @@ describe('EnrollmentsService.enroll', () => {
 });
 
 describe('EnrollmentsService.restart', () => {
+  const restartWithConsumption = async (sum: {
+    inputCacheHitTokens: number | null;
+    inputCacheMissTokens: number | null;
+    outputTokens: number | null;
+  }) => {
+    const prisma = buildPrisma();
+    const coursesService = buildCoursesService();
+    coursesService.requirePublishedCourseWithLatestVersion.mockResolvedValue(
+      SAMPLE_COURSE,
+    );
+    prisma.enrollment.upsert.mockResolvedValue({
+      id: 'enrollment_1',
+      userId: USER_ID,
+      courseId: 'course_1',
+      active: true,
+      createdAt: new Date('2026-08-20T00:00:00.000Z'),
+      completedAt: null,
+    });
+    prisma.conversation.aggregate.mockResolvedValue({ _sum: sum });
+    const { service } = await buildService(prisma, undefined, coursesService);
+    await service.restart(USER_ID, 'sample');
+    return prisma;
+  };
+
+  it('清空对话前把这些对话的加权消耗结算成负的 QuotaLedger，余额不因 restart 回升', async () => {
+    // 500*0.02 + 100*1 + 50*4 = 310
+    const prisma = await restartWithConsumption({
+      inputCacheHitTokens: 500,
+      inputCacheMissTokens: 100,
+      outputTokens: 50,
+    });
+
+    expect(prisma.conversation.aggregate).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { enrollmentId: 'enrollment_1' } }),
+    );
+    expect(prisma.quotaLedger.create).toHaveBeenCalledWith({
+      data: { userId: USER_ID, tokensDelta: -310 },
+    });
+    // 必须先结算再删，否则消耗已经随对话一起没了。
+    expect(prisma.quotaLedger.create.mock.invocationCallOrder[0]).toBeLessThan(
+      prisma.conversation.deleteMany.mock.invocationCallOrder[0],
+    );
+  });
+
+  it('没有任何已计量的消耗时不写 QuotaLedger', async () => {
+    const prisma = await restartWithConsumption({
+      inputCacheHitTokens: null,
+      inputCacheMissTokens: null,
+      outputTokens: null,
+    });
+
+    expect(prisma.quotaLedger.create).not.toHaveBeenCalled();
+    expect(prisma.conversation.deleteMany).toHaveBeenCalled();
+  });
+
   it('把 updateMany/upsert/progress.upsert 放进同一个事务，重置进度到第一课', async () => {
     const prisma = buildPrisma();
     const coursesService = buildCoursesService();

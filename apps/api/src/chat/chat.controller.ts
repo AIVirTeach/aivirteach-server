@@ -4,6 +4,7 @@ import { from, type Observable } from 'rxjs';
 import { map } from 'rxjs/operators';
 import { JwtAuthGuard, type AuthenticatedRequest } from '../auth/jwt-auth.guard';
 import { ZodValidationPipe } from '../common/zod-validation.pipe';
+import { TokenQuotaGuard } from '../token-usage/interface/token-quota.guard';
 import { SendChatMessageSchema, type SendChatMessageInput } from './chat.schemas';
 import { ChatService, type ChatMessage } from './chat.service';
 
@@ -22,8 +23,11 @@ export class ChatController {
     return this.chatService.getMessages(request.auth!.userId, enrollmentId);
   }
 
+  // 额度检查放 Guard（排在类级 JwtAuthGuard 之后）：流式路由的 SSE 响应头会先于 handler
+  // 提交，只有 Guard 能让两条路由都拿到真正的 HTTP 429。
   @Post(':enrollmentId/chat/messages')
   @HttpCode(200)
+  @UseGuards(TokenQuotaGuard)
   sendMessage(
     @Param('enrollmentId') enrollmentId: string,
     @Body(new ZodValidationPipe(SendChatMessageSchema)) body: SendChatMessageInput,
@@ -36,6 +40,7 @@ export class ChatController {
   // fetch/ReadableStream 消费，不是标准 EventSource。@Sse() 本身负责设 SSE 响应头，
   // 跟 method 选项正交，不冲突。
   @Sse(':enrollmentId/chat/messages/stream', { method: RequestMethod.POST })
+  @UseGuards(TokenQuotaGuard)
   streamMessage(
     @Param('enrollmentId') enrollmentId: string,
     @Body(new ZodValidationPipe(SendChatMessageSchema)) body: SendChatMessageInput,

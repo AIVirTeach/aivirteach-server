@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { Inject, Injectable, NotFoundException } from '@nestjs/common';
 import { AuditActorType } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { AuditService } from '../audit/audit.service';
@@ -9,6 +9,11 @@ import {
   type EnrollmentStatus,
 } from './enrollment-view';
 import { LATEST_PUBLISHED_VERSION } from '../courses/published-version';
+import { TOKEN_WEIGHTS } from '../token-usage/application/check-token-quota';
+import {
+  weightedConsumption,
+  type TokenWeights,
+} from '../token-usage/domain/token-weights';
 
 export type EnrollmentResponse = {
   id: string;
@@ -27,6 +32,7 @@ export class EnrollmentsService {
     private readonly prisma: PrismaService,
     private readonly audit: AuditService,
     private readonly coursesService: CoursesService,
+    @Inject(TOKEN_WEIGHTS) private readonly tokenWeights: TokenWeights,
   ) {}
 
   async enroll(userId: string, slug: string): Promise<EnrollmentResponse> {
@@ -114,6 +120,29 @@ export class EnrollmentsService {
 
       // 全新 restart：清空聊天记录和 Learning Lab，让用户像第一次报名一样重新走一遍。
       // 保留 Attempt/EnrollmentCompletion（评测与结课审计记录），不清空。
+      // token 消耗只存在 Conversation 的列上，删之前必须先结算成负的额度流水，
+      // 否则学生额度用尽后点 restart 就能把消耗清零、无限续杯。
+      const { _sum } = await tx.conversation.aggregate({
+        where: { enrollmentId: upserted.id },
+        _sum: {
+          inputCacheHitTokens: true,
+          inputCacheMissTokens: true,
+          outputTokens: true,
+        },
+      });
+      const consumed = weightedConsumption(
+        {
+          inputCacheHitTokens: _sum.inputCacheHitTokens ?? 0,
+          inputCacheMissTokens: _sum.inputCacheMissTokens ?? 0,
+          outputTokens: _sum.outputTokens ?? 0,
+        },
+        this.tokenWeights,
+      );
+      if (consumed > 0) {
+        await tx.quotaLedger.create({
+          data: { userId, tokensDelta: -consumed },
+        });
+      }
       await tx.conversation.deleteMany({
         where: { enrollmentId: upserted.id },
       });

@@ -1,9 +1,12 @@
 import { Test } from '@nestjs/testing';
 import { ENV } from '../config/env';
+import { CheckTokenQuota } from '../token-usage/application/check-token-quota';
 import { ChatController } from './chat.controller';
 import { ChatService } from './chat.service';
 
 const JWT_AUTH_GUARD_STUB = { provide: ENV, useValue: { JWT_SECRET: 'test-secret' } };
+// 控制器单测不经过 Guard 执行，只需要让 DI 能解析出 TokenQuotaGuard 的依赖。
+const TOKEN_QUOTA_STUB = { provide: CheckTokenQuota, useValue: {} };
 const AUTH_REQUEST = { auth: { userId: 'user_1', email: 'learner@example.com' } };
 
 describe('ChatController', () => {
@@ -11,7 +14,7 @@ describe('ChatController', () => {
     const service = { getMessages: jest.fn().mockResolvedValue([]) };
     const moduleRef = await Test.createTestingModule({
       controllers: [ChatController],
-      providers: [{ provide: ChatService, useValue: service }, JWT_AUTH_GUARD_STUB],
+      providers: [{ provide: ChatService, useValue: service }, JWT_AUTH_GUARD_STUB, TOKEN_QUOTA_STUB],
     }).compile();
     const controller = moduleRef.get(ChatController);
 
@@ -28,7 +31,7 @@ describe('ChatController', () => {
     };
     const moduleRef = await Test.createTestingModule({
       controllers: [ChatController],
-      providers: [{ provide: ChatService, useValue: service }, JWT_AUTH_GUARD_STUB],
+      providers: [{ provide: ChatService, useValue: service }, JWT_AUTH_GUARD_STUB, TOKEN_QUOTA_STUB],
     }).compile();
     const controller = moduleRef.get(ChatController);
 
@@ -53,7 +56,7 @@ describe('ChatController', () => {
     };
     const moduleRef = await Test.createTestingModule({
       controllers: [ChatController],
-      providers: [{ provide: ChatService, useValue: service }, JWT_AUTH_GUARD_STUB],
+      providers: [{ provide: ChatService, useValue: service }, JWT_AUTH_GUARD_STUB, TOKEN_QUOTA_STUB],
     }).compile();
     const controller = moduleRef.get(ChatController);
 

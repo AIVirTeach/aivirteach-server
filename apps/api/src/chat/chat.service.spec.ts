@@ -869,3 +869,118 @@ describe('ChatService.streamMessage — 调用 Agent', () => {
     errorSpy.mockRestore();
   });
 });
+
+describe('ChatService — Agent 回复落库时记录 token usage', () => {
+  const USAGE = {
+    input_cache_hit_tokens: 1000,
+    input_cache_miss_tokens: 200,
+    output_tokens: 50,
+  };
+  const USAGE_COLUMNS = {
+    inputCacheHitTokens: 1000,
+    inputCacheMissTokens: 200,
+    outputTokens: 50,
+  };
+
+  function setupReadyWorkspace(prisma: ReturnType<typeof buildPrisma>) {
+    prisma.enrollment.findUnique.mockResolvedValue(ENROLLMENT);
+    prisma.workspace.findUnique.mockResolvedValue({
+      labId: 'lab_1',
+      status: WorkspaceStatus.RUNNING,
+    });
+    prisma.progress.findUnique.mockResolvedValue({
+      currentLessonContentId: 'verify-virtual-machine',
+    });
+    prisma.course.findUnique.mockResolvedValue(PUBLISHED_COURSE);
+    prisma.courseLesson.findFirst.mockResolvedValue({
+      assessments: LESSON.assessments,
+    });
+    prisma.conversation.create.mockResolvedValue(conversationRow({}));
+  }
+
+  function assistantCreateData(prisma: ReturnType<typeof buildPrisma>) {
+    const call = prisma.conversation.create.mock.calls.find(
+      ([arg]) => arg.data.role === ConversationRole.ASSISTANT,
+    );
+    return call![0].data as Record<string, unknown>;
+  }
+
+  it('sendMessage：响应带 usage 时三列写进 ASSISTANT 行', async () => {
+    const { service, prisma, agentClient } = await buildService();
+    setupReadyWorkspace(prisma);
+    agentClient.diagnose.mockResolvedValue({
+      ...DIAGNOSE_RESPONSE,
+      usage: USAGE,
+    });
+
+    await service.sendMessage('user_1', 'enr_1', 'docker 装不上');
+
+    expect(assistantCreateData(prisma)).toMatchObject(USAGE_COLUMNS);
+  });
+
+  it('sendMessage：响应没有 usage 时不写任何 token 列（保持为空，不当成 0）', async () => {
+    const { service, prisma, agentClient } = await buildService();
+    setupReadyWorkspace(prisma);
+    agentClient.diagnose.mockResolvedValue(DIAGNOSE_RESPONSE);
+
+    await service.sendMessage('user_1', 'enr_1', 'docker 装不上');
+
+    const data = assistantCreateData(prisma);
+    expect(data).not.toHaveProperty('inputCacheHitTokens');
+    expect(data).not.toHaveProperty('inputCacheMissTokens');
+    expect(data).not.toHaveProperty('outputTokens');
+  });
+
+  it('sendMessage：usage 为 null 时同样不写 token 列', async () => {
+    const { service, prisma, agentClient } = await buildService();
+    setupReadyWorkspace(prisma);
+    agentClient.diagnose.mockResolvedValue({
+      ...DIAGNOSE_RESPONSE,
+      usage: null,
+    });
+
+    await service.sendMessage('user_1', 'enr_1', 'docker 装不上');
+
+    expect(assistantCreateData(prisma)).not.toHaveProperty('outputTokens');
+  });
+
+  it('sendMessage：Agent 失败走兜底话术时不写 token 列', async () => {
+    const { service, prisma, agentClient } = await buildService();
+    setupReadyWorkspace(prisma);
+    jest.spyOn(Logger.prototype, 'error').mockImplementation(() => undefined);
+    agentClient.diagnose.mockRejectedValue(new Error('boom'));
+
+    await service.sendMessage('user_1', 'enr_1', 'docker 装不上');
+
+    expect(assistantCreateData(prisma)).not.toHaveProperty('outputTokens');
+  });
+
+  it('streamMessage：result 帧带 usage 时三列写进 ASSISTANT 行', async () => {
+    const { service, prisma, agentClient } = await buildService();
+    setupReadyWorkspace(prisma);
+    agentClient.diagnoseStream.mockReturnValue(
+      framesFrom([
+        {
+          event: 'result',
+          data: { response: { ...DIAGNOSE_RESPONSE, usage: USAGE } },
+        },
+      ]),
+    );
+
+    await collect(service.streamMessage('user_1', 'enr_1', 'docker 装不上'));
+
+    expect(assistantCreateData(prisma)).toMatchObject(USAGE_COLUMNS);
+  });
+
+  it('streamMessage：result 帧没有 usage 时不写 token 列', async () => {
+    const { service, prisma, agentClient } = await buildService();
+    setupReadyWorkspace(prisma);
+    agentClient.diagnoseStream.mockReturnValue(
+      framesFrom([{ event: 'result', data: { response: DIAGNOSE_RESPONSE } }]),
+    );
+
+    await collect(service.streamMessage('user_1', 'enr_1', 'docker 装不上'));
+
+    expect(assistantCreateData(prisma)).not.toHaveProperty('outputTokens');
+  });
+});

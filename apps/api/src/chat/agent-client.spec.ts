@@ -1,5 +1,5 @@
 import { Test } from '@nestjs/testing';
-import { ServiceUnavailableException } from '@nestjs/common';
+import { Logger, ServiceUnavailableException } from '@nestjs/common';
 import { ENV, type Env } from '../config/env';
 import { AgentClient, type DiagnoseRequestBody } from './agent-client';
 
@@ -13,6 +13,10 @@ const BASE_ENV: Env = {
   PORT: 4000,
   CORS_ORIGINS: 'http://localhost:3001',
   WORKSPACE_IDLE_TIMEOUT_MINUTES: 15,
+  TOKEN_QUOTA_ENFORCED: false,
+  TOKEN_WEIGHT_CACHE_HIT: 0.02,
+  TOKEN_WEIGHT_INPUT_MISS: 1,
+  TOKEN_WEIGHT_OUTPUT: 4,
 };
 
 const PAYLOAD: DiagnoseRequestBody = {
@@ -353,4 +357,99 @@ describe('AgentClient.diagnoseStream', () => {
       'Agent 响应没有 body',
     );
   });
+});
+
+describe('AgentClient.diagnose — usage', () => {
+  const originalFetch = global.fetch;
+  afterEach(() => {
+    global.fetch = originalFetch;
+    jest.restoreAllMocks();
+  });
+
+  const BASE_RESPONSE = {
+    request_id: PAYLOAD.request_id,
+    status: 'completed',
+    answer: '试试重启 docker 服务。',
+    diagnosis: {},
+    course_alignment: {},
+    evidence: [],
+    suggested_actions: [],
+    limitations: [],
+    tool_trace: [],
+  };
+
+  async function diagnoseWith(body: Record<string, unknown>) {
+    global.fetch = jest
+      .fn()
+      .mockResolvedValue({ ok: true, json: () => Promise.resolve(body) });
+    const client = await buildClient({
+      LABS_AGENT_BASE_URL: 'https://labs-agent.example.com',
+      AIVIRTEACH_AGENT_TOKEN: 'agent-token',
+    });
+    return client.diagnose(PAYLOAD);
+  }
+
+  it('解析 Labs 返回的三类 token usage', async () => {
+    const usage = {
+      input_cache_hit_tokens: 1000,
+      input_cache_miss_tokens: 200,
+      output_tokens: 50,
+    };
+    const result = await diagnoseWith({ ...BASE_RESPONSE, usage });
+    expect(result.usage).toEqual(usage);
+  });
+
+  it('Labs 还没部署新版本、响应里没有 usage 时照常解析（向后兼容）', async () => {
+    const result = await diagnoseWith(BASE_RESPONSE);
+    expect(result.answer).toBe(BASE_RESPONSE.answer);
+    expect(result.usage).toBeUndefined();
+  });
+
+  it('usage 为 null 时照常解析', async () => {
+    const result = await diagnoseWith({ ...BASE_RESPONSE, usage: null });
+    expect(result.answer).toBe(BASE_RESPONSE.answer);
+    expect(result.usage ?? null).toBeNull();
+  });
+
+  it.each([
+    [
+      '负数',
+      {
+        input_cache_hit_tokens: -1,
+        input_cache_miss_tokens: 0,
+        output_tokens: 0,
+      },
+    ],
+    [
+      '非整数',
+      {
+        input_cache_hit_tokens: 1.5,
+        input_cache_miss_tokens: 0,
+        output_tokens: 0,
+      },
+    ],
+    [
+      '字符串',
+      {
+        input_cache_hit_tokens: '10',
+        input_cache_miss_tokens: 0,
+        output_tokens: 0,
+      },
+    ],
+    ['缺字段', { input_cache_hit_tokens: 10 }],
+  ])(
+    'usage 格式非法（%s）时丢弃 usage，但不能让整个诊断响应失败',
+    async (_label, usage) => {
+      const warn = jest
+        .spyOn(Logger.prototype, 'warn')
+        .mockImplementation(() => undefined);
+      const result = await diagnoseWith({ ...BASE_RESPONSE, usage });
+      expect(result.answer).toBe(BASE_RESPONSE.answer);
+      expect(result.usage).toBeUndefined();
+      // 丢弃不能是静默的：Labs 改了协议时，靠这条日志才能第一时间发现计量停了。
+      expect(warn).toHaveBeenCalledWith(
+        expect.stringContaining('usage 格式非法'),
+      );
+    },
+  );
 });
