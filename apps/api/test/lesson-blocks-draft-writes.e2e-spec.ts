@@ -77,7 +77,7 @@ describe('草稿写入与发版（真库）', () => {
   });
 
   afterAll(async () => {
-    await operator.cleanup();
+    await operator?.cleanup();
     await prisma.course.deleteMany({ where: { slug: { in: slugs } } });
     await prisma.user.deleteMany({ where: { email } });
     await prisma.$disconnect();

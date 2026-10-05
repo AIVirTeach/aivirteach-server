@@ -68,7 +68,7 @@ describe('课时块 端到端', () => {
   });
 
   afterAll(async () => {
-    await operator.cleanup();
+    await operator?.cleanup();
     await prisma.course.deleteMany({
       where: { slug: { in: [slug, otherSlug] } },
     });

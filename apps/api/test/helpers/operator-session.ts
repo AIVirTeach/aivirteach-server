@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import type { PrismaClient } from '@prisma/client';
 import { TOKEN_AUDIENCE_ADMIN, signAccessToken } from '../../src/auth/tokens';
 
@@ -13,7 +14,7 @@ export async function createOperatorSession(
   prisma: PrismaClient,
   label: string,
 ): Promise<OperatorSession> {
-  const email = `op-${label}-${Date.now()}@example.com`;
+  const email = `op-${label}-${randomUUID()}@example.com`;
   const operator = await prisma.operator.create({
     data: { email, passwordHash: 'not-a-real-hash' },
   });

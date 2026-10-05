@@ -10,6 +10,14 @@ describe('admin auth contract', () => {
     expect(EmailSchema.parse(' Op@X.com ')).toBe('op@x.com');
   });
 
+  it('超过 254 字符的邮箱被拒绝，不让匿名请求把超长字符串写进审计', () => {
+    const long = `${'a'.repeat(900 * 1024)}@x.com`;
+    expect(EmailSchema.safeParse(long).success).toBe(false);
+    expect(LoginSchema.safeParse({ email: long, password: 'p' }).success).toBe(
+      false,
+    );
+  });
+
   it('不是邮箱的字符串被拒绝', () => {
     expect(EmailSchema.safeParse('not-an-email').success).toBe(false);
   });

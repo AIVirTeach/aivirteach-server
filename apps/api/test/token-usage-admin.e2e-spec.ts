@@ -71,7 +71,7 @@ describe('GET /admin/token-usage 端到端', () => {
   });
 
   afterAll(async () => {
-    await operator.cleanup();
+    await operator?.cleanup();
     await prisma.course.deleteMany({ where: { id: courseId } });
     await prisma.user.deleteMany({ where: { email } });
     await prisma.$disconnect();
