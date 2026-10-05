@@ -165,7 +165,7 @@ aivirteach-server/
 
 ## 11. 实施顺序与拆分
 
-**实施状态（2026-10-05）：** 步骤 0、1 已完成并上线（monorepo 骨架、`packages/lesson-blocks`、课程内容模型与 admin API、迁移 A 与回填）。client 的块渲染器与 `/preview/lesson` 已写好，在 client 仓库 `feat/lesson-blocks-renderer` 分支（已变基到最新 main），**尚未合并**，是 4b 的前置。4a / 4b / 4c 都还没开始，`apps/admin` 与 `packages/admin-contract` 不存在。4a 的计划：`docs/superpowers/plans/2026-10-05-admin-console-4a-operator-auth.md`。
+**实施状态（2026-10-05）：** 步骤 0、1 已完成并上线（monorepo 骨架、`packages/lesson-blocks`、课程内容模型与 admin API、迁移 A 与回填）。client 的块渲染器与 `/preview/lesson` 已写好，在 client 仓库 `feat/lesson-blocks-renderer` 分支（已变基到最新 main），**尚未合并**，是 4b 的前置。4a / 4b / 4c 都还没开始，`apps/admin` 与 `packages/admin-contract` 不存在。4a 的计划：`docs/superpowers/plans/2026-10-05-admin-console-4a-operator-auth.md`；4c 的计划：`docs/superpowers/plans/2026-10-05-admin-console-4c-operations-pages.md`。4b 的计划待 client 渲染器合并后再写。
 
 一份 spec，三份 plan，另加前置的搬迁：
 
