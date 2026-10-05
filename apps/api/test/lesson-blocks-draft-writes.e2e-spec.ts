@@ -4,6 +4,10 @@ import { Test } from '@nestjs/testing';
 import { PrismaClient } from '@prisma/client';
 import request from 'supertest';
 import { AppModule } from '../src/app.module';
+import {
+  createOperatorSession,
+  type OperatorSession,
+} from './helpers/operator-session';
 import { configureBodyParsers } from '../src/body-parsers';
 
 // 需要 docker compose up -d 且已执行 prisma migrate。验证两件只有真库才看得出来的事：
@@ -11,7 +15,7 @@ import { configureBodyParsers } from '../src/body-parsers';
 describe('草稿写入与发版（真库）', () => {
   let app: NestExpressApplication;
   const prisma = new PrismaClient();
-  const adminToken = process.env.ADMIN_API_TOKEN ?? '';
+  let operator: OperatorSession;
   const stamp = Date.now();
   const slugs = [
     `draft-writes-${stamp}`,
@@ -21,9 +25,7 @@ describe('草稿写入与发版（真库）', () => {
   const email = `draft-remap-${stamp}@example.com`;
 
   const admin = (req: request.Test) =>
-    req
-      .set('Authorization', `Bearer ${adminToken}`)
-      .set('X-Operator', 'e2e@example.com');
+    req.set('Authorization', `Bearer ${operator.token}`);
   const api = (slug: string, path = '') =>
     `/api/v1/admin/courses/${slug}${path}`;
   const paragraph = {
@@ -55,6 +57,7 @@ describe('草稿写入与发版（真库）', () => {
     );
 
   beforeAll(async () => {
+    operator = await createOperatorSession(prisma, 'e2e');
     const moduleRef = await Test.createTestingModule({
       imports: [AppModule],
     }).compile();
@@ -74,6 +77,7 @@ describe('草稿写入与发版（真库）', () => {
   });
 
   afterAll(async () => {
+    await operator.cleanup();
     await prisma.course.deleteMany({ where: { slug: { in: slugs } } });
     await prisma.user.deleteMany({ where: { email } });
     await prisma.$disconnect();

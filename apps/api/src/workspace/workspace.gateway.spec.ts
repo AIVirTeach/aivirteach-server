@@ -13,7 +13,6 @@ const mockedVerify = verifyAccessToken as jest.MockedFunction<
 const BASE_ENV: Env = {
   DATABASE_URL: 'postgres://test',
   JWT_SECRET: 'x'.repeat(32),
-  ADMIN_API_TOKEN: 't'.repeat(32),
   ACCESS_TOKEN_TTL: '15m',
   OPERATOR_SESSION_TTL: '8h',
   REFRESH_TOKEN_TTL_DAYS: 30,

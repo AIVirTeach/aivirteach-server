@@ -3,8 +3,16 @@ import { Test } from '@nestjs/testing';
 import { PrismaClient } from '@prisma/client';
 import request from 'supertest';
 import { AppModule } from '../src/app.module';
+import {
+  createOperatorSession,
+  type OperatorSession,
+} from './helpers/operator-session';
 import { hashPassword } from '../src/auth/password';
-import { verifyAdminAccessToken, verifyAccessToken } from '../src/auth/tokens';
+import {
+  signAccessToken,
+  verifyAccessToken,
+  verifyAdminAccessToken,
+} from '../src/auth/tokens';
 
 // 需要 docker compose up -d 且已执行 prisma migrate。
 describe('运营登录端到端', () => {
@@ -96,5 +104,100 @@ describe('运营登录端到端', () => {
       .post('/api/v1/auth/login')
       .send({ email, password })
       .expect(401);
+  });
+  describe('OperatorAuthGuard 保护的 admin 接口', () => {
+    let session: OperatorSession;
+    const slug = `guard-e2e-${stamp}`;
+
+    beforeAll(async () => {
+      session = await createOperatorSession(prisma, 'guard');
+    });
+
+    afterAll(async () => {
+      await prisma.course.deleteMany({ where: { slug } });
+      await session.cleanup();
+    });
+
+    const createCourse = (
+      token: string,
+      headers: Record<string, string> = {},
+    ) =>
+      request(app.getHttpServer())
+        .post('/api/v1/admin/courses')
+        .set('Authorization', `Bearer ${token}`)
+        .set(headers)
+        .send({ slug, title: '守卫测试课' });
+
+    it('审计里的 actorId 是登录运营的邮箱，自报的 X-Operator 被忽略', async () => {
+      await createCourse(session.token, {
+        'X-Operator': 'attacker@example.com',
+      }).expect(201);
+
+      const events = await prisma.auditEvent.findMany({
+        where: {
+          targetType: 'Course',
+          actorType: 'OPERATOR',
+          actorId: session.email,
+        },
+      });
+      expect(events.length).toBeGreaterThan(0);
+      await expect(
+        prisma.auditEvent.count({ where: { actorId: 'attacker@example.com' } }),
+      ).resolves.toBe(0);
+    });
+
+    it('学员令牌调 admin 接口 → 401', async () => {
+      const learnerToken = await signAccessToken(
+        { sub: 'user_x', email: 'learner@example.com' },
+        process.env.JWT_SECRET ?? '',
+        '15m',
+      );
+
+      await createCourse(learnerToken).expect(401);
+      await request(app.getHttpServer())
+        .get('/api/v1/admin/token-usage')
+        .set('Authorization', `Bearer ${learnerToken}`)
+        .expect(401);
+    });
+
+    it('运营令牌调学员接口 → 401', async () => {
+      await request(app.getHttpServer())
+        .get('/api/v1/auth/me')
+        .set('Authorization', `Bearer ${session.token}`)
+        .expect(401);
+    });
+
+    it('运营被停用后，仍在有效期内的令牌下一次请求就 401', async () => {
+      const other = await createOperatorSession(prisma, 'disabled');
+      await request(app.getHttpServer())
+        .get('/api/v1/admin/token-usage')
+        .set('Authorization', `Bearer ${other.token}`)
+        .expect(200);
+
+      await prisma.operator.update({
+        where: { email: other.email },
+        data: { status: 'DISABLED' },
+      });
+
+      await request(app.getHttpServer())
+        .get('/api/v1/admin/token-usage')
+        .set('Authorization', `Bearer ${other.token}`)
+        .expect(401);
+      await other.cleanup();
+    });
+
+    it('改密码后，改之前签发的令牌失效', async () => {
+      const other = await createOperatorSession(prisma, 'reset');
+      await prisma.operator.update({
+        where: { email: other.email },
+        data: { passwordChangedAt: new Date(Date.now() + 5000) },
+      });
+
+      await request(app.getHttpServer())
+        .get('/api/v1/admin/token-usage')
+        .set('Authorization', `Bearer ${other.token}`)
+        .expect(401);
+      await other.cleanup();
+    });
   });
 });

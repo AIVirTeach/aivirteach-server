@@ -3,7 +3,6 @@ import {
   BadRequestException,
   ConflictException,
   Controller,
-  createParamDecorator,
   Delete,
   Get,
   Param,
@@ -31,8 +30,8 @@ import { PrismaService } from '../prisma/prisma.service';
 import { buildLessonResponse } from '../courses/lesson-response';
 import { loadCourseAssets } from '../courses/course-assets';
 import { collectImageAssetIds } from '@aivirteach/lesson-blocks';
-import { AdminApiTokenGuard } from './admin-api-token.guard';
-import { OperatorSchema } from './admin.schemas';
+import { CurrentOperator } from '../operator-auth/current-operator.decorator';
+import { OperatorAuthGuard } from '../operator-auth/operator-auth.guard';
 import { CourseDraftService } from './draft/course-draft.service';
 import {
   CourseMetaPatchSchema,
@@ -108,12 +107,6 @@ function hasFileTooLargeResponse(error: BadRequestException): boolean {
   return text.includes('File too large');
 }
 
-const OperatorHeader = createParamDecorator((_data, context) => {
-  const request = context
-    .switchToHttp()
-    .getRequest<{ headers: Record<string, string | undefined> }>();
-  return request.headers['x-operator'] ?? '';
-});
 const UploadAssetBodySchema = z.preprocess(
   (body) => body ?? {},
   z.object({ altText: z.string().max(300).optional() }),
@@ -125,7 +118,7 @@ const PublishBodySchema = z.preprocess(
 
 @ApiTags('Admin Courses')
 @ApiBearerAuth()
-@UseGuards(AdminApiTokenGuard)
+@UseGuards(OperatorAuthGuard)
 @Controller('admin/courses/:slug')
 export class AdminCoursesController {
   constructor(
@@ -139,7 +132,7 @@ export class AdminCoursesController {
   @Post('draft')
   async createDraft(
     @Param('slug') slug: string,
-    @OperatorHeader(new ZodValidationPipe(OperatorSchema)) operator: string,
+    @CurrentOperator() operator: string,
     @Res() response: Response,
   ) {
     const result = await this.drafts.createDraft(slug, operator);
@@ -154,7 +147,7 @@ export class AdminCoursesController {
   @Delete('draft')
   discardDraft(
     @Param('slug') slug: string,
-    @OperatorHeader(new ZodValidationPipe(OperatorSchema)) operator: string,
+    @CurrentOperator() operator: string,
   ) {
     return this.drafts.discardDraft(slug, operator);
   }
@@ -164,7 +157,7 @@ export class AdminCoursesController {
     @Param('slug') slug: string,
     @Body(new ZodValidationPipe(CourseMetaPatchSchema))
     body: z.infer<typeof CourseMetaPatchSchema>,
-    @OperatorHeader(new ZodValidationPipe(OperatorSchema)) operator: string,
+    @CurrentOperator() operator: string,
   ) {
     return this.drafts.updateCourse(slug, body, operator);
   }
@@ -174,7 +167,7 @@ export class AdminCoursesController {
     @Param('slug') slug: string,
     @Body(new ZodValidationPipe(WelcomePatchSchema))
     body: z.infer<typeof WelcomePatchSchema>,
-    @OperatorHeader(new ZodValidationPipe(OperatorSchema)) operator: string,
+    @CurrentOperator() operator: string,
   ) {
     return this.drafts.updateWelcome(slug, body, operator);
   }
@@ -184,7 +177,7 @@ export class AdminCoursesController {
     @Param('slug') slug: string,
     @Body(new ZodValidationPipe(CreateModuleSchema))
     body: z.infer<typeof CreateModuleSchema>,
-    @OperatorHeader(new ZodValidationPipe(OperatorSchema)) operator: string,
+    @CurrentOperator() operator: string,
   ) {
     return this.content.createModule(slug, body, operator);
   }
@@ -195,7 +188,7 @@ export class AdminCoursesController {
     @Param('moduleId') moduleId: string,
     @Body(new ZodValidationPipe(UpdateModulePatchSchema))
     body: z.infer<typeof UpdateModulePatchSchema>,
-    @OperatorHeader(new ZodValidationPipe(OperatorSchema)) operator: string,
+    @CurrentOperator() operator: string,
   ) {
     return this.content.updateModule(slug, moduleId, body, operator);
   }
@@ -204,7 +197,7 @@ export class AdminCoursesController {
   deleteModule(
     @Param('slug') slug: string,
     @Param('moduleId') moduleId: string,
-    @OperatorHeader(new ZodValidationPipe(OperatorSchema)) operator: string,
+    @CurrentOperator() operator: string,
   ) {
     return this.content.deleteModule(slug, moduleId, operator);
   }
@@ -215,7 +208,7 @@ export class AdminCoursesController {
     @Param('moduleId') moduleId: string,
     @Body(new ZodValidationPipe(CreateLessonSchema))
     body: z.infer<typeof CreateLessonSchema>,
-    @OperatorHeader(new ZodValidationPipe(OperatorSchema)) operator: string,
+    @CurrentOperator() operator: string,
   ) {
     return this.content.createLesson(slug, moduleId, body, operator);
   }
@@ -226,7 +219,7 @@ export class AdminCoursesController {
     @Param('contentId') contentId: string,
     @Body(new ZodValidationPipe(UpdateLessonPatchSchema))
     body: z.infer<typeof UpdateLessonPatchSchema>,
-    @OperatorHeader(new ZodValidationPipe(OperatorSchema)) operator: string,
+    @CurrentOperator() operator: string,
   ) {
     return this.content.updateLesson(slug, contentId, body, operator);
   }
@@ -235,7 +228,7 @@ export class AdminCoursesController {
   deleteLesson(
     @Param('slug') slug: string,
     @Param('contentId') contentId: string,
-    @OperatorHeader(new ZodValidationPipe(OperatorSchema)) operator: string,
+    @CurrentOperator() operator: string,
   ) {
     return this.content.deleteLesson(slug, contentId, operator);
   }
@@ -245,7 +238,7 @@ export class AdminCoursesController {
     @Param('slug') slug: string,
     @Body(new ZodValidationPipe(ReorderSchema))
     body: z.infer<typeof ReorderSchema>,
-    @OperatorHeader(new ZodValidationPipe(OperatorSchema)) operator: string,
+    @CurrentOperator() operator: string,
   ) {
     return this.content.reorder(slug, body, operator);
   }
@@ -256,7 +249,7 @@ export class AdminCoursesController {
     @Param('assessmentId') assessmentId: string,
     @Body(new ZodValidationPipe(UpdateAssessmentPatchSchema))
     body: z.infer<typeof UpdateAssessmentPatchSchema>,
-    @OperatorHeader(new ZodValidationPipe(OperatorSchema)) operator: string,
+    @CurrentOperator() operator: string,
   ) {
     return this.content.updateAssessment(slug, assessmentId, body, operator);
   }
@@ -292,7 +285,7 @@ export class AdminCoursesController {
     @Param('slug') slug: string,
     @Body(new ZodValidationPipe(PublishBodySchema))
     body: z.infer<typeof PublishBodySchema> = {},
-    @OperatorHeader(new ZodValidationPipe(OperatorSchema)) operator: string,
+    @CurrentOperator() operator: string,
   ) {
     return this.publishing.publish(
       slug,
@@ -305,7 +298,7 @@ export class AdminCoursesController {
   @UseInterceptors(new ChineseAssetUploadInterceptor())
   uploadAsset(
     @Param('slug') slug: string,
-    @OperatorHeader(new ZodValidationPipe(OperatorSchema)) operator: string,
+    @CurrentOperator() operator: string,
     @UploadedFile() file: { buffer: Buffer; size: number } | undefined,
     @Body(new ZodValidationPipe(UploadAssetBodySchema))
     body: z.infer<typeof UploadAssetBodySchema>,
@@ -317,7 +310,7 @@ export class AdminCoursesController {
 
 @ApiTags('Admin Courses')
 @ApiBearerAuth()
-@UseGuards(AdminApiTokenGuard)
+@UseGuards(OperatorAuthGuard)
 @Controller('admin/courses')
 export class AdminCourseCreateController {
   constructor(private readonly courses: CourseCreateService) {}
@@ -326,7 +319,7 @@ export class AdminCourseCreateController {
   create(
     @Body(new ZodValidationPipe(CreateCourseSchema))
     body: z.infer<typeof CreateCourseSchema>,
-    @OperatorHeader(new ZodValidationPipe(OperatorSchema)) operator: string,
+    @CurrentOperator() operator: string,
   ) {
     return this.courses.create(body, operator);
   }

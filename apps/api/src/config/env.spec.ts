@@ -3,7 +3,6 @@ import { loadEnv } from './env';
 const validSource = {
   DATABASE_URL: 'postgresql://u:p@localhost:55432/db',
   JWT_SECRET: 'x'.repeat(32),
-  ADMIN_API_TOKEN: 'a'.repeat(32),
 };
 
 describe('loadEnv', () => {
@@ -11,7 +10,6 @@ describe('loadEnv', () => {
     expect(loadEnv(validSource)).toEqual({
       DATABASE_URL: 'postgresql://u:p@localhost:55432/db',
       JWT_SECRET: 'x'.repeat(32),
-      ADMIN_API_TOKEN: 'a'.repeat(32),
       ACCESS_TOKEN_TTL: '15m',
       OPERATOR_SESSION_TTL: '8h',
       REFRESH_TOKEN_TTL_DAYS: 30,
@@ -88,18 +86,6 @@ describe('loadEnv', () => {
       loadEnv({ ...validSource, OPERATOR_SESSION_TTL: '12h' })
         .OPERATOR_SESSION_TTL,
     ).toBe('12h');
-  });
-
-  it('缺少 ADMIN_API_TOKEN 时抛错并指名字段', () => {
-    const { ADMIN_API_TOKEN: _token, ...source } = validSource;
-    void _token;
-    expect(() => loadEnv(source)).toThrow(/ADMIN_API_TOKEN/);
-  });
-
-  it('ADMIN_API_TOKEN 太短时抛错并指名字段', () => {
-    expect(() => loadEnv({ ...validSource, ADMIN_API_TOKEN: 'short' })).toThrow(
-      /ADMIN_API_TOKEN/,
-    );
   });
 
   it('JWT_SECRET 太短时抛错并指名字段', () => {

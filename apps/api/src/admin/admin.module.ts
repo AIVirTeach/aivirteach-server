@@ -15,7 +15,6 @@ import { CourseBackfillCommand } from './commands/course-backfill.command';
 import { CourseDraftService } from './draft/course-draft.service';
 import { CoursePublishService } from './course-publish.service';
 import { DraftContentService } from './draft/draft-content.service';
-import { AdminApiTokenGuard } from './admin-api-token.guard';
 import {
   AdminCourseCreateController,
   AdminCoursesController,
@@ -28,7 +27,6 @@ import { CourseAssetUploadService } from './assets/course-asset-upload.service';
   controllers: [AdminCoursesController, AdminCourseCreateController],
   providers: [
     AdminService,
-    AdminApiTokenGuard,
     CourseDraftService,
     CourseCreateService,
     DraftContentService,

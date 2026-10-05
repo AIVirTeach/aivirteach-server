@@ -4,6 +4,10 @@ import { Test } from '@nestjs/testing';
 import { PrismaClient } from '@prisma/client';
 import request from 'supertest';
 import { AppModule } from '../src/app.module';
+import {
+  createOperatorSession,
+  type OperatorSession,
+} from './helpers/operator-session';
 import { configureBodyParsers } from '../src/body-parsers';
 import { signAccessToken } from '../src/auth/tokens';
 import { CourseAssetStorageService } from '../src/courses/course-asset-storage.service';
@@ -18,7 +22,7 @@ const STUB_URL = 'https://blob.example.test/courses/stub.png';
 describe('课时块 端到端', () => {
   let app: NestExpressApplication;
   const prisma = new PrismaClient();
-  const adminToken = process.env.ADMIN_API_TOKEN ?? '';
+  let operator: OperatorSession;
   const jwtSecret = process.env.JWT_SECRET ?? '';
   const stamp = Date.now();
   const slug = `blocks-e2e-${stamp}`;
@@ -29,9 +33,7 @@ describe('课时块 端到端', () => {
   let assetId: string;
 
   const admin = (req: request.Test) =>
-    req
-      .set('Authorization', `Bearer ${adminToken}`)
-      .set('X-Operator', 'e2e@example.com');
+    req.set('Authorization', `Bearer ${operator.token}`);
   const learner = (req: request.Test) =>
     req.set('Authorization', `Bearer ${learnerToken}`);
 
@@ -45,6 +47,7 @@ describe('课时块 端到端', () => {
   });
 
   beforeAll(async () => {
+    operator = await createOperatorSession(prisma, 'e2e');
     const moduleRef = await Test.createTestingModule({ imports: [AppModule] })
       .overrideProvider(CourseAssetStorageService)
       .useValue({ uploadBuffer: jest.fn().mockResolvedValue(STUB_URL) })
@@ -65,6 +68,7 @@ describe('课时块 端到端', () => {
   });
 
   afterAll(async () => {
+    await operator.cleanup();
     await prisma.course.deleteMany({
       where: { slug: { in: [slug, otherSlug] } },
     });
