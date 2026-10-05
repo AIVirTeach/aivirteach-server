@@ -13,6 +13,7 @@ describe('loadEnv', () => {
       JWT_SECRET: 'x'.repeat(32),
       ADMIN_API_TOKEN: 'a'.repeat(32),
       ACCESS_TOKEN_TTL: '15m',
+      OPERATOR_SESSION_TTL: '8h',
       REFRESH_TOKEN_TTL_DAYS: 30,
       INVITATION_TTL_DAYS: 7,
       PORT: 4000,
@@ -79,6 +80,14 @@ describe('loadEnv', () => {
 
     expect(env.PORT).toBe(4100);
     expect(env.REFRESH_TOKEN_TTL_DAYS).toBe(7);
+  });
+
+  it('OPERATOR_SESSION_TTL 默认 8h，可以覆盖', () => {
+    expect(loadEnv(validSource).OPERATOR_SESSION_TTL).toBe('8h');
+    expect(
+      loadEnv({ ...validSource, OPERATOR_SESSION_TTL: '12h' })
+        .OPERATOR_SESSION_TTL,
+    ).toBe('12h');
   });
 
   it('缺少 ADMIN_API_TOKEN 时抛错并指名字段', () => {
