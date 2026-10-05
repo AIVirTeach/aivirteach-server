@@ -8,6 +8,12 @@ import {
 } from './commands/course.command';
 import { EnrollCommand } from './commands/enroll.command';
 import { QuotaGrantCommand } from './commands/quota.command';
+import {
+  OperatorAddCommand,
+  OperatorDisableCommand,
+  OperatorResetCommand,
+} from './commands/operator.command';
+import { OperatorAdminService } from './operator-admin.service';
 import { QuotaGrantTokensCommand } from './commands/quota-tokens.command';
 import { CoursesModule } from '../courses/courses.module';
 import { ContentModelBackfillService } from './backfill/content-model-backfill.service';
@@ -39,6 +45,10 @@ import { CourseAssetUploadService } from './assets/course-asset-upload.service';
     EnrollCommand,
     QuotaGrantCommand,
     QuotaGrantTokensCommand,
+    OperatorAdminService,
+    OperatorAddCommand,
+    OperatorResetCommand,
+    OperatorDisableCommand,
     ContentModelBackfillService,
     CourseBackfillCommand,
   ],
