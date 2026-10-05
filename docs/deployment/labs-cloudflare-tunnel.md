@@ -101,8 +101,8 @@ JWT 会话完成了。如果给 `labs-console.<domain>` 建了 Access Applicatio
 如果某台 Labs 主机很长一段时间没有新的学员点击"启动远程桌面"（没有新的注册调用发生），几小时前
 生成的旧 token 理论上会一直留在 `/etc/aivirteach-labs/console-tokens/` 里、一直可用——不是真的
 "5 分钟后失效"，而是"下一次有人注册新 token 时，恰好比它晚了 5 分钟以上的旧 token 才会被清掉"。
-这是刻意的设计取舍（[计划文档](../superpowers/plans/2026-08-23-console-rdp-access.md)的 Global
-Constraints 明确要求"不单独配置 cron"），不是这份文档的疏漏。知道这一点很重要：泄露出去的
+这是刻意的设计取舍（实现 console token 时的约束明确要求"不单独配置 cron"；当时的 RDP 计划文档已随
+Guacamole 改造作废并删除，可从 git 历史找回），不是这份文档的疏漏。知道这一点很重要：泄露出去的
 `wsUrl`（比如浏览器历史记录、截图里带了 URL）在主机空闲期间可能比预期活得久得多——如果之后要收紧
 这一点，加一个真正的定时清理（cron / systemd timer）是最直接的办法，但那是一次需要重新评估
 "不单独配置 cron"这条约束的改动，不要在不确认的情况下顺手加上。
