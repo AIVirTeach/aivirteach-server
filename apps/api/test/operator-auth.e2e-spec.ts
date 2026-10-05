@@ -7,6 +7,7 @@ import {
   createOperatorSession,
   type OperatorSession,
 } from './helpers/operator-session';
+import { OperatorAdminService } from '../src/admin/operator-admin.service';
 import { hashPassword } from '../src/auth/password';
 import {
   signAccessToken,
@@ -105,6 +106,45 @@ describe('运营登录端到端', () => {
       .send({ email, password })
       .expect(401);
   });
+
+  it('operator:add 输出的密码可以直接登录，并用该令牌写入 admin 接口、审计记为该运营', async () => {
+    const created = `op-cli-${stamp}@example.com`;
+    const cliSlug = `cli-e2e-${stamp}`;
+    try {
+      const added = await app.get(OperatorAdminService).add(created, {
+        operator: 'owner@example.com',
+        reason: 'e2e',
+        execute: true,
+      });
+
+      const res = await login({
+        email: created,
+        password: added.password,
+      }).expect(200);
+      await request(app.getHttpServer())
+        .post('/api/v1/admin/courses')
+        .set('Authorization', `Bearer ${res.body.accessToken}`)
+        .send({ slug: cliSlug, title: 'CLI 联调' })
+        .expect(201);
+
+      await expect(
+        prisma.auditEvent.count({
+          where: {
+            actorType: 'OPERATOR',
+            actorId: created,
+            targetType: 'Course',
+          },
+        }),
+      ).resolves.toBeGreaterThan(0);
+    } finally {
+      await prisma.course.deleteMany({ where: { slug: cliSlug } });
+      await prisma.operator.deleteMany({ where: { email: created } });
+      await prisma.auditEvent.deleteMany({
+        where: { actorId: { in: [created, 'owner@example.com'] } },
+      });
+    }
+  });
+
   describe('OperatorAuthGuard 保护的 admin 接口', () => {
     let session: OperatorSession;
     const slug = `guard-e2e-${stamp}`;

@@ -53,13 +53,11 @@ describe('operator CLI commands', () => {
   });
 
   it('operator:add --execute 把一次性密码打印出来', async () => {
-    const add = jest
-      .fn()
-      .mockResolvedValue({
-        dryRun: false,
-        email: 'a@b.com',
-        password: 'pw-123',
-      });
+    const add = jest.fn().mockResolvedValue({
+      dryRun: false,
+      email: 'a@b.com',
+      password: 'pw-123',
+    });
     const command = await build(OperatorAddCommand, { add });
 
     await command.run(['a@b.com'], {
@@ -81,13 +79,11 @@ describe('operator CLI commands', () => {
   });
 
   it('operator:reset --execute 打印新密码', async () => {
-    const reset = jest
-      .fn()
-      .mockResolvedValue({
-        dryRun: false,
-        email: 'a@b.com',
-        password: 'new-pw',
-      });
+    const reset = jest.fn().mockResolvedValue({
+      dryRun: false,
+      email: 'a@b.com',
+      password: 'new-pw',
+    });
     const command = await build(OperatorResetCommand, { reset });
 
     await command.run(['a@b.com'], {
