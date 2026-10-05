@@ -34,6 +34,11 @@ enum ConversationRole {
   SYSTEM
 }
 
+enum OperatorStatus {
+  ACTIVE
+  DISABLED
+}
+
 enum AuditActorType {
   USER
   OPERATOR
@@ -401,6 +406,20 @@ model QuotaLedger {
   @@index([userId])
 }
 
+// 运营后台账号，与学员 User 完全隔离。只有少数几个人，由 CLI 直接写入，不走邀请。
+model Operator {
+  id                String         @id @default(cuid())
+  email             String         @unique
+  passwordHash      String
+  status            OperatorStatus @default(ACTIVE)
+  failedLoginCount  Int            @default(0)
+  lockedUntil       DateTime?
+  // 重置密码时更新；早于它签发的登录令牌立即失效。
+  passwordChangedAt DateTime       @default(now())
+  createdAt         DateTime       @default(now())
+  updatedAt         DateTime       @updatedAt
+}
+
 model AuditEvent {
   id         String         @id @default(cuid())
   actorType  AuditActorType
@@ -415,6 +434,7 @@ model AuditEvent {
 
   @@index([actorId])
   @@index([action])
+  @@index([createdAt])
 }
 
 // 架构文件模块网格里的"总结与导出编排"（SRV-016 · LAB-015），之前完全没建。
