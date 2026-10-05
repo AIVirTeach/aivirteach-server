@@ -6,6 +6,7 @@ import { AuditModule } from './audit/audit.module';
 import { ConfigModule } from './config/config.module';
 import { PrismaModule } from './prisma/prisma.module';
 import { AuthModule } from './auth/auth.module';
+import { OperatorAuthModule } from './operator-auth/operator-auth.module';
 import { HealthModule } from './health/health.module';
 import { CoursesModule } from './courses/courses.module';
 import { EnrollmentsModule } from './enrollments/enrollments.module';
@@ -19,6 +20,7 @@ import { ChatModule } from './chat/chat.module';
     PrismaModule,
     AuditModule,
     AuthModule,
+    OperatorAuthModule,
     AdminModule,
     HealthModule,
     CoursesModule,
