@@ -66,7 +66,7 @@ node -e "console.log(require('node:crypto').randomBytes(48).toString('base64url'
 | `ACCESS_TOKEN_TTL` | 否，默认 `15m` | jose 简单格式：数字+单位 |
 | `REFRESH_TOKEN_TTL_DAYS` | 否，默认 `30` | |
 | `INVITATION_TTL_DAYS` | 否，默认 `7` | |
-| `OPERATOR_SESSION_TTL` | 否，默认 `8h` | 运营登录令牌的有效期（jose 简单格式）。没有 refresh，到期重新登录。旧的 `ADMIN_API_TOKEN` 已取消，生产里残留的该变量可以删掉 |
+| `OPERATOR_SESSION_TTL` | 否，默认 `8h` | 运营登录令牌的有效期（jose 简单格式）。没有 refresh，到期重新登录。旧的 `ADMIN_API_TOKEN` 已取消；**生产里的这个变量先别删**——4a 之前的版本启动时要求它存在，回滚到旧版本会因为缺它整个 API（含学员接口）起不来，等 4a 在生产稳定运行后再删 |
 | `PORT` | 否，默认 `4000` | Vercel 上由平台接管，本地开发才用得到 |
 | `CORS_ORIGINS` | 否，默认 `tauri://localhost` | 逗号分隔白名单；client 桌面端（Tauri v2 webview）的源是 `tauri://localhost`，本地网页调试再加 `http://localhost:3001` |
 | `TOKEN_QUOTA_ENFORCED` | 否，默认 `false` | 是否强制 AI 助教的 token 额度。关闭时只记录用量、不拦截；只认 `true` / `false`。上线顺序见下方「Token 用量与额度」 |
@@ -186,12 +186,13 @@ npm run cli -w api -- quota:grant someone@example.com 60 -o "你的邮箱" -r "�
 
 ## 运营后台上线顺序（4a）
 
-顺序不能换：新代码一部署，旧的 `ADMIN_API_TOKEN` 调用立即失效。
+顺序不能换：新代码一部署，旧的 `ADMIN_API_TOKEN` 调用立即失效，所以**先建好运营账号，再部署 api**。
 
 1. **迁移**：对生产库应用 `20261005000000_operator_accounts`（新增 `Operator` 表、`OperatorStatus` 枚举、`AuditEvent(createdAt)` 索引；纯新增，不动旧数据）。生产库走 Neon MCP，在事务内执行 SQL 并补写 `_prisma_migrations` 行（见「生产环境」）。
-2. **部署 api**（手动 `vercel deploy --prod`）。此刻 `ADMIN_API_TOKEN` 失效，需要时改用运营令牌。
-3. **创建第一个运营**：用显式生产 `DATABASE_URL` 执行 `npm run cli -w api -- operator:add <email> -o <你的邮箱> -r "首个运营" --execute`，记下输出的密码（只出现一次）。
+2. **创建第一个运营**：CLI 在本机直接连库，不需要 api 已部署。用显式生产 `DATABASE_URL` 执行 `npm run cli -w api -- operator:add <email> -o <你的邮箱> -r "首个运营" --execute`，记下输出的密码（只出现一次）。`add` / `reset` 写入的 `passwordChangedAt` 取数据库时间，不依赖这台机器的时钟。
+3. **部署 api**（手动 `vercel deploy --prod`）。此刻 `ADMIN_API_TOKEN` 失效，需要时改用运营令牌。
 4. **部署 `apps/admin`**：第二个 Vercel 项目，Root Directory 为 `apps/admin`，环境变量只需 `API_BASE_URL`（api 的公网地址，含 `/api/v1`）。**不要**给它配 `JWT_SECRET` 或 `DATABASE_URL`。
+5. **给登录接口加限流**：登录是匿名接口，每次请求（包括不存在的邮箱）都会做一次密码哈希并写一条审计。应用层没有限流（serverless 下内存限流无效），建议在 Vercel Firewall 里给 `/api/v1/admin/auth/login` 加一条速率限制规则。
 
 改 Vercel 现有项目的 Root Directory 之前，先在预览环境验证一次完整部署。
 

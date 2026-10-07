@@ -55,11 +55,17 @@ export class OperatorAuthService {
       throw new UnauthorizedException(DENIED);
     }
 
-    if (operator.failedLoginCount > 0 || operator.lockedUntil) {
-      await this.prisma.operator.update({
-        where: { id: operator.id },
-        data: { failedLoginCount: 0, lockedUntil: null },
-      });
+    // 校验密码期间可能已被并发的失败请求锁定：清零必须带「未锁定」条件，否则会把刚设上的锁抹掉。
+    const released = await this.prisma.operator.updateMany({
+      where: {
+        id: operator.id,
+        OR: [{ lockedUntil: null }, { lockedUntil: { lte: now } }],
+      },
+      data: { failedLoginCount: 0, lockedUntil: null },
+    });
+    if (released.count === 0) {
+      await this.recordLogin(email, false);
+      throw new UnauthorizedException(DENIED);
     }
     await this.recordLogin(email, true);
 
@@ -76,15 +82,16 @@ export class OperatorAuthService {
   }
 
   private async registerFailure(
-    operator: { id: string; email: string; lockedUntil: Date | null },
+    operator: { id: string; email: string },
     now: Date,
   ): Promise<void> {
     // 上一轮锁定已过期：重新从 1 开始数，否则输错一次就会被立刻再锁 15 分钟。
-    if (operator.lockedUntil && operator.lockedUntil <= now) {
-      await this.prisma.operator.update({
-        where: { id: operator.id },
-        data: { failedLoginCount: 1, lockedUntil: null },
-      });
+    // 带条件的 updateMany 只会被并发请求里的第一个命中，其余的落到下面的自增。
+    const restarted = await this.prisma.operator.updateMany({
+      where: { id: operator.id, lockedUntil: { lte: now } },
+      data: { failedLoginCount: 1, lockedUntil: null },
+    });
+    if (restarted.count === 1) {
       return;
     }
 
@@ -98,10 +105,17 @@ export class OperatorAuthService {
       return;
     }
 
-    await this.prisma.operator.update({
-      where: { id: operator.id },
+    // 只有真正把锁设上的那一个请求写审计；已被别的请求锁住时不再延长。
+    const locked = await this.prisma.operator.updateMany({
+      where: {
+        id: operator.id,
+        OR: [{ lockedUntil: null }, { lockedUntil: { lte: now } }],
+      },
       data: { lockedUntil: new Date(now.getTime() + LOCK_MS) },
     });
+    if (locked.count === 0) {
+      return;
+    }
     await this.audit.record({
       actor: { type: AuditActorType.OPERATOR, id: operator.email },
       action: 'admin.auth.locked',

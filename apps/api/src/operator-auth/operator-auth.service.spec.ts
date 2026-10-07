@@ -37,7 +37,11 @@ const buildOperator = async (
 
 const buildService = async () => {
   const prisma = {
-    operator: { findUnique: jest.fn(), update: jest.fn() },
+    operator: {
+      findUnique: jest.fn(),
+      update: jest.fn(),
+      updateMany: jest.fn().mockResolvedValue({ count: 1 }),
+    },
   };
   const audit = { record: jest.fn() };
   const moduleRef = await Test.createTestingModule({
@@ -73,8 +77,11 @@ describe('OperatorAuthService.login', () => {
     expect(claims).toMatchObject({ sub: 'op_1', email: 'op@example.com' });
     expect(session.expiresIn).toBe(8 * 3600);
     expect(TOKEN_AUDIENCE_ADMIN).toBe('aivirteach-admin');
-    expect(prisma.operator.update).toHaveBeenCalledWith({
-      where: { id: 'op_1' },
+    expect(prisma.operator.updateMany).toHaveBeenCalledWith({
+      where: {
+        id: 'op_1',
+        OR: [{ lockedUntil: null }, { lockedUntil: { lte: expect.any(Date) } }],
+      },
       data: { failedLoginCount: 0, lockedUntil: null },
     });
     expect(audit.record).toHaveBeenCalledWith(
@@ -86,18 +93,23 @@ describe('OperatorAuthService.login', () => {
     );
   });
 
-  it('凭证正确且没有失败记录时不多写一次库', async () => {
-    const { service, prisma } = await buildService();
+  it('校验密码期间被并发请求锁定：即使密码正确也 401，不签发令牌、记失败审计', async () => {
+    const { service, prisma, audit } = await buildService();
     prisma.operator.findUnique.mockResolvedValue(await buildOperator());
+    prisma.operator.updateMany.mockResolvedValue({ count: 0 });
 
-    await service.login('op@example.com', 'correct-password');
+    await denied(service.login('op@example.com', 'correct-password'));
 
-    expect(prisma.operator.update).not.toHaveBeenCalled();
+    expect(audit.record).toHaveBeenCalledTimes(1);
+    expect(audit.record).toHaveBeenCalledWith(
+      expect.objectContaining({ action: 'admin.auth.login', success: false }),
+    );
   });
 
   it('密码错：统一 401「凭证无效」、失败计数 +1、记失败审计', async () => {
     const { service, prisma, audit } = await buildService();
     prisma.operator.findUnique.mockResolvedValue(await buildOperator());
+    prisma.operator.updateMany.mockResolvedValue({ count: 0 });
     prisma.operator.update.mockResolvedValue({ failedLoginCount: 1 });
 
     await denied(service.login('op@example.com', 'wrong'));
@@ -141,15 +153,18 @@ describe('OperatorAuthService.login', () => {
     prisma.operator.findUnique.mockResolvedValue(
       await buildOperator({ failedLoginCount: 4 }),
     );
+    prisma.operator.updateMany.mockResolvedValueOnce({ count: 0 });
+    prisma.operator.updateMany.mockResolvedValueOnce({ count: 1 });
     prisma.operator.update.mockResolvedValueOnce({ failedLoginCount: 5 });
-    prisma.operator.update.mockResolvedValueOnce({});
 
     const before = Date.now();
     await denied(service.login('op@example.com', 'wrong'));
 
-    const lockCall = prisma.operator.update.mock.calls[1][0] as {
+    const lockCall = prisma.operator.updateMany.mock.calls[1][0] as {
+      where: { id: string };
       data: { lockedUntil: Date };
     };
+    expect(lockCall.where.id).toBe('op_1');
     const lockMs = lockCall.data.lockedUntil.getTime() - before;
     expect(lockMs).toBeGreaterThanOrEqual(15 * 60_000 - 1000);
     expect(lockMs).toBeLessThanOrEqual(15 * 60_000 + 5000);
@@ -160,6 +175,21 @@ describe('OperatorAuthService.login', () => {
         targetType: 'Operator',
         targetId: 'op_1',
       }),
+    );
+  });
+
+  it('第 5 次失败时别的并发请求已先锁定：不重复写 locked 审计', async () => {
+    const { service, prisma, audit } = await buildService();
+    prisma.operator.findUnique.mockResolvedValue(
+      await buildOperator({ failedLoginCount: 4 }),
+    );
+    prisma.operator.updateMany.mockResolvedValue({ count: 0 });
+    prisma.operator.update.mockResolvedValueOnce({ failedLoginCount: 6 });
+
+    await denied(service.login('op@example.com', 'wrong'));
+
+    expect(audit.record).not.toHaveBeenCalledWith(
+      expect.objectContaining({ action: 'admin.auth.locked' }),
     );
   });
 
@@ -175,6 +205,7 @@ describe('OperatorAuthService.login', () => {
     await denied(service.login('op@example.com', 'correct-password'));
 
     expect(prisma.operator.update).not.toHaveBeenCalled();
+    expect(prisma.operator.updateMany).not.toHaveBeenCalled();
   });
 
   it('锁定过期后：正确密码可以登录', async () => {
@@ -189,10 +220,11 @@ describe('OperatorAuthService.login', () => {
     const session = await service.login('op@example.com', 'correct-password');
 
     expect(session.accessToken).toEqual(expect.any(String));
-    expect(prisma.operator.update).toHaveBeenCalledWith({
-      where: { id: 'op_1' },
-      data: { failedLoginCount: 0, lockedUntil: null },
-    });
+    expect(prisma.operator.updateMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: { failedLoginCount: 0, lockedUntil: null },
+      }),
+    );
   });
 
   it('锁定过期后再输错一次：从 1 重新计数，不是立刻再锁', async () => {
@@ -203,15 +235,16 @@ describe('OperatorAuthService.login', () => {
         lockedUntil: new Date(Date.now() - 1000),
       }),
     );
-    prisma.operator.update.mockResolvedValue({});
+    prisma.operator.updateMany.mockResolvedValue({ count: 1 });
 
     await denied(service.login('op@example.com', 'wrong'));
 
-    expect(prisma.operator.update).toHaveBeenCalledTimes(1);
-    expect(prisma.operator.update).toHaveBeenCalledWith({
-      where: { id: 'op_1' },
+    expect(prisma.operator.updateMany).toHaveBeenCalledTimes(1);
+    expect(prisma.operator.updateMany).toHaveBeenCalledWith({
+      where: { id: 'op_1', lockedUntil: { lte: expect.any(Date) } },
       data: { failedLoginCount: 1, lockedUntil: null },
     });
+    expect(prisma.operator.update).not.toHaveBeenCalled();
   });
 
   it('已停用的运营：即使密码正确也 401，且不计数', async () => {
@@ -223,5 +256,6 @@ describe('OperatorAuthService.login', () => {
     await denied(service.login('op@example.com', 'correct-password'));
 
     expect(prisma.operator.update).not.toHaveBeenCalled();
+    expect(prisma.operator.updateMany).not.toHaveBeenCalled();
   });
 });

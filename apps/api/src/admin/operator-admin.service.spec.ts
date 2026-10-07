@@ -14,6 +14,11 @@ const build = async () => {
       create: jest.fn(),
       update: jest.fn(),
     },
+    // 与真实的数组式事务等价：语句已在构造数组时发出，这里只负责等它们完成。
+    $transaction: jest.fn((operations: Promise<unknown>[]) =>
+      Promise.all(operations),
+    ),
+    $executeRaw: jest.fn().mockResolvedValue(1),
   };
   const audit = { record: jest.fn() };
   const moduleRef = await Test.createTestingModule({
@@ -58,6 +63,12 @@ describe('OperatorAdminService.add', () => {
     await expect(
       verifyPassword(stored.data.passwordHash, result.password!),
     ).resolves.toBe(true);
+    // passwordChangedAt 交给数据库写，不用跑 CLI 的这台机器的时钟。
+    expect(prisma.$executeRaw).toHaveBeenCalledTimes(1);
+    expect(prisma.$executeRaw.mock.calls[0][0].join('?')).toContain(
+      '"passwordChangedAt" = (now()',
+    );
+    expect(prisma.$executeRaw.mock.calls[0][1]).toBe('new@x.com');
     expect(audit.record).toHaveBeenCalledWith(
       expect.objectContaining({
         actor: { type: 'OPERATOR', id: 'owner@example.com' },
@@ -118,19 +129,17 @@ describe('OperatorAdminService.reset', () => {
     expect(prisma.operator.update).not.toHaveBeenCalled();
   });
 
-  it('--execute：换新密码、更新 passwordChangedAt、清零失败计数和锁定', async () => {
+  it('--execute：换新密码、由数据库写 passwordChangedAt、清零失败计数和锁定', async () => {
     const { service, prisma, audit } = await build();
     prisma.operator.findUnique.mockResolvedValue({ id: 'op_1' });
     prisma.operator.update.mockResolvedValue({});
 
-    const before = Date.now();
     const result = await service.reset('Op@X.com', { ...CTX, execute: true });
 
     const call = prisma.operator.update.mock.calls[0][0] as {
       where: { id: string };
       data: {
         passwordHash: string;
-        passwordChangedAt: Date;
         failedLoginCount: number;
         lockedUntil: null;
       };
@@ -138,9 +147,12 @@ describe('OperatorAdminService.reset', () => {
     expect(call.where).toEqual({ id: 'op_1' });
     expect(call.data.failedLoginCount).toBe(0);
     expect(call.data.lockedUntil).toBeNull();
-    expect(call.data.passwordChangedAt.getTime()).toBeGreaterThanOrEqual(
-      before,
+    expect(call.data).not.toHaveProperty('passwordChangedAt');
+    expect(prisma.$executeRaw).toHaveBeenCalledTimes(1);
+    expect(prisma.$executeRaw.mock.calls[0][0].join('?')).toContain(
+      '"passwordChangedAt" = (now()',
     );
+    expect(prisma.$executeRaw.mock.calls[0][1]).toBe('op@x.com');
     await expect(
       verifyPassword(call.data.passwordHash, result.password!),
     ).resolves.toBe(true);

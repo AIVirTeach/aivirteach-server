@@ -50,9 +50,12 @@ export class OperatorAdminService {
     }
 
     const password = generatePassword();
-    const created = await this.prisma.operator.create({
-      data: { email, passwordHash: await hashPassword(password) },
-    });
+    const [created] = await this.prisma.$transaction([
+      this.prisma.operator.create({
+        data: { email, passwordHash: await hashPassword(password) },
+      }),
+      this.stampPasswordChanged(email),
+    ]);
     await this.recordChange('admin.operator.add', created.id, ctx);
     return { dryRun: false, email, password };
   }
@@ -68,16 +71,19 @@ export class OperatorAdminService {
     }
 
     const password = generatePassword();
-    await this.prisma.operator.update({
-      where: { id: operator.id },
-      data: {
-        passwordHash: await hashPassword(password),
-        // 早于它签发的登录令牌立即失效；同时解除登录锁定。
-        passwordChangedAt: new Date(),
-        failedLoginCount: 0,
-        lockedUntil: null,
-      },
-    });
+    // passwordChangedAt 由数据库写入（见 stampPasswordChanged），不用跑 CLI 的这台机器的时钟。
+    await this.prisma.$transaction([
+      this.prisma.operator.update({
+        where: { id: operator.id },
+        data: {
+          passwordHash: await hashPassword(password),
+          // 解除登录锁定；早于 passwordChangedAt 签发的登录令牌随之失效。
+          failedLoginCount: 0,
+          lockedUntil: null,
+        },
+      }),
+      this.stampPasswordChanged(email),
+    ]);
     await this.recordChange('admin.operator.reset', operator.id, ctx);
     return { dryRun: false, email, password };
   }
@@ -98,6 +104,13 @@ export class OperatorAdminService {
     });
     await this.recordChange('admin.operator.disable', operator.id, ctx);
     return { dryRun: false, email };
+  }
+
+  // 令牌的签发时间来自 API 服务器的时钟，所以 passwordChangedAt 也必须取数据库的时间：
+  // 用本机时钟的话，机器时间偏快会让新令牌一出生就被判作废，偏慢则让重置前的令牌继续有效。
+  private stampPasswordChanged(email: string) {
+    return this.prisma
+      .$executeRaw`UPDATE "Operator" SET "passwordChangedAt" = (now() AT TIME ZONE 'UTC') WHERE "email" = ${email}`;
   }
 
   private async requireOperator(email: string) {
