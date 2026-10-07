@@ -1,0 +1,37 @@
+{
+  "name": "admin",
+  "version": "0.0.1",
+  "private": true,
+  "scripts": {
+    "prebuild": "npm run build -w @aivirteach/admin-contract",
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "pretest": "npm run build -w @aivirteach/admin-contract",
+    "test": "vitest run",
+    "test:cov": "vitest run --coverage"
+  },
+  "dependencies": {
+    "@aivirteach/admin-contract": "*",
+    "class-variance-authority": "^0.7.1",
+    "clsx": "^2.1.1",
+    "next": "^16.3.8",
+    "react": "^19.2.0",
+    "react-dom": "^19.2.0",
+    "tailwind-merge": "^3.3.1"
+  },
+  "devDependencies": {
+    "@tailwindcss/postcss": "^4.1.0",
+    "@testing-library/jest-dom": "^6.6.0",
+    "@testing-library/react": "^16.3.0",
+    "@testing-library/user-event": "^14.6.0",
+    "@types/node": "^22.10.0",
+    "@types/react": "^19.2.0",
+    "@types/react-dom": "^19.2.0",
+    "@vitejs/plugin-react": "^5.0.0",
+    "jsdom": "^26.1.0",
+    "tailwindcss": "^4.1.0",
+    "typescript": "^5.7.3",
+    "vitest": "^3.2.0"
+  }
+}

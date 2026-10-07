@@ -11,13 +11,13 @@
 
 使用者是内部运营，少数人，权限相同。学员没有任何改课程内容的入口。
 
-**第一版做：** 课程（列表、**新建课程**、版本状态、元信息、模块/课时编辑、**块编辑与图片素材上传**、真实渲染预览、测评题、发版、丢弃草稿）、邀请、配额（发放与发放记录）、审计（只读）。
+**第一版做：** 课程（列表、**新建课程**、版本状态、元信息、模块/课时编辑、**块编辑与图片素材上传**、真实渲染预览、测评题、发版、丢弃草稿）、邀请、配额（分钟与 token 额度的发放与发放记录；token 额度的余额与用量报表）、审计（只读）。
 
 **第一版不做：**
 
 - 在界面里**导入** `course.json` / Markdown：转换依赖 remark，只在 CLI 里加载，Labs 来的课程继续用 CLI `course:create`（新建空课程走界面，见课时块 spec 第 12 节；是否 v1 就要导入界面待 Owen 确认）。
 - 演示 mock 里的 Neon MCP 抽屉：那是外部工具，不是界面功能。
-- 权限分级、多因素登录、配额余额与扣减（`QuotaLedger` 目前只有"发配额"一个写入口，没有任何代码读取它）。
+- 权限分级、多因素登录、**分钟配额**的余额与扣减（分钟配额仍然只有写入口，没有消费方）。**token 额度已有余额与扣减**（2026-10-05 上线：`TokenQuotaGuard`、`GET /admin/token-usage`、CLI `quota:grant-tokens`，默认不强制），所以配额页要展示它，见第 6、7 节。
 
 ## 2. 已确认的决定
 
@@ -49,36 +49,33 @@ aivirteach-server/
 
 ## 4. 运营账号与登录
 
-**数据模型（迁移，执行前照旧由 Owen 看前后对比页）：**
+**数据模型（迁移，执行前照旧由 Owen 看前后对比页）：** 运营只有少数几个人，由 Owen 直接用 CLI 写进数据库，不做邀请，也不做 refresh 令牌，所以只加一张表。
 
-- `Operator`：`id`、`email`（唯一）、`passwordHash?`、`status`（`INVITED | ACTIVE | DISABLED`）、`failedLoginCount`（默认 0）、`lockedUntil?`、`createdAt`、`updatedAt`。
-- `OperatorRefreshToken`：结构与 `RefreshToken` 一致（`tokenHash` 唯一、`expiresAt`、`revokedAt?`、`replacedBy?`），外键指向 `Operator`，级联删除。
-- `OperatorSetupToken`：`operatorId`、`tokenHash`（唯一）、`expiresAt`、`usedAt?`；用于首次设置密码和重置密码。
+- `Operator`：`id`、`email`（唯一，存入前 trim + 小写）、`passwordHash`、`status`（`ACTIVE | DISABLED`）、`failedLoginCount`（默认 0）、`lockedUntil?`、`passwordChangedAt`、`createdAt`、`updatedAt`。
 - `AuditEvent` 加 `@@index([createdAt])`（审计页按时间倒序翻页用）。
 
-**令牌：** 复用 `src/auth/tokens.ts` 的签名与验证，audience 用 `aivirteach-admin`（学员是 `aivirteach-client`），所以学员令牌调不了 admin API，反过来也一样。签名密钥沿用 `JWT_SECRET`。claims：`sub` = `Operator.id`，`email`。
+**令牌：** 复用 `src/auth/tokens.ts` 的签名与验证，audience 用 `aivirteach-admin`（学员是 `aivirteach-client`），所以学员令牌调不了 admin API，反过来也一样。签名密钥沿用 `JWT_SECRET`。claims：`sub` = `Operator.id`，`email`。**只发 access 令牌，有效期 `OPERATOR_SESSION_TTL`（默认 8 小时），过期重新登录。** 不要 refresh，是因为守卫每次请求都查库，停用已经立即生效，refresh 轮换换来的只是「不用每天登录一次」，却要多一张表、一套重放检测和 `proxy.ts` 里的并发刷新。
 
 **Nest 接口（挂在 `/api/v1/admin/auth`）：**
 
 | 方法 | 路径 | 作用 |
 |---|---|---|
-| POST | `/login` | 邮箱 + 密码 → access + refresh |
-| POST | `/refresh` | 轮换 refresh；已用过的 refresh 被重放 → 撤销该运营的整个家族 |
-| POST | `/logout` | 撤销当前 refresh |
-| POST | `/setup` | 用一次性令牌设置密码，状态 `INVITED → ACTIVE` |
+| POST | `/login` | 邮箱 + 密码 → access 令牌 |
 
-**添加与停用运营（CLI，沿用现有的 dry-run、`--operator`、`--reason` 约定）：**
+登出只清 admin 自己的 cookie，不需要接口。
 
-- `operator:add <邮箱>`：创建 `INVITED` 的运营，打印一次性设置链接，明文只显示这一次。
-- `operator:reset <邮箱>`：作废旧设置令牌，签发新的（忘记密码走这条）。
-- `operator:disable <邮箱>`：状态置 `DISABLED`，同时撤销其全部 refresh。
-- 第一个运营由 Owen 用 CLI 创建，不存在"开放注册"。
+**添加、重置与停用运营（CLI，沿用现有的 dry-run、`--operator`、`--reason` 约定）：**
 
-**守卫：** 新增 `OperatorAuthGuard`，换掉第 1 块的 `AdminApiTokenGuard`。每次请求验 JWT（audience、过期），再查库确认 `Operator.status = ACTIVE`，所以停用立刻生效。通过后把 `{ id, email }` 放到 `request.operator`。`ADMIN_API_TOKEN` 随之从 `EnvSchema` 移除，只留一种鉴权方式。
+- `operator:add <邮箱>`：创建 `ACTIVE` 的运营，随机生成密码并只打印这一次（密码哈希入库）。
+- `operator:reset <邮箱>`：生成新密码并打印一次，同时更新 `passwordChangedAt` 并清零失败计数与锁定。
+- `operator:disable <邮箱>`：状态置 `DISABLED`。
+- 第一个运营由 Owen 用 CLI 创建，不存在「开放注册」，也没有「忘记密码」流程：忘了就找另一位运营或 Owen 跑 `operator:reset`。
+
+**守卫：** 新增 `OperatorAuthGuard`，换掉第 1 块的 `AdminApiTokenGuard`。每次请求验 JWT（audience、过期），再查库确认 `Operator.status = ACTIVE`，并且令牌的签发时间不早于 `passwordChangedAt`（按秒比较），所以停用和重置密码都立刻让旧令牌失效。通过后把 `{ id, email }` 放到 `request.operator`。`ADMIN_API_TOKEN` 随之从 `EnvSchema` 移除，只留一种鉴权方式。
 
 **防暴力破解（不用 `@nestjs/throttler`）：** Vercel 是 serverless，内存里的限流器在多个实例之间不共享，形同虚设。改用数据库计数：连续 5 次登录失败 → `lockedUntil` = 现在 + 15 分钟，锁定期内即使密码正确也拒绝（返回的同样是"凭证无效"）；成功登录清零。登录失败一律返回统一的"凭证无效"，不区分"没有这个邮箱"和"密码错"（沿用 `AuthService` 的 `DENIED`）。邮箱不存在时同样做一次密码哈希比较，避免靠响应时间枚举邮箱。代价：知道运营邮箱的人可以反复触发锁定使其暂时登不进，对少数内部运营可接受，并且锁定会写审计事件。
 
-**新增环境变量：** `OPERATOR_SETUP_TTL_HOURS`（默认 24）、`OPERATOR_REFRESH_TTL_DAYS`（默认 7）。access 令牌有效期沿用 `ACCESS_TOKEN_TTL`。
+**新增环境变量：** `OPERATOR_SESSION_TTL`（默认 `8h`，格式同 `ACCESS_TOKEN_TTL`）。
 
 ## 5. 区分运营改动与学员改动
 
@@ -87,7 +84,7 @@ aivirteach-server/
 1. **运营的所有写操作一律记 `OPERATOR`，`actorId` 统一用运营邮箱。** 来源有三条：管理后台、admin API、CLI。CLI 现有的 `--operator <邮箱>` 就是邮箱，管理后台取登录令牌里的 `email`，所以三条来源的 `actorId` 口径一致，不需要再 join `Operator` 表，也兼容已有的历史记录。第 1 块计划里自报的 `X-Operator` 请求头因此取消，改用登录身份。
 2. **学员自己的操作保持记 `USER`，`actorId` 是学员 id**（现有的 `enrollment.enroll`、`enrollment.restart` 就是这样）。不为学员新增审计埋点。
 3. **同一个对象，两种来源能分开。** 例如报名：学员自己报名是 `enrollment.enroll`（`USER`），运营代报名是 `admin.enrollUser`（`OPERATOR`）；配额只有 `admin.grantQuota`（`OPERATOR`）。动作名前缀 `admin.` 也一并保持。
-4. **运营登录相关事件也记审计：** `admin.auth.login`（成功和失败，失败 `success=false`）、`admin.auth.logout`、`admin.auth.setup`、`admin.auth.locked`。
+4. **运营登录相关事件也记审计：** `admin.auth.login`（成功和失败，失败 `success=false`）、`admin.auth.locked`。
 
 **审计页（`GET /api/v1/admin/audit`）：** 游标分页（按 `createdAt` 倒序，`id` 兜底），`limit` 默认 50、最大 100；可按 `actorType`、`actor`（邮箱）、`action`、`targetType` 筛选。每条返回 `actor: { type, id, label }`：`OPERATOR` 的 `label` 就是邮箱；`USER` 的 `label` 由本页涉及的学员 id 批量查出邮箱（查不到则为 `null`）；`SYSTEM` 没有。界面用不同颜色的标签区分"运营 / 学员 / 系统"，默认视图是全部，一键切到"只看运营"或"只看学员"。
 
@@ -97,17 +94,17 @@ aivirteach-server/
 
 | 路径 | 内容 |
 |---|---|
-| `/login`、`/setup` | 登录；用一次性令牌设置密码 |
+| `/login` | 登录 |
 | `/courses` | 课程列表：状态、已发版版本、有无草稿、课时数、在学人数；**"新建课程"按钮**：输入 slug 和标题 → `POST /admin/courses` → 跳到课程页 |
 | `/courses/[slug]` | 版本状态、创建/丢弃草稿、课程元信息、模块与课时树、发版 |
 | `/courses/[slug]/lessons/[contentId]` | 三栏编辑器：结构树 / 块卡片列表 + 属性面板 + 预览 iframe / 本节测评题 |
 | `/invitations` | 邀请学员；学员列表与状态 |
-| `/quotas` | 发配额；配额发放记录 |
+| `/quotas` | 发配额（分钟 / token 两种）；发放记录；token 额度的余额与用量（数据来自已有的 `GET /admin/token-usage`，`groupBy=user`，口径 `balance = grantedTokens − lifetimeConsumption`，和聊天 429 的判定一致） |
 | `/audit` | 审计记录（第 5 节） |
 
 **数据流：** 读数据用 Server Component，写数据用 Server Action，都由 Next 服务端调用 `apps/api`，浏览器里的 JS 从不直接调 Nest，所以没有 CORS，令牌也不进浏览器。`apps/admin` 里不引入数据库客户端。
 
-**会话：** 两个 cookie——access 和 refresh，均 `HttpOnly`、`Secure`、`SameSite=Strict`。Server Component 里不能写 cookie，所以刷新放在 `proxy.ts`（Next 16 里 `middleware` 的新名字）：access 将过期且有 refresh 时，调用 `/admin/auth/refresh`，同时更新往下游传的请求和返回的响应里的 cookie；没有会话则重定向到 `/login`。这只是体验，真正的鉴权在 Nest 的 `OperatorAuthGuard`。变更类请求只走 Server Action（自带来源校验）加 `SameSite=Strict`，不另做 Route Handler。
+**会话：** 一个 cookie 存 access 令牌，`HttpOnly`、`Secure`、`SameSite=Strict`，有效期同 `OPERATOR_SESSION_TTL`。`proxy.ts`（Next 16 里 `middleware` 的新名字）只做一件事：没有会话 cookie 就重定向到 `/login`。这只是体验，真正的鉴权在 Nest 的 `OperatorAuthGuard`。登录和退出都是 Server Action（登录写 cookie，退出删 cookie）；变更类请求同样只走 Server Action（自带来源校验）加 `SameSite=Strict`，不另做 Route Handler。
 
 **编辑器：** 客户端组件，课时是一串块，不是一大段文字。
 - **块卡片列表：** 每块一张卡，带 Edit / Duplicate / Delete / 上移 / 下移；"Add Content"选择器列出 13 种块（名称与默认属性来自 `packages/lesson-blocks` 的 `BLOCK_REGISTRY`）。
@@ -129,7 +126,8 @@ aivirteach-server/
 | GET | `/admin/courses` | 课程列表：slug、标题、`published`、最大已发版版本、是否有草稿、课时数、在学人数（`active` 报名数） |
 | GET | `/admin/courses/:slug/draft` | 整棵草稿：模块、课时（含 `body`、测评题）、`meta`、欢迎页 |
 | GET | `/admin/users` | 学员列表：邮箱、状态、创建时间，支持邮箱关键字和游标分页 |
-| GET | `/admin/quotas` | 配额发放记录：学员邮箱、分钟数、过期时间、时间，游标分页，可按学员邮箱筛选 |
+| GET | `/admin/quotas` | 配额发放记录：学员邮箱、分钟数、token 数（`tokensDelta`，可为负：restart 时的结算流水）、过期时间、时间，游标分页，可按学员邮箱筛选 |
+| GET | `/admin/token-usage` | **已存在**（2026-10-05）：按用户 / 课程 / 天汇总三类 token 与加权消耗，`groupBy=user` 时带 `grantedTokens`、`lifetimeConsumption`、`balance`。本块只把它的守卫换成 `OperatorAuthGuard`，并把响应 schema 放进 `packages/admin-contract`。已知缺口：只含窗口内有活动的用户，"有授予但窗口内无活动"的用户看不到，配额页若要展示全部余额需要在 4c 里补 |
 | GET | `/admin/audit` | 见第 5 节 |
 
 写：
@@ -137,36 +135,37 @@ aivirteach-server/
 | 方法 | 路径 | 调用 |
 |---|---|---|
 | POST | `/admin/invitations` | `AdminService.inviteUser(email, operator, reason)`；响应含一次性明文令牌 |
-| POST | `/admin/quotas` | `AdminService.grantQuota(email, minutes, operator, reason)` |
+| POST | `/admin/quotas` | 请求体带 `kind: "minutes" \| "tokens"`：`minutes` 调 `AdminService.grantQuota(email, minutes, operator, reason)`；`tokens` 调 `AdminService.grantTokenQuota(email, tokens, operator, reason)`（单次上限 2,147,483,647，超出 400） |
 
 所有写接口的 `operator` 取自 `request.operator.email`。接口请求与响应的 zod schema 放 `packages/admin-contract`。
 
 ## 8. 对第 1 块的影响
 
 - **路径：** 第 1 块计划里所有 `src/…`、`prisma/…`、`test/…` 变成 `apps/api/…`，任务顺序与内容不变（机械改写）。
-- **鉴权：** 第 1 块先用 `ADMIN_API_TOKEN` 上线；本块落地时把守卫换成 `OperatorAuthGuard`，移除 `ADMIN_API_TOKEN` 与 `X-Operator`，对应的测试同步改。两个守卫不同时存在。
+- **鉴权：** 第 1 块先用 `ADMIN_API_TOKEN` 上线；本块落地时把守卫换成 `OperatorAuthGuard`，移除 `ADMIN_API_TOKEN` 与 `X-Operator`，对应的测试同步改。两个守卫不同时存在。**使用 `AdminApiTokenGuard` 的控制器有三个**：`AdminCoursesController`、`AdminCourseCreateController`（`admin-courses.controller.ts`）和 `AdminTokenUsageController`（`token-usage/interface`），都要换；`OperatorHeader` 装饰器只在前两个里，换成读 `request.operator.email`。
 - **审计：** 第 1 块的 `admin.draft.*` 与 `admin.publishCourse` 事件，`actorId` 从自报的 `X-Operator` 改为登录身份的邮箱。
 
 ## 9. 出错处理与安全
 
 - 未登录、令牌无效、运营已停用、账号被锁定 → 一律 401，文案统一。锁定不单独返回 429：否则攻击者能靠"哪个邮箱会被锁"枚举出有效邮箱（不存在的邮箱没有计数行，永远锁不上）。被锁的运营靠 `admin.auth.locked` 审计事件和另一位运营/CLI 得知原因，15 分钟后自动解锁。
-- 设置令牌过期、已用过或不存在 → 400，统一文案，不透露是哪种。
-- Server Action 遇到 Nest 返回的 401：尝试一次刷新，仍失败则清 cookie 并重定向 `/login`。
+- Server Action 遇到 Nest 返回的 401：清 cookie 并重定向 `/login`。
 - 422（发版校验失败）、404（草稿不存在）、409（`contentId` 重名）：界面直接展示 Nest 返回的信息，不吞掉。
-- 不记录密码、令牌明文到日志；设置链接只在 CLI 输出里出现一次。
+- 不记录密码、令牌明文到日志；新生成的运营密码只在 CLI 输出里出现一次。
 - 不在 `apps/admin` 里引用 `JWT_SECRET`、`DATABASE_URL`；admin 只需要 Nest 的地址（`API_BASE_URL`）。
 
 ## 10. 测试
 
 先写测试，覆盖率不低于 80%。
 
-- **api（jest，沿用现有）：** 登录成功/失败/统一错误文案；5 次失败锁定与解锁、锁定期内正确密码也拒绝；refresh 轮换与重放撤销整个家族；停用后旧令牌立即 401；学员令牌调 admin 接口 401（audience 隔离）；`operator:add / reset / disable` 的 dry-run 与 `--execute`；审计分页、筛选与 `actor.label` 解析；每个写接口记的是 `OPERATOR` + 邮箱。
-- **admin（vitest + Testing Library）：** 编辑器的未保存提示、发版弹窗展示问题列表、`proxy.ts` 的重定向与刷新、Server Action 的 401 重试。
+- **api（jest，沿用现有）：** 登录成功/失败/统一错误文案；5 次失败锁定与解锁、锁定期内正确密码也拒绝；停用或重置密码后旧令牌立即 401；学员令牌调 admin 接口 401（audience 隔离）；`operator:add / reset / disable` 的 dry-run 与 `--execute`（密码只在输出里出现一次）；审计分页、筛选与 `actor.label` 解析；每个写接口记的是 `OPERATOR` + 邮箱。
+- **admin（vitest + Testing Library）：** 编辑器的未保存提示、发版弹窗展示问题列表、`proxy.ts` 的重定向、Server Action 的 401 跳登录。
 - **端到端（Playwright）：** 登录 → 创建草稿 → 改一节正文 → 预览 → 发版 → 审计页能看到这次发版且标为"运营"。
 - **块编辑器：** 增删复制排序、自动保存状态机（保存中/已保存/失败重试）、撤销重做、问题提示显示在对应卡片、图片属性的上传与选择；预览消息只发往配置的 client 域名、`ready` 之前不发。
 - **契约：** admin 用 `packages/lesson-blocks` 的 `BLOCK_REGISTRY` 生成表单，注册表与 schema 的测试在该包里（不再有 admin 自己的渲染器和对应样例）。
 
 ## 11. 实施顺序与拆分
+
+**实施状态（2026-10-05）：** 步骤 0、1 已完成并上线（monorepo 骨架、`packages/lesson-blocks`、课程内容模型与 admin API、迁移 A 与回填）。client 的块渲染器与 `/preview/lesson` 已写好，在 client 仓库 `feat/lesson-blocks-renderer` 分支（已变基到最新 main），**尚未合并**，是 4b 的前置。4a（运营登录、`OperatorAuthGuard`、`operator:*` CLI、`apps/admin` 骨架与登录页、`packages/admin-contract`）代码已实现，生产上线步骤见 README「运营后台上线顺序（4a）」，等 Owen 确认后执行；4b / 4c 还没开始。4a 的计划：`docs/superpowers/plans/2026-10-05-admin-console-4a-operator-auth.md`；4c 的计划：`docs/superpowers/plans/2026-10-05-admin-console-4c-operations-pages.md`。4b 的计划待 client 渲染器合并后再写。
 
 一份 spec，三份 plan，另加前置的搬迁：
 
@@ -174,7 +173,7 @@ aivirteach-server/
 |---|---|---|
 | 0 | monorepo 搬迁。**`apps/api` 与 workspaces 骨架由课时块计划的任务 0 完成**（含下述 Vercel 关卡）；`apps/admin` 空壳、`packages/admin-contract`、第二个 Vercel 项目由第 4 块计划建立。**关卡：** 改 Vercel 现有项目的 Root Directory 之前，先在预览环境验证一次完整部署，Owen 确认后再改线上 | 无 |
 | 1 | 第 1 块计划改路径后执行 | 步骤 0 |
-| 2 (4a) | `Operator` 相关迁移（Owen 看对比页）、登录/刷新/设置接口、`OperatorAuthGuard` 替换令牌守卫、`operator:*` CLI、admin 骨架 + 登录页 + `proxy.ts` | 步骤 1 |
+| 2 (4a) | `Operator` 迁移（Owen 看对比页）、登录接口、`OperatorAuthGuard` 替换令牌守卫、`operator:*` CLI、admin 骨架 + 登录页 + `proxy.ts` | 步骤 1 |
 | 3 (4c) | 邀请、配额、审计三个页面和第 7 节对应接口 | 步骤 2 |
 | 4 (4b) | 课程列表（含新建课程）、块编辑器（含素材上传）、预览、发版 | 步骤 2、课时块 spec 的 `packages/lesson-blocks` 与 client 渲染器/预览页已上线 |
 
@@ -183,7 +182,8 @@ aivirteach-server/
 - 通过 Neon MCP 直接改草稿的操作没有审计记录（第 1 块已记），所以这类改动仍然分不清是谁做的；它只能由有数据库权限的人执行。
 - 管理后台和 admin API 暴露在公网，只有账号密码这一层防护；锁定机制可被用来短暂锁住某个运营。将来如需更强防护（多因素、IP 白名单），另开 spec。
 - 预览依赖 client 的预览页在线：client 不可用时编辑器仍可编辑与保存，预览区显示"预览不可用"。预览页与学员端是同一份渲染代码，但预览是后台模式（非法块显示红色占位），不是逐像素等同。
-- `QuotaLedger` 没有消费方，配额页只展示发放记录，不展示余额。
+- 分钟配额没有消费方，配额页对它只展示发放记录；token 额度有余额和用量，见第 6、7 节。
+- 生产库的 CLI 命令默认连本地库（`cli.ts` 只读 `.env`），对生产执行要显式传 `DATABASE_URL`；`operator:*` 命令沿用同样的行为，运营后台上线后日常操作改走界面，CLI 只用于创建第一个运营和应急。
 
 ## 13. 2026-10-01 修订汇总
 

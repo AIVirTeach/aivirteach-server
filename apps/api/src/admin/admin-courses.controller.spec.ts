@@ -1,11 +1,13 @@
 import { Test } from '@nestjs/testing';
 import {
+  type ExecutionContext,
   INestApplication,
   NotFoundException,
+  UnauthorizedException,
   UnprocessableEntityException,
 } from '@nestjs/common';
 import request from 'supertest';
-import { ENV, type Env } from '../config/env';
+import { OperatorAuthGuard } from '../operator-auth/operator-auth.guard';
 import { CourseDraftService } from './draft/course-draft.service';
 import { DraftContentService } from './draft/draft-content.service';
 import { CoursePublishService } from './course-publish.service';
@@ -19,6 +21,20 @@ import { CourseAssetUploadService } from './assets/course-asset-upload.service';
 
 const TOKEN = 'a'.repeat(32);
 const OPERATOR = 'editor@example.com';
+// 真正的守卫在 operator-auth.guard.spec 里测；这里只关心控制器拿到守卫放行后的身份。
+const stubGuard = {
+  canActivate: (context: ExecutionContext) => {
+    const req = context.switchToHttp().getRequest<{
+      headers: Record<string, string | undefined>;
+      operator?: { id: string; email: string };
+    }>();
+    if (req.headers.authorization !== `Bearer ${TOKEN}`) {
+      throw new UnauthorizedException();
+    }
+    req.operator = { id: 'op_1', email: OPERATOR };
+    return true;
+  },
+};
 const draft = { id: 'v2', courseId: 'course-1', modules: [] };
 const problems = [{ code: 'empty', message: 'draft is empty' }];
 
@@ -171,7 +187,6 @@ describe('AdminCoursesController', () => {
     const module = await Test.createTestingModule({
       controllers: [AdminCoursesController, AdminCourseCreateController],
       providers: [
-        { provide: ENV, useValue: { ADMIN_API_TOKEN: TOKEN } as Env },
         { provide: CourseDraftService, useValue: drafts },
         { provide: DraftContentService, useValue: content },
         { provide: CoursePublishService, useValue: publishing },
@@ -179,7 +194,10 @@ describe('AdminCoursesController', () => {
         { provide: CourseAssetUploadService, useValue: assetUploads },
         { provide: PrismaService, useValue: prisma },
       ],
-    }).compile();
+    })
+      .overrideGuard(OperatorAuthGuard)
+      .useValue(stubGuard)
+      .compile();
     app = module.createNestApplication();
     await app.init();
   });
@@ -200,7 +218,7 @@ describe('AdminCoursesController', () => {
     drafts.createDraft.mockResolvedValue({ draft, created: true });
   });
 
-  it('POST /admin/courses/:slug/assets requires the admin token and X-Operator', async () => {
+  it('POST /admin/courses/:slug/assets requires a logged-in operator', async () => {
     const noToken = await request(app.getHttpServer())
       .post('/admin/courses/demo/assets')
       .attach(
@@ -209,29 +227,18 @@ describe('AdminCoursesController', () => {
         'anything.jpg',
       );
     expect(noToken.status).toBe(401);
-    const noOperator = await request(app.getHttpServer())
-      .post('/admin/courses/demo/assets')
-      .set('Authorization', `Bearer ${TOKEN}`)
-      .attach(
-        'file',
-        Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
-        'anything.jpg',
-      );
-    expect(noOperator.status).toBe(400);
   });
 
   it('POST /admin/courses/:slug/assets requires a file and delegates a normal upload', async () => {
     const missing = await request(app.getHttpServer())
       .post('/admin/courses/demo/assets')
-      .set('Authorization', `Bearer ${TOKEN}`)
-      .set('X-Operator', OPERATOR);
+      .set('Authorization', `Bearer ${TOKEN}`);
     expect(missing.status).toBe(400);
     expect(missing.body.message).toContain('图片');
 
     const response = await request(app.getHttpServer())
       .post('/admin/courses/demo/assets')
       .set('Authorization', `Bearer ${TOKEN}`)
-      .set('X-Operator', OPERATOR)
       .field('altText', 'A diagram')
       .attach(
         'file',
@@ -257,7 +264,6 @@ describe('AdminCoursesController', () => {
     const response = await request(app.getHttpServer())
       .post('/admin/courses/demo/assets')
       .set('Authorization', `Bearer ${TOKEN}`)
-      .set('X-Operator', OPERATOR)
       .field('altText', 'one')
       .field('altText', 'two')
       .attach(
@@ -273,7 +279,6 @@ describe('AdminCoursesController', () => {
     const response = await request(app.getHttpServer())
       .post('/admin/courses/demo/assets')
       .set('Authorization', `Bearer ${TOKEN}`)
-      .set('X-Operator', OPERATOR)
       .field('altText', 'x'.repeat(301))
       .attach(
         'file',
@@ -288,7 +293,6 @@ describe('AdminCoursesController', () => {
     const response = await request(app.getHttpServer())
       .post('/admin/courses/demo/assets')
       .set('Authorization', `Bearer ${TOKEN}`)
-      .set('X-Operator', OPERATOR)
       .attach(
         'file',
         Buffer.concat([
@@ -305,13 +309,11 @@ describe('AdminCoursesController', () => {
   it.each(routes)('$method $path requires the admin token', async (route) => {
     const response = await request(app.getHttpServer())
       [route.method](route.path)
-      .set('X-Operator', OPERATOR)
       .send(route.body);
     expect(response.status).toBe(401);
     const wrong = await request(app.getHttpServer())
       [route.method](route.path)
       .set('Authorization', `Bearer ${'z'.repeat(32)}`)
-      .set('X-Operator', OPERATOR)
       .send(route.body);
     expect(wrong.status).toBe(401);
   });
@@ -322,42 +324,31 @@ describe('AdminCoursesController', () => {
       let call = request(app.getHttpServer())
         [route.method](route.path)
         .set('Authorization', `Bearer ${TOKEN}`);
-      if (route.method !== 'get')
-        call = call.set('X-Operator', OPERATOR).send(route.body);
+      if (route.method !== 'get') call = call.send(route.body);
       const response = await call;
       expect(response.status).toBe(route.method === 'post' ? 201 : 200);
       if (route.args) expect(route.service).toHaveBeenCalledWith(...route.args);
     },
   );
 
-  it('returns 400 when X-Operator is absent or invalid', async () => {
-    const absent = await request(app.getHttpServer())
-      .post('/admin/courses/demo/draft')
-      .set('Authorization', `Bearer ${TOKEN}`);
-    const invalid = await request(app.getHttpServer())
+  it('ignores a self-reported X-Operator header: identity comes from the login', async () => {
+    const response = await request(app.getHttpServer())
       .post('/admin/courses/demo/draft')
       .set('Authorization', `Bearer ${TOKEN}`)
-      .set('X-Operator', 'not-email');
-    expect(absent.status).toBe(400);
-    expect(invalid.status).toBe(400);
-    expect(drafts.createDraft).not.toHaveBeenCalled();
+      .set('X-Operator', 'attacker@example.com');
+
+    expect(response.status).toBe(201);
+    expect(drafts.createDraft).toHaveBeenCalledWith('demo', OPERATOR);
   });
 
-  it('creates a course at POST /admin/courses with required token and operator', async () => {
+  it('creates a course at POST /admin/courses for the logged-in operator', async () => {
     const missingToken = await request(app.getHttpServer())
       .post('/admin/courses')
-      .set('X-Operator', OPERATOR)
       .send({ slug: 'demo-course', title: 'Demo' });
     expect(missingToken.status).toBe(401);
-    const missingOperator = await request(app.getHttpServer())
-      .post('/admin/courses')
-      .set('Authorization', `Bearer ${TOKEN}`)
-      .send({ slug: 'demo-course', title: 'Demo' });
-    expect(missingOperator.status).toBe(400);
     const response = await request(app.getHttpServer())
       .post('/admin/courses')
       .set('Authorization', `Bearer ${TOKEN}`)
-      .set('X-Operator', OPERATOR)
       .send({ slug: 'demo-course', title: 'Demo' });
     expect(response.status).toBe(201);
     expect(courseCreation.create).toHaveBeenCalledWith(
@@ -378,8 +369,7 @@ describe('AdminCoursesController', () => {
     const post = () =>
       request(app.getHttpServer())
         .post('/admin/courses/demo/draft')
-        .set('Authorization', `Bearer ${TOKEN}`)
-        .set('X-Operator', OPERATOR);
+        .set('Authorization', `Bearer ${TOKEN}`);
     expect((await post()).status).toBe(201);
     drafts.createDraft.mockResolvedValueOnce({ draft, created: false });
     expect((await post()).status).toBe(200);
@@ -523,7 +513,6 @@ describe('AdminCoursesController', () => {
     const response = await request(app.getHttpServer())
       .post('/admin/courses/demo/publish')
       .set('Authorization', `Bearer ${TOKEN}`)
-      .set('X-Operator', OPERATOR)
       .send({ reason: 'approved' });
     expect(response.status).toBe(422);
     expect(response.body.problems).toEqual(problems);
@@ -532,8 +521,7 @@ describe('AdminCoursesController', () => {
   it('publishes with the default reason when the request has no body', async () => {
     const response = await request(app.getHttpServer())
       .post('/admin/courses/demo/publish')
-      .set('Authorization', `Bearer ${TOKEN}`)
-      .set('X-Operator', OPERATOR);
+      .set('Authorization', `Bearer ${TOKEN}`);
 
     expect(response.status).toBe(201);
     expect(publishing.publish).toHaveBeenCalledWith(

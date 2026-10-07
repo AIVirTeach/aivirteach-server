@@ -27,7 +27,8 @@ NestJS 模块化单体，AIVirTeach 三个代码仓库之一（另外两个：`a
 
 ```text
 apps/api/              NestJS API、Prisma schema/migrations、CLI 和测试
-packages/*/            可复用的工作区包
+apps/admin/            运营后台（Next.js，只经 HTTP 调 API，不碰数据库）
+packages/*/            可复用的工作区包（lesson-blocks、admin-contract）
 docker-compose.yml      本地 Postgres
 docs/                  设计与开发文档
 ```
@@ -65,7 +66,7 @@ node -e "console.log(require('node:crypto').randomBytes(48).toString('base64url'
 | `ACCESS_TOKEN_TTL` | 否，默认 `15m` | jose 简单格式：数字+单位 |
 | `REFRESH_TOKEN_TTL_DAYS` | 否，默认 `30` | |
 | `INVITATION_TTL_DAYS` | 否，默认 `7` | |
-| `ADMIN_API_TOKEN` | 是 | ≥32 字符，`/admin/*` 接口的 Bearer 令牌（没有默认值，漏配整个 API 启动即崩，学员接口也会一起挂）。不要和 `JWT_SECRET` 共用 |
+| `OPERATOR_SESSION_TTL` | 否，默认 `8h` | 运营登录令牌的有效期（jose 简单格式）。没有 refresh，到期重新登录。旧的 `ADMIN_API_TOKEN` 已取消；**生产里的这个变量先别删**——4a 之前的版本启动时要求它存在，回滚到旧版本会因为缺它整个 API（含学员接口）起不来，等 4a 在生产稳定运行后再删 |
 | `PORT` | 否，默认 `4000` | Vercel 上由平台接管，本地开发才用得到 |
 | `CORS_ORIGINS` | 否，默认 `tauri://localhost` | 逗号分隔白名单；client 桌面端（Tauri v2 webview）的源是 `tauri://localhost`，本地网页调试再加 `http://localhost:3001` |
 | `TOKEN_QUOTA_ENFORCED` | 否，默认 `false` | 是否强制 AI 助教的 token 额度。关闭时只记录用量、不拦截；只认 `true` / `false`。上线顺序见下方「Token 用量与额度」 |
@@ -101,6 +102,9 @@ node -e "console.log(require('node:crypto').randomBytes(48).toString('base64url'
 | `course:backfill-content-model` | `--execute`（默认 dry-run） | 回填课时 `body`、课时块 `content` 和学员进度的 `currentLessonContentId`（迁移 A 之后跑，见下方"课时块上线顺序"） |
 | `enroll <email> <courseSlug>` | | 给用户开课 |
 | `quota:grant <email> <minutes>` | | 给用户发运行额度（分钟） |
+| `operator:add <email>` | | 新增运营账号，随机密码只在输出里出现一次 |
+| `operator:reset <email>` | | 重置运营密码（旧令牌立即失效），新密码只在输出里出现一次 |
+| `operator:disable <email>` | | 停用运营账号（仍在有效期内的令牌下一次请求即 401） |
 | `quota:grant-tokens <email> <tokens>` | | 给用户发 AI 助教 token 额度（加权后的额度单位，见下方「Token 用量与额度」） |
 
 所有命令都要求 `--operator`（谁在操作）和 `--reason`（为什么），并且**默认 dry-run**——不加 `--execute` 只打印将要发生的变更、不落库。这两点不是可选的：目的是让审计日志（`AuditEvent` 表）永远能查到"谁、为什么、改了什么"，而不是留一堆无主的写操作。
@@ -111,8 +115,9 @@ node -e "console.log(require('node:crypto').randomBytes(48).toString('base64url'
 
 `/api/v1/admin/*` 供运营后台用，每个请求要带：
 
-- `Authorization: Bearer <ADMIN_API_TOKEN>`
-- `X-Operator: <操作者邮箱>`（写入审计日志；目前是自报身份，block 4 的 `OperatorAuthGuard` 会替换）
+- `Authorization: Bearer <运营令牌>`：先 `POST /api/v1/admin/auth/login`（`{email, password}`）换取，有效期见 `OPERATOR_SESSION_TTL`；学员令牌调不通，运营令牌也调不通学员接口（JWT audience 不同）
+
+审计日志里的操作者就是登录的运营邮箱（`actorType = OPERATOR`），不再接受自报的 `X-Operator`。5 次登录失败锁 15 分钟；停用或重置密码后旧令牌立即失效。运营账号写在 `Operator` 表里，用 `operator:add` 创建，没有邀请流程。Swagger 页要先登录拿令牌再填进 Authorize。
 
 草稿写接口（`PATCH/PUT/DELETE /admin/courses/:slug/draft*`、模块和课时的 `POST`）只返回不含课时正文的摘要，完整草稿用 `GET /admin/courses/:slug/draft`，单课预览用 `GET /admin/courses/:slug/draft/lessons/:contentId`。发版（`POST /admin/courses/:slug/publish`）会在事务内锁住草稿并重新校验，校验未通过返回 422 和 `problems`。
 
@@ -120,7 +125,7 @@ node -e "console.log(require('node:crypto').randomBytes(48).toString('base64url'
 
 学员进度现在只读 `Progress.currentLessonContentId`。**代码比迁移 A 和回填先上线，所有已有学员会显示未开始（0%），下一次完成课时还会覆盖进度指针**，所以必须按这个顺序：
 
-1. 在 Vercel 配好 `ADMIN_API_TOKEN`，并核对项目的 Root Directory / "include files outside root"（仓库是 npm workspaces monorepo）。
+1. 核对项目的 Root Directory / "include files outside root"（仓库是 npm workspaces monorepo）。
 2. 预检：同一课程不能有多个未发布版本，否则迁移 A 的部分唯一索引会失败：
    ```sql
    SELECT "courseId", count(*) FROM "CourseVersion" WHERE "publishedAt" IS NULL GROUP BY 1 HAVING count(*) > 1;
@@ -147,7 +152,7 @@ AI 助教每次回复消耗的 token 由 Labs 从 DeepSeek 的 `usage` 里取出
 
 **额度**是一个按用户的余额：`余额 = SUM(QuotaLedger.tokensDelta) - 加权消耗`，加权消耗 = `ceil(命中 × 0.02 + 未命中 × 1 + 输出 × 4)`（权重见环境变量）。余额 ≤ 0 时，聊天的两条 POST 路由（含流式）在 handler 之前返回 HTTP 429 `TOKEN_QUOTA_EXHAUSTED`，不写任何 Conversation。额度检查本身失败时放行（fail-open），只记错误日志。token 额度不支持过期。
 
-**运营报表**：`GET /api/v1/admin/token-usage?groupBy=user|course|day&from=…&to=…`（Bearer `ADMIN_API_TOKEN`；区间左闭右开，默认最近 7 天，按天分组用 UTC 日期）。每行带三类原始 token、加权消耗、`meteredTurns` 和 `unmeteredTurns`（真实 Agent 回复里没计上量的条数，非 0 说明数字被低估）；按用户分组时还有 `grantedTokens`（累计发放）、`lifetimeConsumption`（**全期**加权消耗）和 `balance`（`grantedTokens - lifetimeConsumption`，和上面 429 判定同一口径）。注意 `weightedConsumption` 只统计报表时间窗口，所以不等于 `grantedTokens - balance`。
+**运营报表**：`GET /api/v1/admin/token-usage?groupBy=user|course|day&from=…&to=…`（Bearer 运营令牌；区间左闭右开，默认最近 7 天，按天分组用 UTC 日期）。每行带三类原始 token、加权消耗、`meteredTurns` 和 `unmeteredTurns`（真实 Agent 回复里没计上量的条数，非 0 说明数字被低估）；按用户分组时还有 `grantedTokens`（累计发放）、`lifetimeConsumption`（**全期**加权消耗）和 `balance`（`grantedTokens - lifetimeConsumption`，和上面 429 判定同一口径）。注意 `weightedConsumption` 只统计报表时间窗口，所以不等于 `grantedTokens - balance`。
 
 **已知边界（都是少计，不会多扣学生）：**
 
@@ -178,6 +183,18 @@ npm run cli -w api -- quota:grant someone@example.com 60 -o "你的邮箱" -r "�
 ```
 
 要对生产库操作，先 `vercel env pull .env.production --environment production --yes`，`source` 进去再跑同样的命令，跑完把临时文件删掉。
+
+## 运营后台上线顺序（4a）
+
+顺序不能换：新代码一部署，旧的 `ADMIN_API_TOKEN` 调用立即失效，所以**先建好运营账号，再部署 api**。
+
+1. **迁移**：对生产库应用 `20261005000000_operator_accounts`（新增 `Operator` 表、`OperatorStatus` 枚举、`AuditEvent(createdAt)` 索引；纯新增，不动旧数据）。生产库走 Neon MCP，在事务内执行 SQL 并补写 `_prisma_migrations` 行（见「生产环境」）。
+2. **创建第一个运营**：CLI 在本机直接连库，不需要 api 已部署。用显式生产 `DATABASE_URL` 执行 `npm run cli -w api -- operator:add <email> -o <你的邮箱> -r "首个运营" --execute`，记下输出的密码（只出现一次）。`add` / `reset` 写入的 `passwordChangedAt` 取数据库时间，不依赖这台机器的时钟。
+3. **部署 api**（手动 `vercel deploy --prod`）。此刻 `ADMIN_API_TOKEN` 失效，需要时改用运营令牌。
+4. **部署 `apps/admin`**：第二个 Vercel 项目，Root Directory 为 `apps/admin`，环境变量只需 `API_BASE_URL`（api 的公网地址，含 `/api/v1`）。**不要**给它配 `JWT_SECRET` 或 `DATABASE_URL`。
+5. **给登录接口加限流**：登录是匿名接口，每次请求（包括不存在的邮箱）都会做一次密码哈希并写一条审计。应用层没有限流（serverless 下内存限流无效），建议在 Vercel Firewall 里给 `/api/v1/admin/auth/login` 加一条速率限制规则。
+
+改 Vercel 现有项目的 Root Directory 之前，先在预览环境验证一次完整部署。
 
 ## 测试
 

@@ -8,6 +8,7 @@ const loadJose = (): Promise<typeof import('jose')> =>
 
 export const TOKEN_ISSUER = 'aivirteach';
 export const TOKEN_AUDIENCE = 'aivirteach-client';
+export const TOKEN_AUDIENCE_ADMIN = 'aivirteach-admin';
 
 export interface AccessTokenClaims {
   sub: string;
@@ -28,6 +29,7 @@ export async function signAccessToken(
   claims: AccessTokenClaims,
   secret: string,
   ttl: string,
+  audience: string = TOKEN_AUDIENCE,
 ): Promise<string> {
   const { SignJWT } = await loadJose();
   return new SignJWT({ email: claims.email })
@@ -35,35 +37,56 @@ export async function signAccessToken(
     .setSubject(claims.sub)
     .setIssuedAt()
     .setIssuer(TOKEN_ISSUER)
-    .setAudience(TOKEN_AUDIENCE)
+    .setAudience(audience)
     .setExpirationTime(ttl)
     .sign(toKey(secret));
 }
 
 // 所有失败原因（签名不符、过期、格式错误）统一成 InvalidTokenError，
 // 避免把 jose 的内部错误类型泄露给上层，也避免用错误信息区分「无此用户」和「密码错」。
-export async function verifyAccessToken(
+async function verifyToken(
   token: string,
   secret: string,
-): Promise<AccessTokenClaims> {
+  audience: string,
+): Promise<AccessTokenClaims & { iat: number }> {
   try {
     const { jwtVerify } = await loadJose();
     const { payload } = await jwtVerify(token, toKey(secret), {
       issuer: TOKEN_ISSUER,
-      audience: TOKEN_AUDIENCE,
+      audience,
     });
 
-    if (typeof payload.sub !== 'string' || typeof payload.email !== 'string') {
+    if (
+      typeof payload.sub !== 'string' ||
+      typeof payload.email !== 'string' ||
+      typeof payload.iat !== 'number'
+    ) {
       throw new InvalidTokenError('token 缺少必要字段');
     }
 
-    return { sub: payload.sub, email: payload.email };
+    return { sub: payload.sub, email: payload.email, iat: payload.iat };
   } catch (error) {
     if (error instanceof InvalidTokenError) {
       throw error;
     }
     throw new InvalidTokenError();
   }
+}
+
+export async function verifyAccessToken(
+  token: string,
+  secret: string,
+): Promise<AccessTokenClaims> {
+  const { sub, email } = await verifyToken(token, secret, TOKEN_AUDIENCE);
+  return { sub, email };
+}
+
+// 运营令牌多带一个 iat（秒），守卫用它判断令牌是否早于最近一次改密码。
+export function verifyAdminAccessToken(
+  token: string,
+  secret: string,
+): Promise<AccessTokenClaims & { iat: number }> {
+  return verifyToken(token, secret, TOKEN_AUDIENCE_ADMIN);
 }
 
 const TTL_UNIT_SECONDS: Record<string, number> = {

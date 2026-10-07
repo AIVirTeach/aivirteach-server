@@ -8,6 +8,12 @@ import {
 } from './commands/course.command';
 import { EnrollCommand } from './commands/enroll.command';
 import { QuotaGrantCommand } from './commands/quota.command';
+import {
+  OperatorAddCommand,
+  OperatorDisableCommand,
+  OperatorResetCommand,
+} from './commands/operator.command';
+import { OperatorAdminService } from './operator-admin.service';
 import { QuotaGrantTokensCommand } from './commands/quota-tokens.command';
 import { CoursesModule } from '../courses/courses.module';
 import { ContentModelBackfillService } from './backfill/content-model-backfill.service';
@@ -15,7 +21,6 @@ import { CourseBackfillCommand } from './commands/course-backfill.command';
 import { CourseDraftService } from './draft/course-draft.service';
 import { CoursePublishService } from './course-publish.service';
 import { DraftContentService } from './draft/draft-content.service';
-import { AdminApiTokenGuard } from './admin-api-token.guard';
 import {
   AdminCourseCreateController,
   AdminCoursesController,
@@ -28,7 +33,6 @@ import { CourseAssetUploadService } from './assets/course-asset-upload.service';
   controllers: [AdminCoursesController, AdminCourseCreateController],
   providers: [
     AdminService,
-    AdminApiTokenGuard,
     CourseDraftService,
     CourseCreateService,
     DraftContentService,
@@ -41,6 +45,10 @@ import { CourseAssetUploadService } from './assets/course-asset-upload.service';
     EnrollCommand,
     QuotaGrantCommand,
     QuotaGrantTokensCommand,
+    OperatorAdminService,
+    OperatorAddCommand,
+    OperatorResetCommand,
+    OperatorDisableCommand,
     ContentModelBackfillService,
     CourseBackfillCommand,
   ],

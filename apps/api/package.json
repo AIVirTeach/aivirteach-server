@@ -6,7 +6,7 @@
   "private": true,
   "license": "UNLICENSED",
   "scripts": {
-    "prebuild": "npm run build -w @aivirteach/lesson-blocks",
+    "prebuild": "npm run build -w @aivirteach/lesson-blocks -w @aivirteach/admin-contract",
     "postinstall": "prisma generate",
     "build": "nest build",
     "format": "prettier --write \"src/**/*.ts\" \"test/**/*.ts\"",
@@ -16,19 +16,20 @@
     "start:prod": "node dist/main",
     "lint": "eslint \"{src,apps,libs,test}/**/*.ts\" --fix",
     "test": "node --experimental-vm-modules ../../node_modules/jest/bin/jest.js",
-    "pretest": "npm run build -w @aivirteach/lesson-blocks",
+    "pretest": "npm run build -w @aivirteach/lesson-blocks -w @aivirteach/admin-contract",
     "test:watch": "node --experimental-vm-modules ../../node_modules/jest/bin/jest.js --watch",
     "test:cov": "node --experimental-vm-modules ../../node_modules/jest/bin/jest.js --coverage",
-    "pretest:cov": "npm run build -w @aivirteach/lesson-blocks",
+    "pretest:cov": "npm run build -w @aivirteach/lesson-blocks -w @aivirteach/admin-contract",
     "test:debug": "node --inspect-brk --experimental-vm-modules -r tsconfig-paths/register -r ts-node/register ../../node_modules/jest/bin/jest.js --runInBand",
     "test:e2e": "node --experimental-vm-modules ../../node_modules/jest/bin/jest.js --config ./test/jest-e2e.json",
-    "pretest:e2e": "npm run build -w @aivirteach/lesson-blocks",
+    "pretest:e2e": "npm run build -w @aivirteach/lesson-blocks -w @aivirteach/admin-contract",
     "db:migrate": "prisma migrate dev",
     "db:reset": "prisma migrate reset --force",
     "cli": "ts-node -r tsconfig-paths/register src/cli.ts",
-    "precli": "npm run build -w @aivirteach/lesson-blocks"
+    "precli": "npm run build -w @aivirteach/lesson-blocks -w @aivirteach/admin-contract"
   },
   "dependencies": {
+    "@aivirteach/admin-contract": "*",
     "@aivirteach/lesson-blocks": "*",
     "@nestjs/common": "^11.0.1",
     "@nestjs/core": "^11.0.1",

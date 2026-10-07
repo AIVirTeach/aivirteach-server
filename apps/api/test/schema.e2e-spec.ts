@@ -93,4 +93,60 @@ describe('数据库 schema', () => {
     expect(event.actorId).toBeNull();
     expect(event.reason).toBeNull();
   });
+  describe('Operator 表（运营账号）', () => {
+    it('有预期的列、类型和默认值', async () => {
+      const columns = await prisma.$queryRaw<
+        Array<{
+          column_name: string;
+          is_nullable: string;
+          column_default: string | null;
+        }>
+      >`SELECT column_name, is_nullable, column_default
+        FROM information_schema.columns
+        WHERE table_name = 'Operator' ORDER BY column_name`;
+      const byName = new Map(columns.map((c) => [c.column_name, c]));
+
+      expect([...byName.keys()].sort()).toEqual(
+        [
+          'createdAt',
+          'email',
+          'failedLoginCount',
+          'id',
+          'lockedUntil',
+          'passwordChangedAt',
+          'passwordHash',
+          'status',
+          'updatedAt',
+        ].sort(),
+      );
+      expect(byName.get('passwordHash')?.is_nullable).toBe('NO');
+      expect(byName.get('lockedUntil')?.is_nullable).toBe('YES');
+      expect(byName.get('failedLoginCount')?.column_default).toBe('0');
+      expect(byName.get('status')?.column_default).toContain('ACTIVE');
+    });
+
+    it('OperatorStatus 只有 ACTIVE 和 DISABLED', async () => {
+      const values = await prisma.$queryRaw<Array<{ enumlabel: string }>>`
+        SELECT e.enumlabel FROM pg_enum e
+        JOIN pg_type t ON t.oid = e.enumtypid
+        WHERE t.typname = 'OperatorStatus' ORDER BY e.enumsortorder`;
+      expect(values.map((v) => v.enumlabel)).toEqual(['ACTIVE', 'DISABLED']);
+    });
+
+    it('email 唯一', async () => {
+      const indexes = await prisma.$queryRaw<
+        Array<{ indexname: string; indexdef: string }>
+      >`SELECT indexname, indexdef FROM pg_indexes WHERE tablename = 'Operator'`;
+      const unique = indexes.find((i) => i.indexname === 'Operator_email_key');
+      expect(unique?.indexdef).toContain('UNIQUE');
+    });
+  });
+
+  it('AuditEvent 有 createdAt 索引（审计页按时间倒序翻页用）', async () => {
+    const indexes = await prisma.$queryRaw<Array<{ indexname: string }>>`
+      SELECT indexname FROM pg_indexes WHERE tablename = 'AuditEvent'`;
+    expect(indexes.map((i) => i.indexname)).toContain(
+      'AuditEvent_createdAt_idx',
+    );
+  });
 });

@@ -1,5 +1,7 @@
 import {
   InvalidTokenError,
+  TOKEN_AUDIENCE_ADMIN,
+  verifyAdminAccessToken,
   generateOpaqueToken,
   hashOpaqueToken,
   signAccessToken,
@@ -36,6 +38,43 @@ describe('access token', () => {
 
   it('乱码字符串会抛 InvalidTokenError 而不是别的异常', async () => {
     await expect(verifyAccessToken('not.a.jwt', SECRET)).rejects.toBeInstanceOf(
+      InvalidTokenError,
+    );
+  });
+});
+
+describe('运营 access token（audience 与学员隔离）', () => {
+  it('用 admin audience 签发后能验回 claims，并带数值型 iat', async () => {
+    const token = await signAccessToken(
+      claims,
+      SECRET,
+      '8h',
+      TOKEN_AUDIENCE_ADMIN,
+    );
+
+    const verified = await verifyAdminAccessToken(token, SECRET);
+
+    expect(verified).toEqual({ ...claims, iat: expect.any(Number) });
+    expect(Math.abs(verified.iat - Date.now() / 1000)).toBeLessThan(5);
+  });
+
+  it('运营令牌不能当学员令牌用', async () => {
+    const token = await signAccessToken(
+      claims,
+      SECRET,
+      '8h',
+      TOKEN_AUDIENCE_ADMIN,
+    );
+
+    await expect(verifyAccessToken(token, SECRET)).rejects.toBeInstanceOf(
+      InvalidTokenError,
+    );
+  });
+
+  it('学员令牌不能当运营令牌用', async () => {
+    const token = await signAccessToken(claims, SECRET, '15m');
+
+    await expect(verifyAdminAccessToken(token, SECRET)).rejects.toBeInstanceOf(
       InvalidTokenError,
     );
   });

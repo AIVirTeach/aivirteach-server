@@ -12,8 +12,9 @@ const tokenWeight = (fallback: number) =>
 const EnvSchema = z.object({
   DATABASE_URL: z.string().min(1, 'DATABASE_URL 不能为空'),
   JWT_SECRET: z.string().min(32, 'JWT_SECRET 至少需要 32 个字符'),
-  ADMIN_API_TOKEN: z.string().min(32, 'ADMIN_API_TOKEN 至少需要 32 个字符'),
   ACCESS_TOKEN_TTL: z.string().min(1).default('15m'),
+  // 运营后台只发 access 令牌（不发 refresh），过期重新登录；格式同 ACCESS_TOKEN_TTL。
+  OPERATOR_SESSION_TTL: z.string().min(1).default('8h'),
   REFRESH_TOKEN_TTL_DAYS: z.coerce.number().int().positive().default(30),
   INVITATION_TTL_DAYS: z.coerce.number().int().positive().default(7),
   PORT: z.coerce.number().int().positive().default(4000),
