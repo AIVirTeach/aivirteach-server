@@ -179,63 +179,6 @@ describe('ChatService.sendMessage — 兜底路径（不调用 Agent）', () => 
     expect(result.tutorMessage.text).toBe('请先启动虚拟机后再提问。');
     expect(agentClient.diagnose).not.toHaveBeenCalled();
   });
-
-  it('还没有 Progress（没上过任何课时）时落兜底消息', async () => {
-    const { service, prisma, agentClient } = await buildService();
-    prisma.enrollment.findUnique.mockResolvedValue(ENROLLMENT);
-    prisma.conversation.create.mockResolvedValueOnce(
-      conversationRow({ id: 'student_1', content: '你好' }),
-    );
-    prisma.workspace.findUnique.mockResolvedValue({
-      labId: 'lab_1',
-      status: WorkspaceStatus.RUNNING,
-    });
-    prisma.progress.findUnique.mockResolvedValue(null);
-    prisma.conversation.create.mockResolvedValueOnce(
-      conversationRow({
-        id: 'tutor_1',
-        role: ConversationRole.ASSISTANT,
-        content: '还没有开始学习课程内容，请先进入第一课时。',
-      }),
-    );
-
-    const result = await service.sendMessage('user_1', 'enr_1', '你好');
-
-    expect(result.tutorMessage.text).toBe(
-      '还没有开始学习课程内容，请先进入第一课时。',
-    );
-    expect(agentClient.diagnose).not.toHaveBeenCalled();
-  });
-
-  it('Progress 指针为 null 时仍走课程起始兜底', async () => {
-    const { service, prisma, agentClient } = await buildService();
-    prisma.enrollment.findUnique.mockResolvedValue(ENROLLMENT);
-    prisma.conversation.create.mockResolvedValueOnce(
-      conversationRow({ id: 'student_1', content: '你好' }),
-    );
-    prisma.workspace.findUnique.mockResolvedValue({
-      labId: 'lab_1',
-      status: WorkspaceStatus.RUNNING,
-    });
-    prisma.progress.findUnique.mockResolvedValue({
-      currentLessonContentId: null,
-    });
-    prisma.conversation.create.mockResolvedValueOnce(
-      conversationRow({
-        id: 'tutor_1',
-        role: ConversationRole.ASSISTANT,
-        content: '还没有开始学习课程内容，请先进入第一课时。',
-      }),
-    );
-
-    const result = await service.sendMessage('user_1', 'enr_1', '你好');
-
-    expect(result.tutorMessage.text).toBe(
-      '还没有开始学习课程内容，请先进入第一课时。',
-    );
-    expect(agentClient.diagnose).not.toHaveBeenCalled();
-    expect(prisma.course.findUnique).not.toHaveBeenCalled();
-  });
 });
 
 const LESSON = {
@@ -502,7 +445,86 @@ describe('ChatService.sendMessage — 调用 Agent', () => {
     errorSpy.mockRestore();
   });
 
-  it('当前 contentId 已不在最新已发布版本时走学习起始兜底，不抛错', async () => {
+  it.each([
+    ['没有 Progress 记录', null],
+    ['Progress 指针为 null', { currentLessonContentId: null }],
+  ])(
+    '%s 时以第一课为上下文调用 Agent，不落"尚未开始"兜底',
+    async (_label, progress) => {
+      const { service, prisma, agentClient } = await buildService();
+      setupReadyWorkspace(prisma);
+      prisma.progress.findUnique.mockResolvedValue(progress);
+      prisma.conversation.create.mockResolvedValueOnce(
+        conversationRow({ id: 'student_1', content: '什么是 docker' }),
+      );
+      agentClient.diagnose.mockResolvedValue(DIAGNOSE_RESPONSE);
+      prisma.conversation.create.mockResolvedValueOnce(
+        conversationRow({
+          id: 'tutor_1',
+          role: ConversationRole.ASSISTANT,
+          content: DIAGNOSE_RESPONSE.answer,
+        }),
+      );
+
+      const result = await service.sendMessage(
+        'user_1',
+        'enr_1',
+        '什么是 docker',
+      );
+
+      expect(result.tutorMessage.text).toBe(DIAGNOSE_RESPONSE.answer);
+      expect(agentClient.diagnose).toHaveBeenCalledWith(
+        expect.objectContaining({
+          lab_id: 'lab_1',
+          current_step: expect.objectContaining({
+            module_id: 'module_1',
+            lesson_id: 'previous-lesson',
+            sequence: 1,
+            title: '前一课',
+          }),
+        }),
+      );
+    },
+  );
+
+  it('最新已发布版本没有任何课时时返回内容不可用兜底，不抛错也不调用 Agent', async () => {
+    const { service, prisma, agentClient } = await buildService();
+    setupReadyWorkspace(prisma);
+    prisma.progress.findUnique.mockResolvedValue(null);
+    prisma.course.findUnique.mockResolvedValue({
+      ...PUBLISHED_COURSE,
+      versions: [
+        {
+          ...PUBLISHED_COURSE.versions[0],
+          modules: [
+            { ...PUBLISHED_COURSE.versions[0].modules[0], lessons: [] },
+          ],
+        },
+      ],
+    });
+    prisma.conversation.create.mockResolvedValueOnce(
+      conversationRow({ id: 'student_1', content: '？' }),
+    );
+    prisma.conversation.create.mockResolvedValueOnce(
+      conversationRow({
+        id: 'tutor_1',
+        role: ConversationRole.ASSISTANT,
+        content: '课程内容暂时不可用，请稍后再试。',
+      }),
+    );
+
+    const result = await service.sendMessage('user_1', 'enr_1', '？');
+
+    expect(result.tutorMessage.text).toBe('课程内容暂时不可用，请稍后再试。');
+    expect(prisma.conversation.create).toHaveBeenLastCalledWith({
+      data: expect.objectContaining({
+        content: '课程内容暂时不可用，请稍后再试。',
+      }),
+    });
+    expect(agentClient.diagnose).not.toHaveBeenCalled();
+  });
+
+  it('当前 contentId 已不在最新已发布版本时返回内容不可用兜底，不调用 Agent', async () => {
     const { service, prisma, agentClient } = await buildService();
     setupReadyWorkspace(prisma);
     prisma.course.findUnique.mockResolvedValue({
@@ -534,19 +556,22 @@ describe('ChatService.sendMessage — 调用 Agent', () => {
       conversationRow({
         id: 'tutor_1',
         role: ConversationRole.ASSISTANT,
-        content: '还没有开始学习课程内容，请先进入第一课时。',
+        content: '课程内容暂时不可用，请稍后再试。',
       }),
     );
 
     const result = await service.sendMessage('user_1', 'enr_1', '？');
 
-    expect(result.tutorMessage.text).toBe(
-      '还没有开始学习课程内容，请先进入第一课时。',
-    );
+    expect(result.tutorMessage.text).toBe('课程内容暂时不可用，请稍后再试。');
+    expect(prisma.conversation.create).toHaveBeenLastCalledWith({
+      data: expect.objectContaining({
+        content: '课程内容暂时不可用，请稍后再试。',
+      }),
+    });
     expect(agentClient.diagnose).not.toHaveBeenCalled();
   });
 
-  it('最新版本存在目标课时但查不到对应课时行时走学习起始兜底', async () => {
+  it('最新版本存在目标课时但查不到对应课时行时返回内容不可用兜底', async () => {
     const { service, prisma, agentClient } = await buildService();
     setupReadyWorkspace(prisma);
     prisma.courseLesson.findFirst.mockResolvedValue(null);
@@ -557,15 +582,18 @@ describe('ChatService.sendMessage — 调用 Agent', () => {
       conversationRow({
         id: 'tutor_1',
         role: ConversationRole.ASSISTANT,
-        content: '还没有开始学习课程内容，请先进入第一课时。',
+        content: '课程内容暂时不可用，请稍后再试。',
       }),
     );
 
     const result = await service.sendMessage('user_1', 'enr_1', '？');
 
-    expect(result.tutorMessage.text).toBe(
-      '还没有开始学习课程内容，请先进入第一课时。',
-    );
+    expect(result.tutorMessage.text).toBe('课程内容暂时不可用，请稍后再试。');
+    expect(prisma.conversation.create).toHaveBeenLastCalledWith({
+      data: expect.objectContaining({
+        content: '课程内容暂时不可用，请稍后再试。',
+      }),
+    });
     expect(agentClient.diagnose).not.toHaveBeenCalled();
     expect(prisma.courseLesson.findFirst).toHaveBeenCalledTimes(1);
   });
@@ -721,6 +749,49 @@ describe('ChatService.streamMessage — 调用 Agent', () => {
         contextRef: DIAGNOSE_RESPONSE,
       },
     });
+  });
+
+  it('没有 Progress 记录时以第一课为上下文调用 diagnoseStream，result 落库后发 complete', async () => {
+    const { service, prisma, agentClient } = await buildService();
+    setupReadyWorkspace(prisma);
+    prisma.progress.findUnique.mockResolvedValue(null);
+    prisma.conversation.create.mockResolvedValueOnce(
+      conversationRow({ id: 'student_1', content: '什么是 docker' }),
+    );
+    agentClient.diagnoseStream.mockReturnValue(
+      framesFrom([{ event: 'result', data: { response: DIAGNOSE_RESPONSE } }]),
+    );
+    prisma.conversation.create.mockResolvedValueOnce(
+      conversationRow({
+        id: 'tutor_1',
+        role: ConversationRole.ASSISTANT,
+        content: DIAGNOSE_RESPONSE.answer,
+        contextRef: DIAGNOSE_RESPONSE,
+      }),
+    );
+
+    const events = await collect(
+      service.streamMessage('user_1', 'enr_1', '什么是 docker'),
+    );
+
+    expect(agentClient.diagnoseStream).toHaveBeenCalledWith(
+      expect.objectContaining({
+        lab_id: 'lab_1',
+        current_step: expect.objectContaining({
+          lesson_id: 'previous-lesson',
+          sequence: 1,
+        }),
+      }),
+    );
+    expect(events).toEqual([
+      {
+        type: 'complete',
+        studentMessage: expect.objectContaining({ text: '什么是 docker' }),
+        tutorMessage: expect.objectContaining({
+          text: DIAGNOSE_RESPONSE.answer,
+        }),
+      },
+    ]);
   });
 
   it('流中途抛错、从没收到 result 帧时，转发已到达的 progress 后落兜底 complete 事件', async () => {

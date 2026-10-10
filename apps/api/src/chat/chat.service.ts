@@ -276,21 +276,16 @@ export class ChatService {
     const progress = await this.prisma.progress.findUnique({
       where: { enrollmentId },
     });
-    if (!progress?.currentLessonContentId) {
-      return {
-        ok: false,
-        fallbackMessage: '还没有开始学习课程内容，请先进入第一课时。',
-      };
-    }
-
+    // 还没进入任何课时（无 Progress / 指针为空）也允许提问：此时用第一课做回答背景，
+    // 只读不写，不代表学生已开始学习。
     const context = await this.buildDiagnoseContext(
       courseId,
-      progress.currentLessonContentId,
+      progress?.currentLessonContentId ?? null,
     );
     if (!context) {
       return {
         ok: false,
-        fallbackMessage: '还没有开始学习课程内容，请先进入第一课时。',
+        fallbackMessage: '课程内容暂时不可用，请稍后再试。',
       };
     }
 
@@ -306,7 +301,7 @@ export class ChatService {
 
   private async buildDiagnoseContext(
     courseId: string,
-    currentLessonContentId: string,
+    currentLessonContentId: string | null,
   ): Promise<{
     course: DiagnoseRequestBody['course'];
     currentStep: DiagnoseRequestBody['current_step'];
@@ -321,9 +316,12 @@ export class ChatService {
     const flattened = version.modules.flatMap((courseModule) =>
       courseModule.lessons.map((lesson) => ({ lesson, courseModule })),
     );
-    const index = flattened.findIndex(
-      ({ lesson }) => lesson.contentId === currentLessonContentId,
-    );
+    if (!flattened.length) return null;
+    const index = currentLessonContentId
+      ? flattened.findIndex(
+          ({ lesson }) => lesson.contentId === currentLessonContentId,
+        )
+      : 0;
     if (index < 0) return null;
     const { lesson, courseModule } = flattened[index];
     const sequence = index + 1;
