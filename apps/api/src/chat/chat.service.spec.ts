@@ -39,7 +39,12 @@ async function buildService(
   return { service: moduleRef.get(ChatService), prisma, agentClient };
 }
 
-const ENROLLMENT = { id: 'enr_1', userId: 'user_1', courseId: 'course_1' };
+const ENROLLMENT = {
+  id: 'enr_1',
+  userId: 'user_1',
+  courseId: 'course_1',
+  completedAt: null,
+};
 
 function conversationRow(
   overrides: Partial<{
@@ -487,6 +492,68 @@ describe('ChatService.sendMessage — 调用 Agent', () => {
     },
   );
 
+  it('已学完整门课（指针为空且 enrollment 有 completedAt）时以最后一课为上下文，而不是第一课', async () => {
+    const { service, prisma, agentClient } = await buildService();
+    setupReadyWorkspace(prisma);
+    prisma.enrollment.findUnique.mockResolvedValue({
+      ...ENROLLMENT,
+      completedAt: new Date('2026-09-01T00:00:00.000Z'),
+    });
+    prisma.progress.findUnique.mockResolvedValue({
+      currentLessonContentId: null,
+    });
+    prisma.conversation.create.mockResolvedValue(conversationRow({}));
+    agentClient.diagnose.mockResolvedValue(DIAGNOSE_RESPONSE);
+
+    await service.sendMessage('user_1', 'enr_1', '复习一下');
+
+    expect(agentClient.diagnose).toHaveBeenCalledWith(
+      expect.objectContaining({
+        current_step: expect.objectContaining({
+          lesson_id: 'verify-virtual-machine',
+          sequence: 2,
+        }),
+      }),
+    );
+  });
+
+  it('指针是空字符串时按失效指针处理：返回内容不可用兜底，不调用 Agent', async () => {
+    const { service, prisma, agentClient } = await buildService();
+    setupReadyWorkspace(prisma);
+    prisma.progress.findUnique.mockResolvedValue({
+      currentLessonContentId: '',
+    });
+    prisma.conversation.create.mockResolvedValue(conversationRow({}));
+
+    await service.sendMessage('user_1', 'enr_1', '？');
+
+    expect(agentClient.diagnose).not.toHaveBeenCalled();
+    expect(prisma.conversation.create).toHaveBeenLastCalledWith({
+      data: expect.objectContaining({
+        content: '课程内容暂时不可用，请稍后再试。',
+      }),
+    });
+  });
+
+  it('拿不到课程上下文时记 warn 日志（带 enrollmentId 和指针），线上才能看到有多少人遇到', async () => {
+    const warnSpy = jest
+      .spyOn(Logger.prototype, 'warn')
+      .mockImplementation(() => undefined);
+    const { service, prisma } = await buildService();
+    setupReadyWorkspace(prisma);
+    prisma.progress.findUnique.mockResolvedValue({
+      currentLessonContentId: 'deleted-lesson',
+    });
+    prisma.conversation.create.mockResolvedValue(conversationRow({}));
+
+    await service.sendMessage('user_1', 'enr_1', '？');
+
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.stringMatching(/enr_1.*deleted-lesson/),
+    );
+    warnSpy.mockRestore();
+  });
+
   it('最新已发布版本没有任何课时时返回内容不可用兜底，不抛错也不调用 Agent', async () => {
     const { service, prisma, agentClient } = await buildService();
     setupReadyWorkspace(prisma);
@@ -792,6 +859,13 @@ describe('ChatService.streamMessage — 调用 Agent', () => {
         }),
       },
     ]);
+    expect(prisma.conversation.create).toHaveBeenLastCalledWith({
+      data: expect.objectContaining({
+        role: ConversationRole.ASSISTANT,
+        content: DIAGNOSE_RESPONSE.answer,
+        contextRef: DIAGNOSE_RESPONSE,
+      }),
+    });
   });
 
   it('流中途抛错、从没收到 result 帧时，转发已到达的 progress 后落兜底 complete 事件', async () => {

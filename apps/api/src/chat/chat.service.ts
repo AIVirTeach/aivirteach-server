@@ -93,6 +93,7 @@ export class ChatService {
     const resolved = await this.resolveDiagnoseRequest(
       enrollment.id,
       enrollment.courseId,
+      enrollment.completedAt !== null,
     );
     if (!resolved.ok) {
       return this.respondWithFallback(
@@ -160,6 +161,7 @@ export class ChatService {
     const resolved = await this.resolveDiagnoseRequest(
       enrollment.id,
       enrollment.courseId,
+      enrollment.completedAt !== null,
     );
     if (!resolved.ok) {
       yield {
@@ -257,6 +259,7 @@ export class ChatService {
   private async resolveDiagnoseRequest(
     enrollmentId: string,
     courseId: string,
+    courseCompleted: boolean,
   ): Promise<ResolvedDiagnoseRequest> {
     const workspace = await this.prisma.workspace.findUnique({
       where: { enrollmentId },
@@ -276,13 +279,18 @@ export class ChatService {
     const progress = await this.prisma.progress.findUnique({
       where: { enrollmentId },
     });
-    // 还没进入任何课时（无 Progress / 指针为空）也允许提问：此时用第一课做回答背景，
-    // 只读不写，不代表学生已开始学习。
+    // 指针为空有两种含义：还没进入任何课时，或已学完整门课（completeLesson 学完最后一课时
+    // 置空）。两者都允许提问，上下文只读不写：没开始用第一课，已学完用最后一课。
+    const pointer = progress?.currentLessonContentId ?? null;
     const context = await this.buildDiagnoseContext(
       courseId,
-      progress?.currentLessonContentId ?? null,
+      pointer,
+      courseCompleted,
     );
     if (!context) {
+      this.logger.warn(
+        `enrollmentId=${enrollmentId} 课程内容不可用，未调用 Agent（currentLessonContentId=${pointer ?? 'null'}）`,
+      );
       return {
         ok: false,
         fallbackMessage: '课程内容暂时不可用，请稍后再试。',
@@ -302,6 +310,7 @@ export class ChatService {
   private async buildDiagnoseContext(
     courseId: string,
     currentLessonContentId: string | null,
+    courseCompleted: boolean,
   ): Promise<{
     course: DiagnoseRequestBody['course'];
     currentStep: DiagnoseRequestBody['current_step'];
@@ -317,11 +326,14 @@ export class ChatService {
       courseModule.lessons.map((lesson) => ({ lesson, courseModule })),
     );
     if (!flattened.length) return null;
-    const index = currentLessonContentId
-      ? flattened.findIndex(
-          ({ lesson }) => lesson.contentId === currentLessonContentId,
-        )
-      : 0;
+    const index =
+      currentLessonContentId === null
+        ? courseCompleted
+          ? flattened.length - 1
+          : 0
+        : flattened.findIndex(
+            ({ lesson }) => lesson.contentId === currentLessonContentId,
+          );
     if (index < 0) return null;
     const { lesson, courseModule } = flattened[index];
     const sequence = index + 1;
