@@ -2,18 +2,24 @@ import { ForbiddenException, Logger } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
 import { ConversationRole } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
+import { TOKEN_WEIGHTS } from '../token-usage/application/check-token-quota';
 import { LATEST_PUBLISHED_VERSION } from '../courses/published-version';
 import { AgentClient } from './agent-client';
 import { ChatService } from './chat.service';
 
 function buildPrisma() {
   return {
-    enrollment: { findUnique: jest.fn() },
+    enrollment: {
+      findUnique: jest.fn(),
+      updateMany: jest.fn().mockResolvedValue({ count: 1 }),
+    },
     conversation: { create: jest.fn(), findMany: jest.fn() },
+    quotaLedger: { upsert: jest.fn().mockResolvedValue({}) },
     workspace: { findUnique: jest.fn(), update: jest.fn() },
     progress: { findUnique: jest.fn() },
     course: { findUnique: jest.fn() },
     courseLesson: { findFirst: jest.fn() },
+    $transaction: jest.fn(),
   };
 }
 
@@ -24,6 +30,9 @@ async function buildService(
   } = {},
 ) {
   const prisma = overrides.prisma ?? buildPrisma();
+  prisma.$transaction.mockImplementation(
+    (callback: (tx: typeof prisma) => unknown) => callback(prisma),
+  );
   const agentClient = overrides.agentClient ?? {
     diagnose: jest.fn(),
     diagnoseStream: jest.fn(),
@@ -34,6 +43,10 @@ async function buildService(
       ChatService,
       { provide: PrismaService, useValue: prisma },
       { provide: AgentClient, useValue: agentClient },
+      {
+        provide: TOKEN_WEIGHTS,
+        useValue: { inputCacheHit: 0.02, inputCacheMiss: 1, output: 4 },
+      },
     ],
   }).compile();
   return { service: moduleRef.get(ChatService), prisma, agentClient };
@@ -44,6 +57,8 @@ const ENROLLMENT = {
   userId: 'user_1',
   courseId: 'course_1',
   completedAt: null,
+  active: true,
+  generation: 0,
 };
 
 function conversationRow(
@@ -255,6 +270,57 @@ const PUBLISHED_COURSE = {
 };
 
 describe('ChatService.sendMessage — 调用 Agent', () => {
+  it('兜底回复晚于 restart 时不重新写入旧聊天记录', async () => {
+    const { service, prisma, agentClient } = await buildService();
+    prisma.enrollment.findUnique.mockResolvedValue(ENROLLMENT);
+    prisma.conversation.create.mockResolvedValueOnce(
+      conversationRow({ id: 'student_1' }),
+    );
+    prisma.workspace.findUnique.mockResolvedValue(null);
+    prisma.enrollment.updateMany
+      .mockResolvedValueOnce({ count: 1 })
+      .mockResolvedValueOnce({ count: 0 });
+
+    await expect(
+      service.sendMessage('user_1', 'enr_1', '你好'),
+    ).rejects.toThrow();
+    expect(prisma.conversation.create).toHaveBeenCalledTimes(1);
+    expect(agentClient.diagnose).not.toHaveBeenCalled();
+  });
+
+  it('Agent 回复晚于 restart 时不重新写入旧聊天记录', async () => {
+    const { service, prisma, agentClient } = await buildService();
+    setupReadyWorkspace(prisma);
+    prisma.conversation.create.mockResolvedValueOnce(
+      conversationRow({ id: 'student_1' }),
+    );
+    prisma.enrollment.updateMany
+      .mockResolvedValueOnce({ count: 1 })
+      .mockResolvedValueOnce({ count: 0 });
+    agentClient.diagnose.mockResolvedValue({
+      answer: '迟到的回复',
+      usage: {
+        input_cache_hit_tokens: 10,
+        input_cache_miss_tokens: 20,
+        output_tokens: 5,
+      },
+    });
+
+    await expect(
+      service.sendMessage('user_1', 'enr_1', '你好'),
+    ).rejects.toThrow();
+    expect(agentClient.diagnose).toHaveBeenCalledTimes(1);
+    expect(prisma.conversation.create).toHaveBeenCalledTimes(1);
+    expect(prisma.quotaLedger.upsert).toHaveBeenCalledWith({
+      where: { id: expect.stringMatching(/^stale-agent-/) },
+      update: {},
+      create: expect.objectContaining({ userId: 'user_1', tokensDelta: -41 }),
+    });
+    expect(prisma.enrollment.updateMany).toHaveBeenCalledWith({
+      where: { id: 'enr_1', generation: 0, active: true },
+      data: { active: true },
+    });
+  });
   function setupReadyWorkspace(prisma: ReturnType<typeof buildPrisma>) {
     prisma.enrollment.findUnique.mockResolvedValue(ENROLLMENT);
     prisma.workspace.findUnique.mockResolvedValue({
@@ -666,6 +732,8 @@ describe('ChatService.sendMessage — 调用 Agent', () => {
   });
 });
 
+// An async iterator models the Agent stream even when test frames are immediate.
+// eslint-disable-next-line @typescript-eslint/require-await
 async function* framesFrom(frames: Array<{ event: string; data: unknown }>) {
   for (const frame of frames)
     yield { event: frame.event, data: JSON.stringify(frame.data) };
@@ -750,6 +818,48 @@ describe('ChatService.streamMessage — 调用 Agent', () => {
       assessments: LESSON.assessments,
     });
   }
+
+  it('restart 后迟到的流式结果不写聊天，但结算已发生的 token 用量', async () => {
+    const { service, prisma, agentClient } = await buildService();
+    setupReadyWorkspace(prisma);
+    prisma.conversation.create.mockResolvedValueOnce(
+      conversationRow({ id: 'student_1' }),
+    );
+    prisma.enrollment.updateMany
+      .mockResolvedValueOnce({ count: 1 })
+      .mockResolvedValueOnce({ count: 0 });
+    agentClient.diagnoseStream.mockReturnValue(
+      framesFrom([
+        {
+          event: 'result',
+          data: {
+            response: {
+              ...DIAGNOSE_RESPONSE,
+              usage: {
+                input_cache_hit_tokens: 10,
+                input_cache_miss_tokens: 20,
+                output_tokens: 5,
+              },
+            },
+          },
+        },
+      ]),
+    );
+    jest.spyOn(Logger.prototype, 'error').mockImplementation(() => undefined);
+
+    const events = await collect(
+      service.streamMessage('user_1', 'enr_1', '你好'),
+    );
+
+    expect(events).toEqual([]);
+    expect(prisma.conversation.create).toHaveBeenCalledTimes(1);
+    expect(prisma.quotaLedger.upsert).toHaveBeenCalledWith({
+      where: { id: expect.stringMatching(/^stale-agent-/) },
+      update: {},
+      create: expect.objectContaining({ userId: 'user_1', tokensDelta: -41 }),
+    });
+    jest.restoreAllMocks();
+  });
 
   it('依次转发 progress 帧，result 帧落库后发 complete 事件', async () => {
     const { service, prisma, agentClient } = await buildService();
@@ -875,6 +985,7 @@ describe('ChatService.streamMessage — 调用 Agent', () => {
       conversationRow({ id: 'student_1', content: '？' }),
     );
     agentClient.diagnoseStream.mockReturnValue(
+      // eslint-disable-next-line @typescript-eslint/require-await
       (async function* () {
         yield {
           event: 'context_ready',

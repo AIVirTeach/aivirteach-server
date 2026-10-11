@@ -1,8 +1,10 @@
 import { Inject, Injectable, NotFoundException } from '@nestjs/common';
-import { AuditActorType } from '@prisma/client';
+import { AuditActorType, WorkspaceStatus } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { AuditService } from '../audit/audit.service';
 import { CoursesService } from '../courses/courses.service';
+import { WorkspaceService } from '../workspace/workspace.service';
+import { assertCurrentEnrollment } from './assert-current-enrollment';
 import {
   deriveCurrentModuleTitle,
   deriveEnrollmentView,
@@ -24,6 +26,7 @@ export type EnrollmentResponse = {
   status: EnrollmentStatus;
   currentModule: string;
   enrolledAt: string;
+  workspaceResetPending?: boolean;
 };
 
 @Injectable()
@@ -32,6 +35,7 @@ export class EnrollmentsService {
     private readonly prisma: PrismaService,
     private readonly audit: AuditService,
     private readonly coursesService: CoursesService,
+    private readonly workspaceService: WorkspaceService,
     @Inject(TOKEN_WEIGHTS) private readonly tokenWeights: TokenWeights,
   ) {}
 
@@ -71,6 +75,7 @@ export class EnrollmentsService {
       enrollment,
       course.slug,
       deriveEnrollmentView({
+        active: enrollment.active,
         completedAt: enrollment.completedAt,
         progress: enrollment.progress,
         modules: course.versions[0].modules,
@@ -87,69 +92,75 @@ export class EnrollmentsService {
       await this.coursesService.requirePublishedCourseWithLatestVersion(slug);
     const latestVersionId = course.versions[0].id;
 
-    const enrollment = await this.prisma.$transaction(async (tx) => {
-      await tx.enrollment.updateMany({
-        where: { userId, active: true },
-        data: { active: false },
-      });
-
-      const upserted = await tx.enrollment.upsert({
-        where: { userId_courseId: { userId, courseId: course.id } },
-        update: {
-          active: true,
-          courseVersionId: latestVersionId,
-          completedAt: null,
-        },
-        create: {
-          userId,
-          courseId: course.id,
-          courseVersionId: latestVersionId,
-          active: true,
-        },
-      });
-
-      await tx.progress.upsert({
-        where: { enrollmentId: upserted.id },
-        update: { currentLessonId: null, currentLessonContentId: null },
-        create: {
-          enrollmentId: upserted.id,
-          currentLessonId: null,
-          currentLessonContentId: null,
-        },
-      });
-
-      // 全新 restart：清空聊天记录和 Learning Lab，让用户像第一次报名一样重新走一遍。
-      // 保留 Attempt/EnrollmentCompletion（评测与结课审计记录），不清空。
-      // token 消耗只存在 Conversation 的列上，删之前必须先结算成负的额度流水，
-      // 否则学生额度用尽后点 restart 就能把消耗清零、无限续杯。
-      const { _sum } = await tx.conversation.aggregate({
-        where: { enrollmentId: upserted.id },
-        _sum: {
-          inputCacheHitTokens: true,
-          inputCacheMissTokens: true,
-          outputTokens: true,
-        },
-      });
-      const consumed = weightedConsumption(
-        {
-          inputCacheHitTokens: _sum.inputCacheHitTokens ?? 0,
-          inputCacheMissTokens: _sum.inputCacheMissTokens ?? 0,
-          outputTokens: _sum.outputTokens ?? 0,
-        },
-        this.tokenWeights,
-      );
-      if (consumed > 0) {
-        await tx.quotaLedger.create({
-          data: { userId, tokensDelta: -consumed },
+    const { enrollment, workspaceResetPending } =
+      await this.prisma.$transaction(async (tx) => {
+        await tx.enrollment.updateMany({
+          where: { userId, active: true },
+          data: { active: false },
         });
-      }
-      await tx.conversation.deleteMany({
-        where: { enrollmentId: upserted.id },
-      });
-      await tx.workspace.deleteMany({ where: { enrollmentId: upserted.id } });
 
-      return upserted;
-    });
+        const upserted = await tx.enrollment.upsert({
+          where: { userId_courseId: { userId, courseId: course.id } },
+          update: {
+            active: false,
+            generation: { increment: 1 },
+            courseVersionId: latestVersionId,
+            completedAt: null,
+          },
+          create: {
+            userId,
+            courseId: course.id,
+            courseVersionId: latestVersionId,
+            active: false,
+          },
+        });
+
+        await tx.progress.upsert({
+          where: { enrollmentId: upserted.id },
+          update: { currentLessonId: null, currentLessonContentId: null },
+          create: {
+            enrollmentId: upserted.id,
+            currentLessonId: null,
+            currentLessonContentId: null,
+          },
+        });
+
+        // 全新 restart：清空聊天记录和 Learning Lab，让用户像第一次报名一样重新走一遍。
+        // 保留 Attempt/EnrollmentCompletion（评测与结课审计记录），不清空。
+        // token 消耗只存在 Conversation 的列上，删之前必须先结算成负的额度流水，
+        // 否则学生额度用尽后点 restart 就能把消耗清零、无限续杯。
+        const { _sum } = await tx.conversation.aggregate({
+          where: { enrollmentId: upserted.id },
+          _sum: {
+            inputCacheHitTokens: true,
+            inputCacheMissTokens: true,
+            outputTokens: true,
+          },
+        });
+        const consumed = weightedConsumption(
+          {
+            inputCacheHitTokens: _sum.inputCacheHitTokens ?? 0,
+            inputCacheMissTokens: _sum.inputCacheMissTokens ?? 0,
+            outputTokens: _sum.outputTokens ?? 0,
+          },
+          this.tokenWeights,
+        );
+        if (consumed > 0) {
+          await tx.quotaLedger.create({
+            data: { userId, tokensDelta: -consumed },
+          });
+        }
+        await tx.conversation.deleteMany({
+          where: { enrollmentId: upserted.id },
+        });
+        // 先把旧 workspace 标为待清理，保留 labId 供 Labs 删除失败后重试。
+        const reset = await tx.workspace.updateMany({
+          where: { enrollmentId: upserted.id },
+          data: { status: WorkspaceStatus.RESETTING, resetRetryAt: null },
+        });
+
+        return { enrollment: upserted, workspaceResetPending: reset.count > 0 };
+      });
 
     await this.audit.record({
       actor: { type: AuditActorType.USER, id: userId },
@@ -159,17 +170,31 @@ export class EnrollmentsService {
       targetId: enrollment.id,
     });
 
+    // 事务提交后才调用 Labs；失败时 RESETTING 行仍在，维护扫描会继续重试。
+    let pending = workspaceResetPending;
+    if (pending) {
+      try {
+        pending = !(await this.workspaceService.finishReset(enrollment.id));
+      } catch {
+        // workspace.reset 失败审计由 WorkspaceService 记录。
+      }
+    }
+
     // restart 刚把进度指针清空、completedAt 置空，所以一定是 not_started。
-    return this.toResponse(
-      enrollment,
-      course.slug,
-      deriveEnrollmentView({
-        completedAt: enrollment.completedAt,
-        progress: null,
-        modules: [],
-      }),
-      '',
-    );
+    return {
+      ...this.toResponse(
+        enrollment,
+        course.slug,
+        deriveEnrollmentView({
+          active: false,
+          completedAt: enrollment.completedAt,
+          progress: null,
+          modules: [],
+        }),
+        '',
+      ),
+      workspaceResetPending: pending,
+    };
   }
 
   async listForUser(userId: string): Promise<EnrollmentResponse[]> {
@@ -186,6 +211,7 @@ export class EnrollmentsService {
         enrollment,
         enrollment.course.slug,
         deriveEnrollmentView({
+          active: enrollment.active,
           completedAt: enrollment.completedAt,
           progress: enrollment.progress,
           modules: enrollment.course.versions[0]?.modules ?? [],
@@ -253,6 +279,7 @@ export class EnrollmentsService {
     // （enrollment.completedAt 是事务外读的旧值，不能拿来判断）。
     // 加锁顺序和 restart 一致（先 Enrollment 再 Progress），避免两者并发时互相死锁。
     await this.prisma.$transaction(async (tx) => {
+      await assertCurrentEnrollment(tx, enrollment.id, enrollment.generation);
       if (completedNow) {
         await tx.enrollment.updateMany({
           where: { id: enrollment.id, completedAt: null },
@@ -282,6 +309,7 @@ export class EnrollmentsService {
       enrollment,
       enrollment.course.slug,
       deriveEnrollmentView({
+        active: enrollment.active,
         completedAt: enrollment.completedAt ?? completedNow,
         progress: { currentLessonContentId: nextLessonContentId },
         modules,

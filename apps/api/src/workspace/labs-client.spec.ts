@@ -407,6 +407,80 @@ describe('LabsClient.stopVm', () => {
   });
 });
 
+describe('LabsClient.deleteVm', () => {
+  const originalFetch = global.fetch;
+  afterEach(() => {
+    global.fetch = originalFetch;
+    jest.restoreAllMocks();
+  });
+
+  it('删除 VM 后确认 Labs 已找不到它', async () => {
+    const fetchMock = jest
+      .fn()
+      .mockResolvedValueOnce({ ok: true })
+      .mockResolvedValueOnce({
+        ok: false,
+        status: 404,
+        text: () => Promise.resolve('VM not found'),
+      });
+    global.fetch = fetchMock;
+    const client = await buildClient({
+      LABS_VM_BASE_URL: 'https://labs-vm.example.com',
+      AIVIRTEACH_API_TOKEN: 'labs-token',
+    });
+
+    await client.deleteVm('workspace_1');
+
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      1,
+      'https://labs-vm.example.com/v1/vms/workspace_1?confirm=true',
+      expect.objectContaining({ method: 'DELETE' }),
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      2,
+      'https://labs-vm.example.com/v1/vms/workspace_1/status',
+      expect.objectContaining({ method: 'GET' }),
+    );
+  });
+
+  it('重复删除时只有确认 VM 已不存在才视为成功', async () => {
+    global.fetch = jest
+      .fn()
+      .mockResolvedValueOnce({
+        ok: false,
+        status: 404,
+        text: () => Promise.resolve('VM not found'),
+      })
+      .mockResolvedValueOnce({
+        ok: false,
+        status: 404,
+        text: () => Promise.resolve('VM not found'),
+      });
+    const client = await buildClient({
+      LABS_VM_BASE_URL: 'https://labs-vm.example.com',
+      AIVIRTEACH_API_TOKEN: 'labs-token',
+    });
+
+    await expect(client.deleteVm('workspace_1')).resolves.toBeUndefined();
+  });
+
+  it('Labs 仍报告 VM 存在时不能把清理视为完成', async () => {
+    global.fetch = jest
+      .fn()
+      .mockResolvedValueOnce({ ok: true })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: () => Promise.resolve({ State: 'running' }),
+      });
+    const client = await buildClient({
+      LABS_VM_BASE_URL: 'https://labs-vm.example.com',
+      AIVIRTEACH_API_TOKEN: 'labs-token',
+    });
+
+    await expect(client.deleteVm('workspace_1')).rejects.toThrow();
+  });
+});
+
 describe('LabsClient.getVmState', () => {
   const originalFetch = global.fetch;
   afterEach(() => {

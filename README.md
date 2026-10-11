@@ -10,7 +10,7 @@ NestJS 模块化单体，AIVirTeach 三个代码仓库之一（另外两个：`a
 | Swagger UI | `https://aivirteach-server.vercel.app/docs` |
 | OpenAPI JSON | `https://aivirteach-server.vercel.app/docs-json` |
 | 健康检查 | `GET /api/v1/health` → `{ status: 'ok', database: 'up' \| 'down' }` |
-| 部署 | Vercel（zero-config，NestJS 走 serverless function，无需 `vercel.json`） |
+| 部署 | Vercel（NestJS 走 serverless function；`apps/api/vercel.json` 配置每日 workspace 清理重试） |
 | 数据库 | Neon Postgres（`us-east-1`），通过 Vercel Marketplace 集成自动注入 `DATABASE_URL` |
 
 已经用运营 CLI 种了一个联调账号：`client-integration@aivirteach.dev`（已开 `demo-course`、发了 120 分钟额度），可以直接登录联调；密码不写进仓库，找 @joelsia97 要。除此之外表里没有其他数据，没有 seed 脚本——需要更多测试数据时照下方"造第一个账号"的步骤自己加。
@@ -48,6 +48,10 @@ npm run start:dev -w api   # http://localhost:4000/docs
 环境文件放在 `apps/api/.env`（以及可选的 `apps/api/.env.local`），Prisma 和应用都以 API 工作区为基准读取它们。
 
 Vercel 的 Root Directory 需要设为 `apps/api`，并开启 **Include source files outside of the Root Directory in the Build Step**，以便构建时也能访问根目录下的 `packages/*`。线上 Vercel 项目设置应在迁移预览部署通过后再调整。
+
+课程 restart 会递增 `Enrollment.generation`，旧代次的课时完成和聊天写入会在事务内拒绝。每次 Labs VM 创建使用独立的 `Workspace.provisionGeneration` 和 VM ID，旧请求不能覆盖新一轮创建。发起创建前会写入 `WorkspaceProvision` 清理记录；VM 成功绑定当前 workspace 时才在同一事务中移除。晚到的 VM 删除失败后仍可由扫描重试；创建结果未知时，即使一次查询未发现 VM，也会保留清理记录并持续对账。restart 还会先保存 `Workspace.status=RESETTING`，再删除 Labs VM。若旧 VM 仍在创建（包括重建时已有旧 `labId`），清理任务会等待最多 210 秒的创建请求窗口，避免过早确认“VM 不存在”；此时或 Labs 暂时不可用时，restart 响应的 `workspaceResetPending` 为 `true`。失败的任务会安排下一次重试，避免挡住后面的任务。后续请求会触发扫描，`apps/api/vercel.json` 还配置了每天一次的兜底扫描。部署前需先应用 `20261010000000_enrollment_generation_and_workspace_retry` 迁移，并在 API 项目的 Production 环境配置至少 16 字符的 `CRON_SECRET`；Vercel 会在定时请求的 `Authorization: Bearer` 中发送它。维护端点是 `GET /api/v1/internal/workspace-maintenance`，未配置密钥或鉴权失败时返回 401。
+
+若 Agent 回复在 restart 后才到达，回复不会写回已清空的聊天记录；已测量的 token 消耗会按 Agent 请求 ID 幂等记入 `QuotaLedger`，因此重启不会退回已经消耗的额度。
 
 生成本地 `JWT_SECRET`：
 

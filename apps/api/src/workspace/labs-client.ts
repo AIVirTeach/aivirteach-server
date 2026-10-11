@@ -1,6 +1,14 @@
-import { Inject, Injectable, Logger, ServiceUnavailableException } from '@nestjs/common';
+import {
+  Inject,
+  Injectable,
+  Logger,
+  ServiceUnavailableException,
+} from '@nestjs/common';
 import { ENV, type Env } from '../config/env';
-import { classifyUpstreamStatus, type UpstreamErrorMessages } from '../common/upstream-error';
+import {
+  classifyUpstreamStatus,
+  type UpstreamErrorMessages,
+} from '../common/upstream-error';
 
 export type CreateVmResult = {
   labId: string;
@@ -67,24 +75,44 @@ export class LabsClient {
 
   // response.ok 为 false 时：原始响应体只记日志（可能是 Cloudflare tunnel 挂了之类的
   // 整页 HTML，见 2026-09-23 的 VM Manager 403 事故），抛给调用方的 Error 只带分档后的安全文案。
-  private async assertOk(response: Response, context: string, messages: UpstreamErrorMessages): Promise<void> {
+  private async assertOk(
+    response: Response,
+    context: string,
+    messages: UpstreamErrorMessages,
+  ): Promise<void> {
     if (response.ok) return;
     const detail = await response.text().catch(() => '');
-    this.logger.error(`${context} 失败（${response.status}）：${(detail || response.statusText).slice(0, 2000)}`);
+    this.logger.error(
+      `${context} 失败（${response.status}）：${(detail || response.statusText).slice(0, 2000)}`,
+    );
     throw new Error(messages[classifyUpstreamStatus(response.status)]);
   }
 
   // fetch() 本身 reject（DNS 失败、超时、连接被拒……）拿不到 response，本质都是瞬时性问题，
   // 直接用 messages.retryable，不需要走 classifyUpstreamStatus。
-  private logNetworkFailure(context: string, error: unknown, messages: UpstreamErrorMessages): never {
-    this.logger.error(`${context} 网络请求失败`, error instanceof Error ? error.stack : String(error));
+  private logNetworkFailure(
+    context: string,
+    error: unknown,
+    messages: UpstreamErrorMessages,
+  ): never {
+    this.logger.error(
+      `${context} 网络请求失败`,
+      error instanceof Error ? error.stack : String(error),
+    );
     throw new Error(messages.retryable);
   }
 
   async createVm(labId: string): Promise<CreateVmResult> {
-    const { LABS_VM_BASE_URL, AIVIRTEACH_API_TOKEN, CF_ACCESS_CLIENT_ID, CF_ACCESS_CLIENT_SECRET } = this.env;
+    const {
+      LABS_VM_BASE_URL,
+      AIVIRTEACH_API_TOKEN,
+      CF_ACCESS_CLIENT_ID,
+      CF_ACCESS_CLIENT_SECRET,
+    } = this.env;
     if (!LABS_VM_BASE_URL || !AIVIRTEACH_API_TOKEN) {
-      throw new ServiceUnavailableException('Labs 集成未配置：缺少 LABS_VM_BASE_URL 或 AIVIRTEACH_API_TOKEN');
+      throw new ServiceUnavailableException(
+        'Labs 集成未配置：缺少 LABS_VM_BASE_URL 或 AIVIRTEACH_API_TOKEN',
+      );
     }
 
     const headers: Record<string, string> = {
@@ -112,17 +140,36 @@ export class LabsClient {
     // rdp_password 故意不读取、不透出——这次不需要连接 VM，没必要提前经手一个不用的明文密钥，
     // 见本文档 Global Constraints。
     const body = (await response.json()) as CreateVmResponseBody;
-    return { labId: body.lab_id, username: body.username, rdpPort: body.rdp_port };
+    return {
+      labId: body.lab_id,
+      username: body.username,
+      rdpPort: body.rdp_port,
+    };
   }
 
-  async createBrowserSession(labId: string, subject: string): Promise<BrowserSession> {
-    const { LABS_VM_BASE_URL, AIVIRTEACH_SESSION_TOKEN, AIVIRTEACH_API_TOKEN, CF_ACCESS_CLIENT_ID, CF_ACCESS_CLIENT_SECRET } =
-      this.env;
+  async createBrowserSession(
+    labId: string,
+    subject: string,
+  ): Promise<BrowserSession> {
+    const {
+      LABS_VM_BASE_URL,
+      AIVIRTEACH_SESSION_TOKEN,
+      AIVIRTEACH_API_TOKEN,
+      CF_ACCESS_CLIENT_ID,
+      CF_ACCESS_CLIENT_SECRET,
+    } = this.env;
     if (!LABS_VM_BASE_URL || !AIVIRTEACH_SESSION_TOKEN) {
-      throw new ServiceUnavailableException('Labs 集成未配置：缺少 LABS_VM_BASE_URL 或 AIVIRTEACH_SESSION_TOKEN');
+      throw new ServiceUnavailableException(
+        'Labs 集成未配置：缺少 LABS_VM_BASE_URL 或 AIVIRTEACH_SESSION_TOKEN',
+      );
     }
-    if (AIVIRTEACH_API_TOKEN && AIVIRTEACH_SESSION_TOKEN === AIVIRTEACH_API_TOKEN) {
-      throw new ServiceUnavailableException('AIVIRTEACH_SESSION_TOKEN 不能和 AIVIRTEACH_API_TOKEN 配置成相同的值');
+    if (
+      AIVIRTEACH_API_TOKEN &&
+      AIVIRTEACH_SESSION_TOKEN === AIVIRTEACH_API_TOKEN
+    ) {
+      throw new ServiceUnavailableException(
+        'AIVIRTEACH_SESSION_TOKEN 不能和 AIVIRTEACH_API_TOKEN 配置成相同的值',
+      );
     }
 
     const headers: Record<string, string> = {
@@ -136,27 +183,69 @@ export class LabsClient {
 
     let response: Response;
     try {
-      response = await fetch(`${LABS_VM_BASE_URL}/v1/vms/${labId}/browser-sessions`, {
-        method: 'POST',
-        headers,
-        body: JSON.stringify({ subject }),
-      });
+      response = await fetch(
+        `${LABS_VM_BASE_URL}/v1/vms/${labId}/browser-sessions`,
+        {
+          method: 'POST',
+          headers,
+          body: JSON.stringify({ subject }),
+        },
+      );
     } catch (error) {
-      this.logNetworkFailure('createBrowserSession', error, REMOTE_DESKTOP_MESSAGES);
+      this.logNetworkFailure(
+        'createBrowserSession',
+        error,
+        REMOTE_DESKTOP_MESSAGES,
+      );
     }
-    await this.assertOk(response, 'createBrowserSession', REMOTE_DESKTOP_MESSAGES);
+    await this.assertOk(
+      response,
+      'createBrowserSession',
+      REMOTE_DESKTOP_MESSAGES,
+    );
 
     const body = (await response.json()) as BrowserSessionResponseBody;
     return {
       labId: body.lab_id,
       state: body.state,
       data: body.data,
-      expiresAt: body.expires_at !== undefined ? new Date(body.expires_at).toISOString() : undefined,
+      expiresAt:
+        body.expires_at !== undefined
+          ? new Date(body.expires_at).toISOString()
+          : undefined,
     };
   }
 
   async stopVm(labId: string): Promise<void> {
     await this.runVmAction(labId, 'stop');
+  }
+
+  // 重启课程要删除旧 VM 和磁盘；stopVm 只关机，不会清空实验环境。
+  // DELETE 或网络请求失败后也要查询实际状态，避免把已删除的 VM 永远留在待清理队列。
+  async deleteVm(labId: string): Promise<void> {
+    const { baseUrl, headers } = this.vmApiRequest();
+    let response: Response;
+    try {
+      response = await fetch(`${baseUrl}/v1/vms/${labId}?confirm=true`, {
+        method: 'DELETE',
+        headers,
+        signal: AbortSignal.timeout(60_000),
+      });
+    } catch (error) {
+      const observed = await this.getVmState(labId).catch(() => undefined);
+      if (observed?.kind === 'missing') return;
+      this.logNetworkFailure('deleteVm', error, VM_MESSAGES);
+    }
+
+    if (!response.ok && response.status !== 404) {
+      await this.assertOk(response, 'deleteVm', VM_MESSAGES);
+    }
+    const observed = await this.getVmState(labId);
+    if (observed.kind === 'missing') return;
+    if (response.status === 404) {
+      await this.assertOk(response, 'deleteVm', VM_MESSAGES);
+    }
+    throw new Error(VM_MESSAGES.retryable);
   }
 
   async startVm(labId: string): Promise<void> {
@@ -169,7 +258,10 @@ export class LabsClient {
 
     let response: Response;
     try {
-      response = await fetch(`${baseUrl}/v1/vms/${labId}/status`, { method: 'GET', headers });
+      response = await fetch(`${baseUrl}/v1/vms/${labId}/status`, {
+        method: 'GET',
+        headers,
+      });
     } catch (error) {
       this.logNetworkFailure('getVmState', error, VM_MESSAGES);
     }
@@ -177,7 +269,9 @@ export class LabsClient {
     if (response.status === 404) {
       const detail = await response.text().catch(() => '');
       if (VM_MISSING_PATTERN.test(detail)) return { kind: 'missing' };
-      this.logger.error(`getVmState 失败（404，不是 VM not found）：${detail.slice(0, 2000)}`);
+      this.logger.error(
+        `getVmState 失败（404，不是 VM not found）：${detail.slice(0, 2000)}`,
+      );
       throw new Error(VM_MESSAGES[classifyUpstreamStatus(404)]);
     }
     await this.assertOk(response, 'getVmState', VM_MESSAGES);
@@ -186,7 +280,10 @@ export class LabsClient {
     return { kind: 'present', state: body.State ?? 'unknown' };
   }
 
-  private async runVmAction(labId: string, action: 'stop' | 'start'): Promise<void> {
+  private async runVmAction(
+    labId: string,
+    action: 'stop' | 'start',
+  ): Promise<void> {
     const { baseUrl, headers } = this.vmApiRequest();
 
     let response: Response;
@@ -202,9 +299,16 @@ export class LabsClient {
   }
 
   private vmApiRequest(): { baseUrl: string; headers: Record<string, string> } {
-    const { LABS_VM_BASE_URL, AIVIRTEACH_API_TOKEN, CF_ACCESS_CLIENT_ID, CF_ACCESS_CLIENT_SECRET } = this.env;
+    const {
+      LABS_VM_BASE_URL,
+      AIVIRTEACH_API_TOKEN,
+      CF_ACCESS_CLIENT_ID,
+      CF_ACCESS_CLIENT_SECRET,
+    } = this.env;
     if (!LABS_VM_BASE_URL || !AIVIRTEACH_API_TOKEN) {
-      throw new ServiceUnavailableException('Labs 集成未配置：缺少 LABS_VM_BASE_URL 或 AIVIRTEACH_API_TOKEN');
+      throw new ServiceUnavailableException(
+        'Labs 集成未配置：缺少 LABS_VM_BASE_URL 或 AIVIRTEACH_API_TOKEN',
+      );
     }
 
     const headers: Record<string, string> = {
@@ -225,9 +329,13 @@ export class LabsClient {
   async exchangeGuacamoleToken(data: string): Promise<GuacamoleToken> {
     const { LABS_GUACAMOLE_BASE_URL } = this.env;
     if (!LABS_GUACAMOLE_BASE_URL) {
-      throw new ServiceUnavailableException('Labs 集成未配置：缺少 LABS_GUACAMOLE_BASE_URL');
+      throw new ServiceUnavailableException(
+        'Labs 集成未配置：缺少 LABS_GUACAMOLE_BASE_URL',
+      );
     }
-    const base = LABS_GUACAMOLE_BASE_URL.endsWith('/') ? LABS_GUACAMOLE_BASE_URL : `${LABS_GUACAMOLE_BASE_URL}/`;
+    const base = LABS_GUACAMOLE_BASE_URL.endsWith('/')
+      ? LABS_GUACAMOLE_BASE_URL
+      : `${LABS_GUACAMOLE_BASE_URL}/`;
 
     let response: Response;
     try {
@@ -237,9 +345,17 @@ export class LabsClient {
         body: new URLSearchParams({ data }),
       });
     } catch (error) {
-      this.logNetworkFailure('exchangeGuacamoleToken', error, REMOTE_DESKTOP_MESSAGES);
+      this.logNetworkFailure(
+        'exchangeGuacamoleToken',
+        error,
+        REMOTE_DESKTOP_MESSAGES,
+      );
     }
-    await this.assertOk(response, 'exchangeGuacamoleToken', REMOTE_DESKTOP_MESSAGES);
+    await this.assertOk(
+      response,
+      'exchangeGuacamoleToken',
+      REMOTE_DESKTOP_MESSAGES,
+    );
 
     const body = (await response.json()) as GuacamoleTokenResponseBody;
     const websocketUrl = new URL('websocket-tunnel', base);

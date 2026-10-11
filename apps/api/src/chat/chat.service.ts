@@ -1,4 +1,4 @@
-import { ForbiddenException, Injectable, Logger } from '@nestjs/common';
+import { ForbiddenException, Inject, Injectable, Logger } from '@nestjs/common';
 import {
   ConversationRole,
   WorkspaceStatus,
@@ -8,6 +8,15 @@ import {
 import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
 import { LATEST_PUBLISHED_VERSION } from '../courses/published-version';
+import {
+  assertCurrentEnrollment,
+  StaleEnrollmentError,
+} from '../enrollments/assert-current-enrollment';
+import { TOKEN_WEIGHTS } from '../token-usage/application/check-token-quota';
+import {
+  weightedConsumption,
+  type TokenWeights,
+} from '../token-usage/domain/token-weights';
 import { PrismaService } from '../prisma/prisma.service';
 import {
   AgentClient,
@@ -60,6 +69,7 @@ export class ChatService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly agentClient: AgentClient,
+    @Inject(TOKEN_WEIGHTS) private readonly tokenWeights: TokenWeights,
   ) {}
 
   async getMessages(
@@ -81,14 +91,16 @@ export class ChatService {
   ): Promise<{ studentMessage: ChatMessage; tutorMessage: ChatMessage }> {
     const enrollment = await this.requireOwnedEnrollment(userId, enrollmentId);
 
-    const studentRow = await this.prisma.conversation.create({
-      data: {
+    const studentRow = await this.createCurrentConversation(
+      enrollment.id,
+      enrollment.generation,
+      {
         enrollmentId: enrollment.id,
         threadId: enrollment.id,
         role: ConversationRole.USER,
         content: text,
       },
-    });
+    );
 
     const resolved = await this.resolveDiagnoseRequest(
       enrollment.id,
@@ -99,15 +111,17 @@ export class ChatService {
       return this.respondWithFallback(
         userId,
         enrollment.id,
+        enrollment.generation,
         studentRow,
         resolved.fallbackMessage,
       );
     }
 
+    const requestId = randomUUID();
     let response: Awaited<ReturnType<AgentClient['diagnose']>>;
     try {
       response = await this.agentClient.diagnose({
-        request_id: randomUUID(),
+        request_id: requestId,
         question: text,
         ...resolved.inputs,
       });
@@ -120,13 +134,19 @@ export class ChatService {
       return this.respondWithFallback(
         userId,
         enrollment.id,
+        enrollment.generation,
         studentRow,
         '助教暂时不可用，请稍后再试。',
       );
     }
 
-    const tutorRow = await this.prisma.conversation.create({
-      data: {
+    const tutorRow = await this.saveAgentReply(
+      userId,
+      enrollment.id,
+      enrollment.generation,
+      requestId,
+      response,
+      {
         enrollmentId: enrollment.id,
         threadId: enrollment.id,
         role: ConversationRole.ASSISTANT,
@@ -134,7 +154,7 @@ export class ChatService {
         contextRef: response as unknown as Prisma.InputJsonValue,
         ...usageColumns(response.usage),
       },
-    });
+    );
 
     return {
       studentMessage: this.toChatMessage(userId, studentRow),
@@ -149,14 +169,16 @@ export class ChatService {
   ): AsyncGenerator<ChatStreamEvent> {
     const enrollment = await this.requireOwnedEnrollment(userId, enrollmentId);
 
-    const studentRow = await this.prisma.conversation.create({
-      data: {
+    const studentRow = await this.createCurrentConversation(
+      enrollment.id,
+      enrollment.generation,
+      {
         enrollmentId: enrollment.id,
         threadId: enrollment.id,
         role: ConversationRole.USER,
         content: text,
       },
-    });
+    );
 
     const resolved = await this.resolveDiagnoseRequest(
       enrollment.id,
@@ -169,6 +191,7 @@ export class ChatService {
         ...(await this.respondWithFallback(
           userId,
           enrollment.id,
+          enrollment.generation,
           studentRow,
           resolved.fallbackMessage,
         )),
@@ -179,10 +202,11 @@ export class ChatService {
     // result 帧落库前只转发 progress——result 本身不当 progress 转发，落库成功后
     // 才发一个 complete 事件；一个 JSON.parse/schema 校验失败就直接走下面的兜底，
     // 不把半成品结果透传给 client（跟 sendMessage() 的"聊天接口不返回 5xx"约束一致）。
+    const requestId = randomUUID();
     let response: z.infer<typeof DiagnoseResponseSchema> | null = null;
     try {
       for await (const frame of this.agentClient.diagnoseStream({
-        request_id: randomUUID(),
+        request_id: requestId,
         question: text,
         ...resolved.inputs,
       })) {
@@ -212,6 +236,7 @@ export class ChatService {
           ...(await this.respondWithFallback(
             userId,
             enrollment.id,
+            enrollment.generation,
             studentRow,
             '助教暂时不可用，请稍后再试。',
           )),
@@ -228,8 +253,13 @@ export class ChatService {
 
     let tutorRow: Conversation;
     try {
-      tutorRow = await this.prisma.conversation.create({
-        data: {
+      tutorRow = await this.saveAgentReply(
+        userId,
+        enrollment.id,
+        enrollment.generation,
+        requestId,
+        response,
+        {
           enrollmentId: enrollment.id,
           threadId: enrollment.id,
           role: ConversationRole.ASSISTANT,
@@ -237,7 +267,7 @@ export class ChatService {
           contextRef: response as unknown as Prisma.InputJsonValue,
           ...usageColumns(response.usage),
         },
-      });
+      );
     } catch (error) {
       // 同上：此时已经转发过 progress 帧，headers 已提交，不能再让这个写入失败以
       // 异常形式冒泡出去——记日志后干净结束这次流。
@@ -377,21 +407,77 @@ export class ChatService {
   private async respondWithFallback(
     userId: string,
     enrollmentId: string,
+    generation: number,
     studentRow: Conversation,
     message: string,
   ): Promise<{ studentMessage: ChatMessage; tutorMessage: ChatMessage }> {
-    const tutorRow = await this.prisma.conversation.create({
-      data: {
+    const tutorRow = await this.createCurrentConversation(
+      enrollmentId,
+      generation,
+      {
         enrollmentId,
         threadId: enrollmentId,
         role: ConversationRole.ASSISTANT,
         content: message,
       },
-    });
+    );
     return {
       studentMessage: this.toChatMessage(userId, studentRow),
       tutorMessage: this.toChatMessage(userId, tutorRow),
     };
+  }
+
+  private createCurrentConversation(
+    enrollmentId: string,
+    generation: number,
+    data: Prisma.ConversationUncheckedCreateInput,
+  ): Promise<Conversation> {
+    return this.prisma.$transaction(async (tx) => {
+      await assertCurrentEnrollment(tx, enrollmentId, generation);
+      return tx.conversation.create({ data });
+    });
+  }
+
+  private async saveAgentReply(
+    userId: string,
+    enrollmentId: string,
+    generation: number,
+    requestId: string,
+    response: DiagnoseResponseBody,
+    data: Prisma.ConversationUncheckedCreateInput,
+  ): Promise<Conversation> {
+    try {
+      return await this.createCurrentConversation(
+        enrollmentId,
+        generation,
+        data,
+      );
+    } catch (error) {
+      if (error instanceof StaleEnrollmentError && response.usage) {
+        // Chat history belongs to an enrollment generation; usage belongs to the
+        // user's quota even when the response arrives after that generation ends.
+        const consumed = weightedConsumption(
+          {
+            inputCacheHitTokens: response.usage.input_cache_hit_tokens,
+            inputCacheMissTokens: response.usage.input_cache_miss_tokens,
+            outputTokens: response.usage.output_tokens,
+          },
+          this.tokenWeights,
+        );
+        if (consumed > 0) {
+          await this.prisma.quotaLedger.upsert({
+            where: { id: `stale-agent-${requestId}` },
+            update: {},
+            create: {
+              id: `stale-agent-${requestId}`,
+              userId,
+              tokensDelta: -consumed,
+            },
+          });
+        }
+      }
+      throw error;
+    }
   }
 
   private toChatMessage(userId: string, row: Conversation): ChatMessage {

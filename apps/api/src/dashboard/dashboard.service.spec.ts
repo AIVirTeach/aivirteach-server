@@ -201,7 +201,7 @@ describe('DashboardService.getDashboard', () => {
 
     const dashboard = await service.getDashboard('user_1');
 
-    expect(dashboard.activeCourse?.enrollment.status).toBe('not_started');
+    expect(dashboard.activeCourse?.enrollment.status).toBe('in_progress');
     expect(dashboard.activeCourse?.enrollment.progressPercent).toBe(0);
   });
 });
