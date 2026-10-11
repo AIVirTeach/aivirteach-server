@@ -1,4 +1,10 @@
-import { Injectable, type CallHandler, type ExecutionContext, type NestInterceptor } from '@nestjs/common';
+import {
+  Injectable,
+  Logger,
+  type CallHandler,
+  type ExecutionContext,
+  type NestInterceptor,
+} from '@nestjs/common';
 import { waitUntil } from '@vercel/functions';
 import type { Observable } from 'rxjs';
 import { WorkspaceService } from './workspace.service';
@@ -11,14 +17,27 @@ const THROTTLE_MS = 60_000;
 @Injectable()
 export class WorkspaceIdleSweepInterceptor implements NestInterceptor {
   private lastSweepAt = -Infinity;
+  private readonly logger = new Logger(WorkspaceIdleSweepInterceptor.name);
 
   constructor(private readonly workspaceService: WorkspaceService) {}
 
-  intercept(_context: ExecutionContext, next: CallHandler): Observable<unknown> {
+  intercept(
+    _context: ExecutionContext,
+    next: CallHandler,
+  ): Observable<unknown> {
     const now = Date.now();
     if (now - this.lastSweepAt >= THROTTLE_MS) {
       this.lastSweepAt = now;
-      waitUntil(this.workspaceService.sweepIdle());
+      waitUntil(
+        Promise.all([
+          this.workspaceService.sweepIdle().catch((error: unknown) => {
+            this.logger.warn('Idle workspace sweep failed', error);
+          }),
+          this.workspaceService.sweepResets().catch((error: unknown) => {
+            this.logger.warn('Workspace reset sweep failed', error);
+          }),
+        ]),
+      );
     }
     return next.handle();
   }

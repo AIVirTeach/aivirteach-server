@@ -9,11 +9,12 @@ type ModulesWithLessons = Array<{
 // 课程卡片按钮由这个状态决定，active 只表示“当前在学哪门”。
 // 学完最后一课时课时指针会被清空，所以 completed 必须看 completedAt，不能只看指针。
 export function deriveEnrollmentStatus(input: {
+  active?: boolean;
   completedAt: Date | null;
   currentLessonContentId: string | null;
 }): EnrollmentStatus {
   if (input.completedAt) return 'completed';
-  if (input.currentLessonContentId) return 'in_progress';
+  if (input.currentLessonContentId || input.active) return 'in_progress';
   return 'not_started';
 }
 
@@ -53,11 +54,13 @@ export function deriveCurrentModuleTitle(input: {
 // status 和 progressPercent 是同一个事实的两种表达。所有返回报名信息的出口都必须经过这里，
 // 不要在别处单独算：学完后课时指针为空，按指针算出来是 0，所以已完成一律 100。
 export function deriveEnrollmentView(input: {
+  active?: boolean;
   completedAt: Date | null;
   progress: ProgressPointer;
   modules: ModulesWithLessons;
 }): { status: EnrollmentStatus; progressPercent: number } {
   const status = deriveEnrollmentStatus({
+    active: input.active,
     completedAt: input.completedAt,
     currentLessonContentId: input.progress?.currentLessonContentId ?? null,
   });

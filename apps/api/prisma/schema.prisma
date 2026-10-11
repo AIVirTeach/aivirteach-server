@@ -274,6 +274,7 @@ model Enrollment {
   courseVersion   CourseVersion? @relation(fields: [courseVersionId], references: [id])
   currentModule   CourseModule?  @relation(fields: [currentModuleId], references: [id])
   active          Boolean        @default(true)
+  generation      Int            @default(0)
   completedAt     DateTime?
   createdAt       DateTime       @default(now())
 
@@ -295,20 +296,38 @@ model Enrollment {
 // 创建响应直接给的；labsRawStatus 只摘 GET /status 返回的 dominfo 里的 State 字段，仅调试；
 // vncPort 对应真实存在的 GET /vnc，目前两个 client 都走 RDP，暂时没有消费方。
 model Workspace {
-  id            String          @id @default(cuid())
-  enrollmentId  String          @unique
-  enrollment    Enrollment      @relation(fields: [enrollmentId], references: [id], onDelete: Cascade)
-  status        WorkspaceStatus @default(CREATING)
-  errorMessage  String?
-  labId         String?         @unique
-  labsRawStatus String?
-  ip            String?
-  rdpPort       Int?
-  rdpUsername   String?
-  vncPort       Int?
-  lastSeenAt    DateTime?
-  createdAt     DateTime        @default(now())
-  updatedAt     DateTime        @updatedAt
+  id                  String          @id @default(cuid())
+  enrollmentId        String          @unique
+  enrollment          Enrollment      @relation(fields: [enrollmentId], references: [id], onDelete: Cascade)
+  status              WorkspaceStatus @default(CREATING)
+  errorMessage        String?
+  labId               String?         @unique
+  labsRawStatus       String?
+  ip                  String?
+  rdpPort             Int?
+  rdpUsername         String?
+  vncPort             Int?
+  lastSeenAt          DateTime?
+  provisionStartedAt  DateTime?
+  provisionGeneration Int             @default(0)
+  resetRetryAt        DateTime?
+  createdAt           DateTime        @default(now())
+  updatedAt           DateTime        @updatedAt
+
+  @@index([status, resetRetryAt])
+}
+
+// Created before each Labs POST. A failed or late POST remains discoverable for cleanup.
+model WorkspaceProvision {
+  labId         String   @id
+  workspaceId   String
+  generation    Int
+  status        String   @default("PENDING")
+  createSettled Boolean  @default(false)
+  cleanupAt     DateTime
+  createdAt     DateTime @default(now())
+
+  @@index([cleanupAt])
 }
 
 model Progress {

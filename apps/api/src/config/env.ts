@@ -24,6 +24,8 @@ const EnvSchema = z.object({
   // LabsClient 时报错，不在进程启动时让整个 server 起不来。
   LABS_VM_BASE_URL: z.url().optional(),
   AIVIRTEACH_API_TOKEN: z.string().min(1).optional(),
+  // Vercel Cron 用来重试待删除的 VM；未配置时维护端点拒绝所有请求。
+  CRON_SECRET: z.string().min(16).optional(),
   // Labs 的 POST /v1/vms/{lab_id}/browser-sessions 用这个鉴权，是跟 AIVIRTEACH_API_TOKEN
   // 不同的静态密钥；两者是否配置了且不相同的校验在 LabsClient.createBrowserSession() 里做，
   // 不在这里（延续本文件其余 Labs 变量"缺配置不让整个 server 起不来"的约定）。

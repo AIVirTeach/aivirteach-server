@@ -162,6 +162,7 @@ export class DashboardService {
               courseId: activeEnrollment.course.slug,
               active: activeEnrollment.active,
               ...deriveEnrollmentView({
+                active: activeEnrollment.active,
                 completedAt: activeEnrollment.completedAt,
                 progress: activeEnrollment.progress,
                 modules: activeEnrollment.course.versions[0]?.modules ?? [],

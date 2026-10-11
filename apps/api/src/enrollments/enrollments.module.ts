@@ -4,9 +4,10 @@ import { EnrollmentsController } from './enrollments.controller';
 import { AuthModule } from '../auth/auth.module';
 import { CoursesModule } from '../courses/courses.module';
 import { TokenUsageModule } from '../token-usage/token-usage.module';
+import { WorkspaceModule } from '../workspace/workspace.module';
 
 @Module({
-  imports: [AuthModule, CoursesModule, TokenUsageModule],
+  imports: [AuthModule, CoursesModule, TokenUsageModule, WorkspaceModule],
   controllers: [EnrollmentsController],
   providers: [EnrollmentsService],
   exports: [EnrollmentsService],

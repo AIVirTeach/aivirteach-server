@@ -6,6 +6,7 @@ import { AuditService } from '../audit/audit.service';
 import { CoursesService } from '../courses/courses.service';
 import { LATEST_PUBLISHED_VERSION } from '../courses/published-version';
 import { TOKEN_WEIGHTS } from '../token-usage/application/check-token-quota';
+import { WorkspaceService } from '../workspace/workspace.service';
 import { EnrollmentsService } from './enrollments.service';
 
 const WEIGHTS = { inputCacheHit: 0.02, inputCacheMiss: 1, output: 4 };
@@ -13,7 +14,7 @@ const WEIGHTS = { inputCacheHit: 0.02, inputCacheMiss: 1, output: 4 };
 const buildPrisma = () => {
   const prisma = {
     enrollment: {
-      updateMany: jest.fn().mockResolvedValue({ count: 0 }),
+      updateMany: jest.fn().mockResolvedValue({ count: 1 }),
       upsert: jest.fn(),
       findMany: jest.fn(),
       update: jest.fn(),
@@ -31,7 +32,7 @@ const buildPrisma = () => {
       }),
     },
     quotaLedger: { create: jest.fn().mockResolvedValue({}) },
-    workspace: { deleteMany: jest.fn().mockResolvedValue({ count: 0 }) },
+    workspace: { updateMany: jest.fn().mockResolvedValue({ count: 0 }) },
     $transaction: jest.fn(),
   };
   // enroll/restart 用 interactive transaction；测试里直接把同一个 prisma 当 tx 传回调用方，
@@ -50,6 +51,7 @@ const buildService = async (
   prisma: ReturnType<typeof buildPrisma>,
   audit = { record: jest.fn() },
   coursesService = buildCoursesService(),
+  workspaceService = { finishReset: jest.fn().mockResolvedValue(true) },
 ) => {
   const moduleRef = await Test.createTestingModule({
     providers: [
@@ -57,10 +59,16 @@ const buildService = async (
       { provide: PrismaService, useValue: prisma },
       { provide: AuditService, useValue: audit },
       { provide: CoursesService, useValue: coursesService },
+      { provide: WorkspaceService, useValue: workspaceService },
       { provide: TOKEN_WEIGHTS, useValue: WEIGHTS },
     ],
   }).compile();
-  return { service: moduleRef.get(EnrollmentsService), audit, coursesService };
+  return {
+    service: moduleRef.get(EnrollmentsService),
+    audit,
+    coursesService,
+    workspaceService,
+  };
 };
 
 const USER_ID = 'user_1';
@@ -321,10 +329,12 @@ describe('EnrollmentsService.restart', () => {
     expect(prisma.enrollment.upsert).toHaveBeenCalledWith(
       expect.objectContaining({
         update: {
-          active: true,
+          active: false,
+          generation: { increment: 1 },
           courseVersionId: 'version_1',
           completedAt: null,
         },
+        create: expect.objectContaining({ active: false }),
       }),
     );
     expect(prisma.progress.upsert).toHaveBeenCalledWith(
@@ -341,6 +351,164 @@ describe('EnrollmentsService.restart', () => {
     expect(result.courseId).toBe('sample');
     // restart 后课程回到“未开始”，client 靠这个把卡片切回 Start course。
     expect(result.status).toBe('not_started');
+  });
+
+  it('restart 后保持未激活，刷新 enrollment 仍未激活，重新 enroll 才变成进行中', async () => {
+    const prisma = buildPrisma();
+    const coursesService = buildCoursesService();
+    coursesService.requirePublishedCourseWithLatestVersion.mockResolvedValue({
+      ...SAMPLE_COURSE,
+      versions: [
+        {
+          id: 'version_1',
+          version: 1,
+          modules: [
+            {
+              title: 'Module One',
+              lessons: [{ contentId: 'lesson_1' }, { contentId: 'lesson_2' }],
+            },
+          ],
+        },
+      ],
+    });
+    const restartedEnrollment = {
+      id: 'enrollment_1',
+      userId: USER_ID,
+      courseId: 'course_1',
+      active: false,
+      createdAt: new Date('2026-08-20T00:00:00.000Z'),
+      completedAt: null,
+    };
+    prisma.enrollment.upsert
+      .mockResolvedValueOnce(restartedEnrollment)
+      .mockResolvedValueOnce({
+        ...restartedEnrollment,
+        active: true,
+        progress: { currentLessonContentId: null },
+      });
+    prisma.enrollment.findMany.mockResolvedValue([
+      buildEnrollment({
+        ...restartedEnrollment,
+        progress: { currentLessonContentId: null },
+      }),
+    ]);
+    const { service } = await buildService(prisma, undefined, coursesService);
+
+    const restarted = await service.restart(USER_ID, 'sample');
+    const [refreshed] = await service.listForUser(USER_ID);
+    const started = await service.enroll(USER_ID, 'sample');
+
+    expect(prisma.enrollment.upsert).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        update: expect.objectContaining({ active: false }),
+        create: expect.objectContaining({ active: false }),
+      }),
+    );
+    expect(restarted).toEqual(
+      expect.objectContaining({
+        active: false,
+        status: 'not_started',
+        progressPercent: 0,
+      }),
+    );
+    expect(refreshed).toEqual(
+      expect.objectContaining({
+        active: false,
+        status: 'not_started',
+        progressPercent: 0,
+      }),
+    );
+    expect(started).toEqual(
+      expect.objectContaining({
+        active: true,
+        status: 'in_progress',
+        progressPercent: 0,
+      }),
+    );
+    expect(prisma.enrollment.upsert).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        update: expect.objectContaining({ active: true }),
+        create: expect.objectContaining({ active: true }),
+      }),
+    );
+  });
+
+  it('restart 保留待清理 workspace；Labs 删除失败时返回待清理状态，供后续重试', async () => {
+    const prisma = buildPrisma();
+    const coursesService = buildCoursesService();
+    coursesService.requirePublishedCourseWithLatestVersion.mockResolvedValue(
+      SAMPLE_COURSE,
+    );
+    prisma.enrollment.upsert.mockResolvedValue({
+      id: 'enrollment_1',
+      userId: USER_ID,
+      courseId: 'course_1',
+      active: false,
+      completedAt: null,
+      createdAt: new Date('2026-08-20T00:00:00.000Z'),
+    });
+    prisma.workspace.updateMany.mockResolvedValue({ count: 1 });
+    const workspaceService = {
+      finishReset: jest.fn().mockRejectedValue(new Error('Labs unavailable')),
+    };
+    const { service } = await buildService(
+      prisma,
+      undefined,
+      coursesService,
+      workspaceService,
+    );
+
+    const result = await service.restart(USER_ID, 'sample');
+
+    expect(prisma.workspace.updateMany).toHaveBeenCalledWith({
+      where: { enrollmentId: 'enrollment_1' },
+      data: { status: 'RESETTING', resetRetryAt: null },
+    });
+    expect(workspaceService.finishReset).toHaveBeenCalledWith('enrollment_1');
+    expect(result).toEqual(
+      expect.objectContaining({
+        active: false,
+        status: 'not_started',
+        progressPercent: 0,
+        workspaceResetPending: true,
+      }),
+    );
+  });
+
+  it('旧 VM 创建尚未结束时，restart 返回清理待完成', async () => {
+    const prisma = buildPrisma();
+    const coursesService = buildCoursesService();
+    coursesService.requirePublishedCourseWithLatestVersion.mockResolvedValue(
+      SAMPLE_COURSE,
+    );
+    prisma.enrollment.upsert.mockResolvedValue({
+      id: 'enrollment_1',
+      userId: USER_ID,
+      courseId: 'course_1',
+      active: false,
+      completedAt: null,
+      createdAt: new Date('2026-08-20T00:00:00.000Z'),
+    });
+    prisma.workspace.updateMany.mockResolvedValue({ count: 1 });
+    const workspaceService = {
+      finishReset: jest.fn().mockResolvedValue(false),
+    };
+    const { service } = await buildService(
+      prisma,
+      undefined,
+      coursesService,
+      workspaceService,
+    );
+
+    await expect(service.restart(USER_ID, 'sample')).resolves.toEqual(
+      expect.objectContaining({
+        active: false,
+        status: 'not_started',
+        workspaceResetPending: true,
+      }),
+    );
   });
 
   it('restart 也绑定最大已发布版本', async () => {
@@ -378,7 +546,12 @@ describe('EnrollmentsService.listForUser', () => {
   it('每条 enrollment 都带上 status', async () => {
     const prisma = buildPrisma();
     prisma.enrollment.findMany.mockResolvedValue([
-      buildEnrollment({ id: 'fresh', progress: null, completedAt: null }),
+      buildEnrollment({
+        id: 'fresh',
+        active: false,
+        progress: null,
+        completedAt: null,
+      }),
       buildEnrollment({
         id: 'midway',
         progress: { currentLessonContentId: 'verify-network' },
@@ -431,6 +604,7 @@ const buildEnrollment = (overrides: Record<string, unknown>) => ({
   userId: USER_ID,
   courseId: 'course_1',
   active: true,
+  generation: 0,
   createdAt: new Date('2026-01-01T00:00:00.000Z'),
   ...overrides,
   course: {
@@ -453,6 +627,20 @@ const buildEnrollment = (overrides: Record<string, unknown>) => ({
 });
 
 describe('EnrollmentsService.completeLesson', () => {
+  it('旧代次的完成请求在 restart 后不能写回进度或完成时间', async () => {
+    const prisma = buildPrisma();
+    prisma.enrollment.findMany.mockResolvedValue([
+      buildEnrollment({ generation: 0 }),
+    ]);
+    prisma.enrollment.updateMany.mockResolvedValue({ count: 0 });
+    const { service } = await buildService(prisma);
+
+    await expect(
+      service.completeLesson(USER_ID, 'verify-network'),
+    ).rejects.toThrow();
+    expect(prisma.progress.upsert).not.toHaveBeenCalled();
+    expect(prisma.activity.create).not.toHaveBeenCalled();
+  });
   it('用户完全没有报名任何课程时抛 NotFoundException', async () => {
     const prisma = buildPrisma();
     prisma.enrollment.findMany.mockResolvedValue([]);
@@ -567,7 +755,11 @@ describe('EnrollmentsService.completeLesson', () => {
       }),
     );
     // 还没学完最后一课，不能写 completedAt。
-    expect(prisma.enrollment.updateMany).not.toHaveBeenCalled();
+    expect(prisma.enrollment.updateMany).not.toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ completedAt: expect.any(Date) }),
+      }),
+    );
   });
 
   it('完成最后一课时写入 completedAt，返回 completed 且进度为 100', async () => {
@@ -598,7 +790,7 @@ describe('EnrollmentsService.completeLesson', () => {
     // 事务内外用不同的 mock，才能断言写入确实走的是 tx。
     const tx = {
       progress: { upsert: jest.fn() },
-      enrollment: { updateMany: jest.fn() },
+      enrollment: { updateMany: jest.fn().mockResolvedValue({ count: 1 }) },
       activity: { create: jest.fn() },
     };
     prisma.$transaction.mockImplementation(
@@ -654,7 +846,11 @@ describe('EnrollmentsService.completeLesson', () => {
       'verify-virtual-machine',
     );
 
-    expect(prisma.enrollment.updateMany).not.toHaveBeenCalled();
+    expect(prisma.enrollment.updateMany).not.toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ completedAt: expect.any(Date) }),
+      }),
+    );
     expect(result).toEqual(
       expect.objectContaining({ status: 'completed', progressPercent: 100 }),
     );
@@ -684,7 +880,9 @@ describe('EnrollmentsService.completeLesson', () => {
       buildEnrollment({ completedAt: null }),
     ]);
     // 另一个请求已经写过 completedAt，这次带 completedAt: null 条件的写入命中 0 行。
-    prisma.enrollment.updateMany.mockResolvedValue({ count: 0 });
+    prisma.enrollment.updateMany
+      .mockResolvedValueOnce({ count: 1 })
+      .mockResolvedValueOnce({ count: 0 });
     const { service } = await buildService(prisma);
 
     const result = await service.completeLesson(USER_ID, 'verify-network');

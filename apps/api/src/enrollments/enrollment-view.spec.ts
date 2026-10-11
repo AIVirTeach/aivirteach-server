@@ -37,6 +37,16 @@ describe('deriveEnrollmentStatus', () => {
       }),
     ).toBe('not_started');
   });
+
+  it('已激活但还没有课时指针时是 in_progress', () => {
+    expect(
+      deriveEnrollmentStatus({
+        active: true,
+        completedAt: null,
+        currentLessonContentId: null,
+      }),
+    ).toBe('in_progress');
+  });
 });
 
 describe('computeProgressPercent', () => {
@@ -97,6 +107,7 @@ describe('deriveEnrollmentView', () => {
     name: string;
     completedAt: Date | null;
     progress: { currentLessonContentId: string | null } | null;
+    active?: boolean;
     modules: typeof FOUR_LESSONS;
     expected: { status: string; progressPercent: number };
   }> = [
@@ -104,8 +115,17 @@ describe('deriveEnrollmentView', () => {
       name: '没有 progress 行',
       completedAt: null,
       progress: null,
+      active: false,
       modules: FOUR_LESSONS,
       expected: { status: 'not_started', progressPercent: 0 },
+    },
+    {
+      name: '已激活但还没有 progress 指针',
+      completedAt: null,
+      progress: null,
+      active: true,
+      modules: FOUR_LESSONS,
+      expected: { status: 'in_progress', progressPercent: 0 },
     },
     {
       name: '指针为空、未完成（刚 restart）',
@@ -151,9 +171,12 @@ describe('deriveEnrollmentView', () => {
     },
   ];
 
-  it.each(cases)('$name', ({ completedAt, progress, modules, expected }) => {
-    expect(deriveEnrollmentView({ completedAt, progress, modules })).toEqual(
-      expected,
-    );
-  });
+  it.each(cases)(
+    '$name',
+    ({ completedAt, progress, active, modules, expected }) => {
+      expect(
+        deriveEnrollmentView({ completedAt, progress, active, modules }),
+      ).toEqual(expected);
+    },
+  );
 });
