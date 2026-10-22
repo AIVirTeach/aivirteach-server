@@ -1,182 +1,86 @@
 import {
-  computeProgressPercent,
+  completedLessonIds,
   deriveCurrentModuleTitle,
-  deriveEnrollmentStatus,
   deriveEnrollmentView,
 } from './enrollment-view';
-
-const FOUR_LESSONS = [
-  { title: 'Module One', lessons: [{ contentId: 'l1' }, { contentId: 'l2' }] },
-  { title: 'Module Two', lessons: [{ contentId: 'l3' }, { contentId: 'l4' }] },
+const modules = [
+  { title: 'One', lessons: [{ contentId: 'a' }, { contentId: 'b' }] },
 ];
-
-describe('deriveEnrollmentStatus', () => {
-  it('有 completedAt 时是 completed（学完最后一课后课时指针会被清空，不能只看指针）', () => {
-    expect(
-      deriveEnrollmentStatus({
-        completedAt: new Date(),
-        currentLessonContentId: null,
-      }),
-    ).toBe('completed');
-  });
-
-  it('没有 completedAt、课时指针有值时是 in_progress', () => {
-    expect(
-      deriveEnrollmentStatus({
-        completedAt: null,
-        currentLessonContentId: 'lesson_cuid_2',
-      }),
-    ).toBe('in_progress');
-  });
-
-  it('两者都为空时是 not_started（从没学过，或刚 restart）', () => {
-    expect(
-      deriveEnrollmentStatus({
-        completedAt: null,
-        currentLessonContentId: null,
-      }),
-    ).toBe('not_started');
-  });
-
-  it('已激活但还没有课时指针时是 in_progress', () => {
-    expect(
-      deriveEnrollmentStatus({
-        active: true,
-        completedAt: null,
-        currentLessonContentId: null,
-      }),
-    ).toBe('in_progress');
-  });
+const base = {
+  active: true,
+  completedAt: null,
+  progress: null,
+  modules,
+  generation: 1,
+};
+const done = (contentId: string, generation = 1) => ({
+  contentId,
+  generation,
+  completedAt: new Date(),
 });
 
-describe('computeProgressPercent', () => {
-  it('没有 currentLessonContentId 时是 0', () => {
+describe('per-lesson progress projection', () => {
+  it('never infers completion from reading position or legacy achievement', () => {
     expect(
-      computeProgressPercent({
-        progress: null,
+      deriveEnrollmentView({
+        ...base,
+        completedAt: new Date(),
+        progress: { currentLessonContentId: 'b' },
+      }),
+    ).toEqual({ status: 'in_progress', progressPercent: 0 });
+  });
+  it('counts a skipped-to final lesson as one lesson, not the whole course', () => {
+    expect(
+      deriveEnrollmentView({ ...base, lessonProgress: [done('b')] }),
+    ).toEqual({ status: 'in_progress', progressPercent: 50 });
+  });
+  it('excludes previous generations, removed lessons and unmarked records', () => {
+    expect(
+      completedLessonIds({
+        ...base,
+        lessonProgress: [
+          done('a', 0),
+          done('removed'),
+          { ...done('b'), completedAt: null },
+        ],
+      }),
+    ).toEqual([]);
+  });
+  it('preserves completion on reorder and text edits but added lessons start pending', () => {
+    const lessonProgress = [done('a'), done('b')];
+    expect(deriveEnrollmentView({ ...base, lessonProgress })).toEqual({
+      status: 'completed',
+      progressPercent: 100,
+    });
+    expect(
+      deriveEnrollmentView({
+        ...base,
+        lessonProgress,
         modules: [
           {
-            title: 'Module',
-            lessons: [{ contentId: 'l1' }, { contentId: 'l2' }],
+            title: 'Edited',
+            lessons: [
+              { contentId: 'b' },
+              { contentId: 'a' },
+              { contentId: 'c' },
+            ],
           },
         ],
       }),
-    ).toBe(0);
+    ).toEqual({ status: 'in_progress', progressPercent: 67 });
   });
-
-  it('走到第二课（共 4 课）算出 50', () => {
+  it('does not call an empty syllabus completed', () => {
     expect(
-      computeProgressPercent({
-        progress: { currentLessonContentId: 'l2' },
-        modules: FOUR_LESSONS,
-      }),
-    ).toBe(50);
+      deriveEnrollmentView({ ...base, active: false, modules: [] }),
+    ).toEqual({ status: 'not_started', progressPercent: 0 });
   });
-});
-
-describe('deriveCurrentModuleTitle', () => {
-  it('指针在第二个模块的课时上时返回第二个模块标题', () => {
+  it('module title comes from reading position independently of completion', () => {
     expect(
       deriveCurrentModuleTitle({
-        progress: { currentLessonContentId: 'l3' },
-        modules: FOUR_LESSONS,
+        ...base,
+        progress: { currentLessonContentId: 'b' },
+        lessonProgress: [],
       }),
-    ).toBe('Module Two');
+    ).toBe('One');
   });
-
-  it('指针为空时返回空标题', () => {
-    expect(
-      deriveCurrentModuleTitle({ progress: null, modules: FOUR_LESSONS }),
-    ).toBe('');
-  });
-
-  it('指针不在任何模块时返回空标题', () => {
-    expect(
-      deriveCurrentModuleTitle({
-        progress: { currentLessonContentId: 'missing' },
-        modules: FOUR_LESSONS,
-      }),
-    ).toBe('');
-  });
-});
-
-// status 和 progressPercent 是同一个事实的两种表达，所有返回报名信息的出口都必须经过 deriveEnrollmentView，
-// 这张表就是它们共同遵守的不变量：completed ⇒ 100，not_started ⇒ 0，in_progress 介于两者之间。
-describe('deriveEnrollmentView', () => {
-  const cases: Array<{
-    name: string;
-    completedAt: Date | null;
-    progress: { currentLessonContentId: string | null } | null;
-    active?: boolean;
-    modules: typeof FOUR_LESSONS;
-    expected: { status: string; progressPercent: number };
-  }> = [
-    {
-      name: '没有 progress 行',
-      completedAt: null,
-      progress: null,
-      active: false,
-      modules: FOUR_LESSONS,
-      expected: { status: 'not_started', progressPercent: 0 },
-    },
-    {
-      name: '已激活但还没有 progress 指针',
-      completedAt: null,
-      progress: null,
-      active: true,
-      modules: FOUR_LESSONS,
-      expected: { status: 'in_progress', progressPercent: 0 },
-    },
-    {
-      name: '指针为空、未完成（刚 restart）',
-      completedAt: null,
-      progress: { currentLessonContentId: null },
-      modules: FOUR_LESSONS,
-      expected: { status: 'not_started', progressPercent: 0 },
-    },
-    {
-      name: '学到第二课',
-      completedAt: null,
-      progress: { currentLessonContentId: 'l2' },
-      modules: FOUR_LESSONS,
-      expected: { status: 'in_progress', progressPercent: 50 },
-    },
-    {
-      name: '已完成，指针为空',
-      completedAt: new Date(),
-      progress: { currentLessonContentId: null },
-      modules: FOUR_LESSONS,
-      expected: { status: 'completed', progressPercent: 100 },
-    },
-    {
-      name: '已完成后回看前面的课，指针回退',
-      completedAt: new Date(),
-      progress: { currentLessonContentId: 'l1' },
-      modules: FOUR_LESSONS,
-      expected: { status: 'completed', progressPercent: 100 },
-    },
-    {
-      name: '已完成，没有 progress 行',
-      completedAt: new Date(),
-      progress: null,
-      modules: FOUR_LESSONS,
-      expected: { status: 'completed', progressPercent: 100 },
-    },
-    {
-      name: '没有课程内容时未完成算 0',
-      completedAt: null,
-      progress: { currentLessonContentId: 'l1' },
-      modules: [],
-      expected: { status: 'in_progress', progressPercent: 0 },
-    },
-  ];
-
-  it.each(cases)(
-    '$name',
-    ({ completedAt, progress, active, modules, expected }) => {
-      expect(
-        deriveEnrollmentView({ completedAt, progress, active, modules }),
-      ).toEqual(expected);
-    },
-  );
 });

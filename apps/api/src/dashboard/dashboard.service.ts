@@ -104,6 +104,7 @@ export class DashboardService {
       include: {
         course: { include: { versions: LATEST_PUBLISHED_VERSION } },
         progress: true,
+        lessonProgress: true,
       },
     });
 
@@ -162,6 +163,8 @@ export class DashboardService {
               courseId: activeEnrollment.course.slug,
               active: activeEnrollment.active,
               ...deriveEnrollmentView({
+                generation: activeEnrollment.generation,
+                lessonProgress: activeEnrollment.lessonProgress,
                 active: activeEnrollment.active,
                 completedAt: activeEnrollment.completedAt,
                 progress: activeEnrollment.progress,

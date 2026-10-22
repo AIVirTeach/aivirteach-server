@@ -92,6 +92,11 @@ describe('DashboardService.getDashboard', () => {
           },
         ],
       },
+      lessonProgress: ['lesson_1', 'lesson_2', 'lesson_3'].map((contentId) => ({
+        contentId,
+        generation: 0,
+        completedAt: new Date(),
+      })),
       progress: { currentLessonContentId: 'lesson_3' },
       courseVersion: { modules: [] },
     });
@@ -154,6 +159,11 @@ describe('DashboardService.getDashboard', () => {
           },
         ],
       },
+      lessonProgress: ['lesson_1', 'lesson_2'].map((contentId) => ({
+        contentId,
+        generation: 0,
+        completedAt: new Date(),
+      })),
       progress: { currentLessonContentId: null },
       courseVersion: { modules: [] },
     });
