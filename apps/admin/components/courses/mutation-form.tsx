@@ -1,5 +1,5 @@
 'use client';
-import { useState, type ReactNode } from 'react';
+import { useState, useTransition, type ReactNode } from 'react';
 import { useRouter } from 'next/navigation';
 import { courseMutation } from '@/app/(app)/courses/actions';
 import { resultMessage, settleAction } from '@/lib/action-result';
@@ -25,9 +25,11 @@ export function MutationForm({
 }) {
   const [dirty, setDirty] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [refreshing, startRefresh] = useTransition();
+  const locked = busy || refreshing;
   const [message, setMessage] = useState('');
   const router = useRouter();
-  useDepartureGuard(dirty || busy);
+  useDepartureGuard(dirty || locked);
   return (
     <form
       className="edit-form"
@@ -38,6 +40,7 @@ export function MutationForm({
       }}
       onSubmit={async (e) => {
         e.preventDefault();
+        if (locked) return;
         const form = e.currentTarget;
         setBusy(true);
         onDirty?.(true);
@@ -47,22 +50,24 @@ export function MutationForm({
             courseMutation(slug, path, method, build(new FormData(form))),
           );
           if (result.status === 'ok') {
-            setDirty(false);
-            onDirty?.(false);
-            setMessage('已保存');
             if (method === 'POST') form.reset();
-            afterSave?.();
-            router.refresh();
+            startRefresh(() => {
+              setDirty(false);
+              onDirty?.(false);
+              setMessage('已保存');
+              afterSave?.();
+              router.refresh();
+            });
           } else setMessage(resultMessage(result));
         } finally {
           setBusy(false);
         }
       }}
     >
-      <fieldset disabled={busy}>{children}</fieldset>
+      <fieldset disabled={locked}>{children}</fieldset>
       <div className="form-footer">
-        <button className="primary" disabled={busy} type="submit">
-          {busy ? '保存中…' : label}
+        <button className="primary" disabled={locked} type="submit">
+          {locked ? '保存中…' : label}
         </button>
         <span role="status">{message || (dirty ? '有未保存改动' : '')}</span>
         {message.includes('登录已过期') && (

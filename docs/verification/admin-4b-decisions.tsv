@@ -7,3 +7,4 @@ ts	phase	decision	why	evidence	result
 2026-10-22T14:05:47.181100+00:00	review	Fix upload races and action failure recovery	Preserve newer user input and pending-operation guards	apps/admin/components/editor/lesson-editor.test.tsx	passed
 2026-10-22T14:05:47.181100+00:00	verification	Finish nonbrowser checks	Honor user browser suspension	docs/verification/admin-course-editor.md	920 tests; types and builds passed
 2026-10-22T14:05:47.181100+00:00	delivery	Use gh for pull request	Origin CLI unavailable	docs/verification/admin-course-editor.md	no merge or deployment
+2026-10-22T14:19:22.199458+00:00	review-fix	Keep form locks through route refresh	Prevent refreshed props from replacing newer input	apps/admin/components/courses/course-detail.test.tsx	red then green; admin 84 tests, types and build passed
