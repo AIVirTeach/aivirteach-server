@@ -1,3 +1,4 @@
+import type { PublishIssue } from '@aivirteach/admin-contract';
 import { CourseMetaPatchSchema } from './draft/draft.schemas';
 import type { DraftVersion } from './draft/draft-version';
 import {
@@ -5,71 +6,84 @@ import {
   validateLessonContent,
 } from '@aivirteach/lesson-blocks';
 
-export function validateDraftForPublish(input: {
+export function collectDraftPublishIssues(input: {
   draft: DraftVersion;
   courseAssetIds: ReadonlySet<string>;
   coverAssetId: string | null;
   isFirstPublish: boolean;
-}): string[] {
+}): PublishIssue[] {
   const { draft, courseAssetIds, coverAssetId, isFirstPublish } = input;
-  const problems: string[] = [];
+  const issues: PublishIssue[] = [];
+  const add = (message: string, location: Omit<PublishIssue, 'message'> = {}) =>
+    issues.push({ message, ...location });
   const modules = [...draft.modules].sort((a, b) => a.position - b.position);
   const lessonIds = new Set<string>();
 
   if (isFirstPublish && modules.length === 0) {
-    problems.push('首次发布的课程至少需要一个模块');
+    add('首次发布的课程至少需要一个模块');
   }
 
   if (coverAssetId && !courseAssetIds.has(coverAssetId)) {
-    problems.push('封面资源不属于当前课程');
+    add('封面资源不属于当前课程');
   }
   if (
     draft.welcome?.overviewAssetId &&
     !courseAssetIds.has(draft.welcome.overviewAssetId)
   ) {
-    problems.push('欢迎页资源不属于当前课程');
+    add('欢迎页资源不属于当前课程');
   }
 
   if (modules.every((module) => module.lessons.length === 0)) {
     // 首次发布已有更具体的“至少一个模块/课时”提示，不重复报。
-    if (!isFirstPublish) problems.push('课程至少需要一个课时');
+    if (!isFirstPublish) add('课程至少需要一个课时');
   }
 
   modules.forEach((module, moduleIndex) => {
     if (module.position !== moduleIndex + 1) {
-      problems.push('模块 position 必须连续且从 1 开始');
+      add('模块 position 必须连续且从 1 开始', { moduleId: module.id });
     }
     const lessons = [...module.lessons].sort((a, b) => a.position - b.position);
     if (isFirstPublish && lessons.length === 0) {
-      problems.push(`模块「${module.title}」至少需要一个课时`);
+      add(`模块「${module.title}」至少需要一个课时`, { moduleId: module.id });
     }
     lessons.forEach((lesson, lessonIndex) => {
+      const location = { moduleId: module.id, contentId: lesson.contentId };
       if (lesson.position !== lessonIndex + 1) {
-        problems.push(
+        add(
           `模块「${module.title}」的课时 position 必须连续且从 1 开始`,
+          location,
         );
       }
       if (lessonIds.has(lesson.contentId)) {
-        problems.push(`课时 contentId 重复：${lesson.contentId}`);
+        add(`课时 contentId 重复：${lesson.contentId}`, location);
       }
       lessonIds.add(lesson.contentId);
       const prefix = `模块「${module.title}」/课时「${lesson.title}」：`;
       const report = validateLessonContent(lesson.content, { courseAssetIds });
       for (const error of report.errors) {
-        problems.push(`${prefix}${error.message}`);
+        add(`${prefix}${error.message}`, {
+          ...location,
+          ...(error.blockId ? { blockId: error.blockId } : {}),
+        });
       }
       if (countRenderableBlocks(lesson.content) < 1) {
-        problems.push(`${prefix}没有可渲染内容块`);
+        add(`${prefix}没有可渲染内容块`, location);
       }
     });
   });
 
   if (draft.meta !== null && !isEmptyObject(draft.meta)) {
     const result = CourseMetaPatchSchema.safeParse(draft.meta);
-    if (!result.success) problems.push('课程元信息格式无效');
+    if (!result.success) add('课程元信息格式无效');
   }
 
-  return problems;
+  return issues;
+}
+
+export function validateDraftForPublish(
+  input: Parameters<typeof collectDraftPublishIssues>[0],
+): string[] {
+  return collectDraftPublishIssues(input).map((issue) => issue.message);
 }
 
 function isEmptyObject(value: unknown): boolean {

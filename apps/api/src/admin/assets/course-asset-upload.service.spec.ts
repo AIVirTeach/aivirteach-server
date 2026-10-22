@@ -28,7 +28,10 @@ describe('CourseAssetUploadService', () => {
     });
     storage.uploadBuffer.mockResolvedValue('https://blob.test/asset.png');
     storage.delete.mockResolvedValue(undefined);
-    prisma.courseAsset.create.mockResolvedValue({ id: 'asset-id' });
+    prisma.courseAsset.create.mockResolvedValue({
+      id: 'asset-id',
+      createdAt: new Date('2026-01-01'),
+    });
     service = new CourseAssetUploadService(
       prisma as unknown as PrismaService,
       storage as unknown as CourseAssetStorageService,
@@ -56,7 +59,7 @@ describe('CourseAssetUploadService', () => {
         altText: 'Diagram',
         mimeType: 'image/png',
       },
-      select: { id: true },
+      select: { id: true, createdAt: true },
     });
     expect(audit.record).toHaveBeenCalledTimes(1);
     expect(audit.record).toHaveBeenCalledWith(
@@ -78,6 +81,7 @@ describe('CourseAssetUploadService', () => {
     expect(result).toEqual({
       id: 'asset-id',
       url: 'https://blob.test/asset.png',
+      createdAt: '2026-01-01T00:00:00.000Z',
       altText: 'Diagram',
       mimeType: 'image/png',
     });

@@ -36,6 +36,7 @@ export class CourseAssetUploadService {
     url: string;
     altText: string | null;
     mimeType: string;
+    createdAt: string;
   }> {
     if (
       file.size <= 0 ||
@@ -63,7 +64,7 @@ export class CourseAssetUploadService {
       file.buffer,
       mimeType,
     );
-    let asset: { id: string };
+    let asset: { id: string; createdAt: Date };
     try {
       // 素材行和审计同一事务：审计写失败不会留下没有审计记录的素材。
       asset = await this.prisma.$transaction(async (tx) => {
@@ -75,7 +76,7 @@ export class CourseAssetUploadService {
             altText: altText ?? null,
             mimeType,
           },
-          select: { id: true },
+          select: { id: true, createdAt: true },
         });
         await this.audit.record(
           {
@@ -95,6 +96,12 @@ export class CourseAssetUploadService {
       await this.storage.delete(url).catch(() => undefined);
       throw error;
     }
-    return { id: asset.id, url, altText: altText ?? null, mimeType };
+    return {
+      id: asset.id,
+      url,
+      altText: altText ?? null,
+      mimeType,
+      createdAt: asset.createdAt.toISOString(),
+    };
   }
 }

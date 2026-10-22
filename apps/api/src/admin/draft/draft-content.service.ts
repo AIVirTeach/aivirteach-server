@@ -1,4 +1,8 @@
 import {
+  CreateAssessmentSchema,
+  type CreateAssessmentInput,
+} from '@aivirteach/admin-contract';
+import {
   BadRequestException,
   ConflictException,
   Injectable,
@@ -339,6 +343,28 @@ export class DraftContentService {
             });
           }
         }
+      },
+    );
+  }
+
+  async createAssessment(
+    slug: string,
+    contentId: string,
+    input: CreateAssessmentInput,
+    operator: string,
+  ): Promise<DraftSummary> {
+    const data = CreateAssessmentSchema.parse(input);
+    const draft = await this.drafts.requireDraftRef(slug);
+    return this.mutate(
+      slug,
+      draft.id,
+      operator,
+      'createAssessment',
+      async (tx) => {
+        const lesson = await findLessonRow(tx, draft.id, contentId);
+        await tx.lessonAssessment.create({
+          data: { ...data, lessonId: lesson.id },
+        });
       },
     );
   }
