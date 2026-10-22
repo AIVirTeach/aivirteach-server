@@ -11,6 +11,7 @@ npm test
 npm run test:e2e -w api -- --runInBand
 npx tsc --noEmit -p apps/api/tsconfig.json
 npx tsc --noEmit -p apps/admin/tsconfig.json
+npx tsc --noEmit -p apps/admin/tsconfig.e2e.json
 npm run build -w api
 npm run build -w admin
 if [[ "${1:-}" == "--browser" ]]; then
