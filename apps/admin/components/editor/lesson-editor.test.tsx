@@ -187,3 +187,83 @@ it('keeps newer image captions and guards departure until overlapping uploads an
   window.dispatchEvent(clean);
   expect(clean.defaultPrevented).toBe(false);
 });
+
+it('preserves manual selection across a picker remount and saves it after a late upload', async () => {
+  vi.useFakeTimers();
+  let finish!: (value: Awaited<ReturnType<typeof uploadAssetAction>>) => void;
+  vi.mocked(uploadAssetAction).mockImplementation(
+    () =>
+      new Promise((resolve) => {
+        finish = resolve;
+      }),
+  );
+  vi.mocked(courseMutation).mockResolvedValue({
+    status: 'ok',
+    data: { problems: { errors: [], warnings: [] } },
+  });
+  const images: DraftLesson = {
+    ...lesson,
+    content: {
+      schemaVersion: 1,
+      blocks: [
+        { id: 'one', type: 'image', props: { assetId: '', alt: 'one' } },
+        { id: 'two', type: 'image', props: { assetId: '', alt: 'two' } },
+      ],
+    },
+  };
+  const existing = {
+    id: 'existing',
+    url: 'https://example.test/existing.png',
+    altText: 'Existing',
+    mimeType: 'image/png',
+    createdAt: '',
+  };
+  render(
+    <LessonEditor
+      slug="course"
+      draft={draft}
+      lesson={images}
+      moduleTitle="Module"
+      initialAssets={[existing]}
+    />,
+  );
+  fireEvent.click(screen.getAllByRole('button', { name: '编辑' })[0]);
+  fireEvent.change(screen.getByLabelText('上传图片'), {
+    target: { files: [new File(['x'], 'upload.png', { type: 'image/png' })] },
+  });
+  fireEvent.click(screen.getAllByRole('button', { name: '编辑' })[1]);
+  fireEvent.click(screen.getAllByRole('button', { name: '编辑' })[0]);
+  fireEvent.change(screen.getByLabelText('课程图片'), {
+    target: { value: 'existing' },
+  });
+  await act(async () =>
+    finish({ status: 'ok', data: { ...existing, id: 'uploaded' } }),
+  );
+  expect(screen.getByLabelText('课程图片')).toHaveValue('existing');
+  expect(
+    screen
+      .getAllByRole('option')
+      .some((option) => option.getAttribute('value') === 'uploaded'),
+  ).toBe(true);
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(800);
+  });
+  expect(courseMutation).toHaveBeenLastCalledWith(
+    'course',
+    'draft/lessons/lesson',
+    'PATCH',
+    {
+      content: {
+        schemaVersion: 1,
+        blocks: [
+          {
+            id: 'one',
+            type: 'image',
+            props: { assetId: 'existing', alt: 'one' },
+          },
+          { id: 'two', type: 'image', props: { assetId: '', alt: 'two' } },
+        ],
+      },
+    },
+  );
+});

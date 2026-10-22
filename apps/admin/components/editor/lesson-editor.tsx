@@ -45,6 +45,7 @@ export function LessonEditor({
       selectedId: null,
       past: [],
       future: [],
+      uploads: {},
     } satisfies EditorState,
   );
   const [assets, setAssets] = useState(initialAssets);
@@ -338,6 +339,17 @@ export function LessonEditor({
                 }
                 onBusy={(busy) =>
                   setPendingUploads((count) => count + (busy ? 1 : -1))
+                }
+                onUploadStart={(requestId) =>
+                  dispatch({ type: 'start-upload', id: selected.id, requestId })
+                }
+                onUploadFinish={(requestId, assetId) =>
+                  dispatch({
+                    type: 'finish-upload',
+                    id: selected.id,
+                    requestId,
+                    assetId,
+                  })
                 }
                 onPatch={(props) =>
                   dispatch({ type: 'patch', id: selected.id, props })

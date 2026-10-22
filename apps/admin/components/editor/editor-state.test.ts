@@ -5,6 +5,7 @@ const empty = (): EditorState => ({
   selectedId: null,
   past: [],
   future: [],
+  uploads: {},
 });
 describe('block editing', () => {
   it('creates independent copies, reorders, removes and restores with undo', () => {
@@ -63,5 +64,94 @@ it('applies an upload result only to assetId while preserving edits made during 
     assetId: 'uploaded',
     alt: 'new alt',
     caption: 'new caption',
+  });
+});
+
+describe('image upload ownership', () => {
+  function uploading() {
+    return reduce(
+      reduce(empty(), { type: 'add', blockType: 'image' }, () => 'image'),
+      { type: 'start-upload', id: 'image', requestId: 'old' },
+    );
+  }
+  it('ignores a late upload after manual selection, including selecting the original value', () => {
+    const state = reduce(uploading(), {
+      type: 'patch',
+      id: 'image',
+      props: { assetId: '' },
+    });
+    expect(
+      reduce(state, {
+        type: 'finish-upload',
+        id: 'image',
+        requestId: 'old',
+        assetId: 'late',
+      }),
+    ).toBe(state);
+  });
+  it('only accepts the newest upload and preserves caption edits', () => {
+    let state = reduce(uploading(), {
+      type: 'start-upload',
+      id: 'image',
+      requestId: 'new',
+    });
+    state = reduce(state, {
+      type: 'update',
+      id: 'image',
+      props: { assetId: '', alt: 'diagram', caption: 'new caption' },
+    });
+    expect(
+      reduce(state, {
+        type: 'finish-upload',
+        id: 'image',
+        requestId: 'old',
+        assetId: 'stale',
+      }),
+    ).toBe(state);
+    state = reduce(state, {
+      type: 'finish-upload',
+      id: 'image',
+      requestId: 'new',
+      assetId: 'new-image',
+    });
+    expect(state.blocks[0].props).toEqual({
+      assetId: 'new-image',
+      alt: 'diagram',
+      caption: 'new caption',
+    });
+    expect(state.uploads).toEqual({});
+    state = reduce(state, { type: 'undo' });
+    expect(state.blocks[0].props).toEqual({
+      assetId: '',
+      alt: 'diagram',
+      caption: 'new caption',
+    });
+  });
+  it('does not revive an upload when deletion is undone', () => {
+    let state = reduce(uploading(), { type: 'remove', id: 'image' });
+    state = reduce(state, { type: 'undo' });
+    expect(state.blocks).toHaveLength(1);
+    expect(
+      reduce(state, {
+        type: 'finish-upload',
+        id: 'image',
+        requestId: 'old',
+        assetId: 'late',
+      }),
+    ).toBe(state);
+  });
+  it('clears upload ownership on undo and redo without adding upload steps to history', () => {
+    let state = uploading();
+    expect(state.past).toHaveLength(1);
+    state = reduce(state, { type: 'undo' });
+    state = reduce(state, { type: 'redo' });
+    expect(
+      reduce(state, {
+        type: 'finish-upload',
+        id: 'image',
+        requestId: 'old',
+        assetId: 'late',
+      }),
+    ).toBe(state);
   });
 });

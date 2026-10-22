@@ -11,6 +11,8 @@ describe('schema driven forms', () => {
         block={{ id: 'a', type, props: entry.defaultProps() }}
         slug="course"
         assets={[]}
+        onUploadStart={vi.fn()}
+        onUploadFinish={vi.fn()}
         onAssets={vi.fn()}
         onBusy={vi.fn()}
         onPatch={vi.fn()}
@@ -31,6 +33,8 @@ describe('schema driven forms', () => {
         }}
         slug="course"
         assets={[]}
+        onUploadStart={vi.fn()}
+        onUploadFinish={vi.fn()}
         onAssets={vi.fn()}
         onBusy={vi.fn()}
         onPatch={vi.fn()}
@@ -54,6 +58,8 @@ describe('schema driven forms', () => {
         }}
         slug="course"
         assets={[]}
+        onUploadStart={vi.fn()}
+        onUploadFinish={vi.fn()}
         onAssets={vi.fn()}
         onBusy={vi.fn()}
         onPatch={vi.fn()}
@@ -78,6 +84,8 @@ it.each(
       block={{ id: 'block', type, props }}
       slug="course"
       assets={[]}
+      onUploadStart={vi.fn()}
+      onUploadFinish={vi.fn()}
       onAssets={vi.fn()}
       onBusy={vi.fn()}
       onPatch={vi.fn()}
@@ -112,6 +120,8 @@ it('creates nested array entries from schema defaults and supports deleting them
       }}
       slug="course"
       assets={[]}
+      onUploadStart={vi.fn()}
+      onUploadFinish={vi.fn()}
       onAssets={vi.fn()}
       onBusy={vi.fn()}
       onPatch={vi.fn()}
@@ -145,6 +155,8 @@ it('edits table cells, rows and columns while keeping rectangular rows', () => {
       }}
       slug="course"
       assets={[]}
+      onUploadStart={vi.fn()}
+      onUploadFinish={vi.fn()}
       onAssets={vi.fn()}
       onBusy={vi.fn()}
       onPatch={vi.fn()}
