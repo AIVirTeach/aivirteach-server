@@ -34,3 +34,14 @@ describe('proxy', () => {
     expect(response.headers.get('x-middleware-next')).toBe('1');
   });
 });
+
+it('lets unauthenticated Server Actions return unauthorized without navigating the editor', () => {
+  const response = proxy(
+    new NextRequest('http://localhost:3000/courses/test/lessons/one', {
+      method: 'POST',
+      headers: { 'next-action': 'action-id' },
+    }),
+  );
+  expect(response.headers.get('location')).toBeNull();
+  expect(response.headers.get('x-middleware-next')).toBe('1');
+});

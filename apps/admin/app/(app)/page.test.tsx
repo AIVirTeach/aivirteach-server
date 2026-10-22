@@ -1,12 +1,8 @@
-import { render, screen } from '@testing-library/react';
+import { vi, expect, it } from 'vitest';
+import { redirect } from 'next/navigation';
 import Home from './page';
-
-describe('首页', () => {
-  it('渲染运营后台标题', () => {
-    render(<Home />);
-
-    expect(
-      screen.getByRole('heading', { name: 'AIVirTeach 运营后台' }),
-    ).toBeInTheDocument();
-  });
+vi.mock('next/navigation', () => ({ redirect: vi.fn() }));
+it('opens the course studio after login', () => {
+  Home();
+  expect(redirect).toHaveBeenCalledWith('/courses');
 });

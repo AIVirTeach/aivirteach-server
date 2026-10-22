@@ -1,3 +1,5 @@
+import { AdminCourseListService } from './courses/admin-course-list.service';
+import { CourseAssetListService } from './assets/course-asset-list.service';
 import { Test } from '@nestjs/testing';
 import {
   type ExecutionContext,
@@ -56,11 +58,27 @@ describe('AdminCoursesController', () => {
     deleteLesson: jest.fn(),
     reorder: jest.fn(),
     updateAssessment: jest.fn(),
+    createAssessment: jest.fn(),
   };
   const publishing = { publish: jest.fn() };
   const courseCreation = { create: jest.fn() };
   const assetUploads = { upload: jest.fn() };
-  const prisma = { courseAsset: { findMany: jest.fn().mockResolvedValue([]) } };
+  const prisma = {
+    courseAsset: { findMany: jest.fn().mockResolvedValue([]) },
+    course: {
+      findUnique: jest.fn().mockResolvedValue({
+        title: 'Course',
+        shortTitle: null,
+        category: '',
+        description: '',
+        level: 'BEGINNER',
+        language: 'en',
+        tags: [],
+        outcomes: [],
+        requirements: [],
+      }),
+    },
+  };
 
   const routes: Array<{
     method: 'post' | 'delete' | 'patch' | 'put' | 'get';
@@ -187,6 +205,14 @@ describe('AdminCoursesController', () => {
     const module = await Test.createTestingModule({
       controllers: [AdminCoursesController, AdminCourseCreateController],
       providers: [
+        {
+          provide: AdminCourseListService,
+          useValue: { list: jest.fn().mockResolvedValue([]) },
+        },
+        {
+          provide: CourseAssetListService,
+          useValue: { list: jest.fn().mockResolvedValue([]) },
+        },
         { provide: CourseDraftService, useValue: drafts },
         { provide: DraftContentService, useValue: content },
         { provide: CoursePublishService, useValue: publishing },

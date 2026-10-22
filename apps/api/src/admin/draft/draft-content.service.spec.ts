@@ -139,6 +139,7 @@ describe('DraftContentService', () => {
         delete: jest.fn(),
       },
       lessonAssessment: {
+        create: jest.fn().mockResolvedValue({ id: 'new-assessment' }),
         update: jest.fn(),
         updateMany: jest.fn().mockResolvedValue({ count: 1 }),
       },
@@ -159,6 +160,74 @@ describe('DraftContentService', () => {
       draft,
     };
   }
+
+  it('creates assessments only after locking and resolving a lesson within the draft', async () => {
+    const { prisma, service, audit } = setup();
+    await service.createAssessment(
+      'demo',
+      'one',
+      { type: 'quiz', question: 'Q' },
+      'op',
+    );
+    expect(prisma.lessonAssessment.create).toHaveBeenCalledWith({
+      data: {
+        lessonId: 'l1',
+        type: 'quiz',
+        question: 'Q',
+        options: [],
+        clientCriteria: [],
+        expectedResult: null,
+        successCriteria: [],
+        commonFailures: [],
+      },
+    });
+    expect(prisma.$queryRaw.mock.invocationCallOrder[0]).toBeLessThan(
+      prisma.lessonAssessment.create.mock.invocationCallOrder[0],
+    );
+    expect(audit.record).toHaveBeenCalledWith(
+      expect.objectContaining({ action: 'admin.draft.createAssessment' }),
+      prisma,
+    );
+  });
+
+  it('refuses assessment creation after a concurrent publish or discard', async () => {
+    const { prisma, service } = setup();
+    prisma.$queryRaw.mockResolvedValue([]);
+    await expect(
+      service.createAssessment(
+        'demo',
+        'one',
+        { type: 'quiz', question: 'Q' },
+        'op',
+      ),
+    ).rejects.toBeInstanceOf(ConflictException);
+    expect(prisma.lessonAssessment.create).not.toHaveBeenCalled();
+  });
+
+  it('rejects missing and ambiguous draft lessons before creating assessments', async () => {
+    const { prisma, service } = setup();
+    await expect(
+      service.createAssessment(
+        'demo',
+        'missing',
+        { type: 'quiz', question: 'Q' },
+        'op',
+      ),
+    ).rejects.toBeInstanceOf(NotFoundException);
+    prisma.courseLesson.findMany.mockResolvedValue([
+      { id: 'a', module: { title: 'A' } },
+      { id: 'b', module: { title: 'B' } },
+    ]);
+    await expect(
+      service.createAssessment(
+        'demo',
+        'one',
+        { type: 'quiz', question: 'Q' },
+        'op',
+      ),
+    ).rejects.toBeInstanceOf(ConflictException);
+    expect(prisma.lessonAssessment.create).not.toHaveBeenCalled();
+  });
 
   it('refuses draft writes once the version is no longer an unpublished draft', async () => {
     const { prisma, service } = setup();

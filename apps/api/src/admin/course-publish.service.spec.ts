@@ -238,7 +238,12 @@ describe('CoursePublishService.publish', () => {
     await expect(
       service.publish('demo', 'ops@example.com', 'release'),
     ).rejects.toMatchObject({
-      response: { problems: expect.arrayContaining([expect.any(String)]) },
+      response: {
+        problems: expect.arrayContaining([expect.any(String)]),
+        issues: expect.arrayContaining([
+          expect.objectContaining({ message: expect.any(String) }),
+        ]),
+      },
     });
     expect(staleOk.id).toBe('draft-2');
     expect(tx.$queryRaw).toHaveBeenCalledTimes(1);

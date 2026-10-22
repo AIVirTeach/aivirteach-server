@@ -16,7 +16,7 @@ import {
   DRAFT_TX_OPTIONS,
   lockUnpublishedVersion,
 } from './draft/draft-version';
-import { validateDraftForPublish } from './publish-validation';
+import { collectDraftPublishIssues } from './publish-validation';
 import { remapRemovedLessons } from './progress-remap';
 
 @Injectable()
@@ -59,16 +59,17 @@ export class CoursePublishService {
         },
       },
     });
-    const problems = validateDraftForPublish({
+    const issues = collectDraftPublishIssues({
       draft,
       courseAssetIds: new Set(assets.map((asset) => asset.id)),
       coverAssetId: course.coverAssetId,
       isFirstPublish: previousPublished === null,
     });
-    if (problems.length) {
+    if (issues.length) {
       throw new UnprocessableEntityException({
         message: '草稿校验未通过',
-        problems,
+        problems: issues.map((issue) => issue.message),
+        issues,
       });
     }
 
@@ -86,16 +87,17 @@ export class CoursePublishService {
         include: DRAFT_INCLUDE,
       });
       if (!locked) throw new NotFoundException(`课程草稿 ${slug} 不存在`);
-      const lockedProblems = validateDraftForPublish({
+      const lockedIssues = collectDraftPublishIssues({
         draft: locked,
         courseAssetIds: new Set(assets.map((asset) => asset.id)),
         coverAssetId: course.coverAssetId,
         isFirstPublish: previousPublished === null,
       });
-      if (lockedProblems.length) {
+      if (lockedIssues.length) {
         throw new UnprocessableEntityException({
           message: '草稿校验未通过',
-          problems: lockedProblems,
+          problems: lockedIssues.map((issue) => issue.message),
+          issues: lockedIssues,
         });
       }
       const oldOrder =

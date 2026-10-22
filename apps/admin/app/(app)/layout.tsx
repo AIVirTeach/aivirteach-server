@@ -5,8 +5,11 @@ import { logoutAction } from './actions';
 export default function AppLayout({ children }: { children: ReactNode }) {
   return (
     <>
-      <header className="flex justify-end border-b bg-white px-6 py-3">
-        <form action={logoutAction}>
+      <header className="app-header">
+        <a href="/courses" className="brand">
+          AIVirTeach <span>课程工作室</span>
+        </a>
+        <form action={logoutAction} data-logout="true">
           <Button type="submit" variant="outline">
             退出
           </Button>

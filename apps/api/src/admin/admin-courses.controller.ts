@@ -1,10 +1,17 @@
 import {
+  CreateAssessmentSchema,
+  CourseMetaSchema,
+} from '@aivirteach/admin-contract';
+import { AdminCourseListService } from './courses/admin-course-list.service';
+import { CourseAssetListService } from './assets/course-asset-list.service';
+import {
   Body,
   BadRequestException,
   ConflictException,
   Controller,
   Delete,
   Get,
+  NotFoundException,
   Param,
   Patch,
   Post,
@@ -127,7 +134,13 @@ export class AdminCoursesController {
     private readonly publishing: CoursePublishService,
     private readonly prisma: PrismaService,
     private readonly assetUploads: CourseAssetUploadService,
+    private readonly assetList: CourseAssetListService,
   ) {}
+
+  @Get('assets')
+  listAssets(@Param('slug') slug: string) {
+    return this.assetList.list(slug);
+  }
 
   @Post('draft')
   async createDraft(
@@ -140,8 +153,33 @@ export class AdminCoursesController {
   }
 
   @Get('draft')
-  getDraft(@Param('slug') slug: string) {
-    return this.drafts.requireDraft(slug);
+  async getDraft(@Param('slug') slug: string) {
+    const draft = await this.drafts.requireDraft(slug);
+    const course = await this.prisma.course.findUnique({
+      where: { id: draft.courseId },
+      select: {
+        title: true,
+        shortTitle: true,
+        category: true,
+        description: true,
+        level: true,
+        language: true,
+        tags: true,
+        outcomes: true,
+        requirements: true,
+      },
+    });
+    if (!course) throw new NotFoundException(`课程 ${slug} 不存在`);
+    const level = {
+      BEGINNER: 'Beginner',
+      INTERMEDIATE: 'Intermediate',
+      ADVANCED: 'Advanced',
+    }[course.level];
+    const patch = CourseMetaPatchSchema.parse(draft.meta ?? {});
+    return {
+      ...draft,
+      effectiveMeta: CourseMetaSchema.parse({ ...course, level, ...patch }),
+    };
   }
 
   @Delete('draft')
@@ -243,6 +281,17 @@ export class AdminCoursesController {
     return this.content.reorder(slug, body, operator);
   }
 
+  @Post('draft/lessons/:contentId/assessments')
+  createAssessment(
+    @Param('slug') slug: string,
+    @Param('contentId') contentId: string,
+    @Body(new ZodValidationPipe(CreateAssessmentSchema))
+    body: z.infer<typeof CreateAssessmentSchema>,
+    @CurrentOperator() operator: string,
+  ) {
+    return this.content.createAssessment(slug, contentId, body, operator);
+  }
+
   @Patch('draft/assessments/:assessmentId')
   updateAssessment(
     @Param('slug') slug: string,
@@ -313,7 +362,15 @@ export class AdminCoursesController {
 @UseGuards(OperatorAuthGuard)
 @Controller('admin/courses')
 export class AdminCourseCreateController {
-  constructor(private readonly courses: CourseCreateService) {}
+  constructor(
+    private readonly courses: CourseCreateService,
+    private readonly courseList: AdminCourseListService,
+  ) {}
+
+  @Get()
+  list() {
+    return this.courseList.list();
+  }
 
   @Post()
   create(

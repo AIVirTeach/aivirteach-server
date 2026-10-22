@@ -1,4 +1,4 @@
-import { apiFetch } from './api-client';
+import { apiFetch, apiFetchNoRedirect } from './api-client';
 
 const session = vi.hoisted(() => ({
   readSessionToken: vi.fn(),
@@ -33,7 +33,8 @@ describe('apiFetch', () => {
     expect(init.cache).toBe('no-store');
   });
 
-  it('没有会话令牌：不发请求，直接去 /login', async () => {
+  it('没有会话令牌：不依赖 API 配置，不发请求，直接去 /login', async () => {
+    delete process.env.API_BASE_URL;
     session.readSessionToken.mockResolvedValue(undefined);
 
     await expect(apiFetch('/x')).rejects.toThrow('NEXT_REDIRECT:/login');
@@ -58,11 +59,28 @@ describe('apiFetch', () => {
 
   it('其他状态码原样返回，由调用方处理', async () => {
     session.readSessionToken.mockResolvedValue('jwt');
-    fetchMock.mockResolvedValue(new Response('{"message":"bad"}', { status: 422 }));
+    fetchMock.mockResolvedValue(
+      new Response('{"message":"bad"}', { status: 422 }),
+    );
 
     const response = await apiFetch('/x');
 
     expect(response.status).toBe(422);
+    expect(session.clearSession).not.toHaveBeenCalled();
+  });
+
+  it('writes with missing or expired sessions never redirect or mutate cookies', async () => {
+    session.readSessionToken.mockResolvedValue(undefined);
+    expect((await apiFetchNoRedirect('/x', { method: 'PATCH' })).status).toBe(
+      401,
+    );
+    expect(fetchMock).not.toHaveBeenCalled();
+    session.readSessionToken.mockResolvedValue('expired');
+    fetchMock.mockResolvedValue(new Response(null, { status: 401 }));
+    expect((await apiFetchNoRedirect('/x', { method: 'PATCH' })).status).toBe(
+      401,
+    );
+    expect(redirect).not.toHaveBeenCalled();
     expect(session.clearSession).not.toHaveBeenCalled();
   });
 

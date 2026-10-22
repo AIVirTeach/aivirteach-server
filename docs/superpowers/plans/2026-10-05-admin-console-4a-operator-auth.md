@@ -1,5 +1,13 @@
 # 运营后台 4a：运营账号、登录与管理后台骨架 Implementation Plan
 
+## 2026-10-22 状态核对
+
+Task 1–8 的代码与文档已由 server PR #24 合并；下方未勾选的开发步骤是历史记录，不要重复实施。未取得完整验收及生产状态证据，因此保留本计划。
+
+本次 A 实施补跑了运营登录本地数据库 E2E，11 个测试通过。浏览器登录请求已成功，但完整页面流程在首页跳转断言处失败，修正后用户要求暂停浏览器；登录/退出整体仍未验收。CLI 建运营的完整人工流程、生产迁移、运营账号和 admin 部署仍需核实。本次未连接生产。
+
+**部署顺序修正**：以下 Task 8 旧顺序已过时。以 README 为准：应用迁移 → 创建首个运营 → 部署 API → 部署 admin。先部署 API 再建账号会使旧令牌失效而运营暂时无法登录。验收后记录 URL/版本/结果，再删除本计划。
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** 用独立的 `Operator` 账号替换 `ADMIN_API_TOKEN` + 自报的 `X-Operator`，并建出能登录的 `apps/admin` 骨架，作为 4b（课程编辑器）和 4c（邀请 / 配额 / 审计页）的前置。

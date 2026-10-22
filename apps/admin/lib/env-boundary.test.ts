@@ -2,7 +2,7 @@ import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { join, relative } from 'node:path';
 
 const ROOT = join(__dirname, '..');
-const SKIP = new Set(['node_modules', '.next', 'env-boundary.test.ts']);
+const SKIP = new Set(['node_modules', '.next', 'env-boundary.test.ts', 'e2e']);
 
 function sourceFiles(dir: string): string[] {
   return readdirSync(dir).flatMap((name) => {

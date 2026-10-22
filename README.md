@@ -216,3 +216,11 @@ Jest 需要 `--experimental-vm-modules`（已经写进 npm scripts 里了）—�
 - `main` 与 GitHub `origin/main` 历史有分叉，还没有开 PR 合并
 - CI 还没接（对应 Linear SRV-001）
 - `ACCESS_TOKEN_TTL` / `CORS_ORIGINS` / `PORT` / `INVITATION_TTL_DAYS` / `REFRESH_TOKEN_TTL_DAYS` 这几个纯配置项在 Vercel 上被误标成了 sensitive，导致 `vercel env pull` 拉不出真实值（生产运行不受影响，只是本地没法照抄这几个值）；要清理的话去 Vercel 项目设置里把它们删掉重加成非 sensitive
+
+## 课程编辑后台（4b）
+
+运营登录后进入 `/courses`，可以新建课程、编辑模块和课时、编写内容块、上传图片、创建和修改测评，并发布草稿。课时自动保存失败或登录过期时保留本地内容；保存成功后才能离开。元信息与测评使用显式保存。
+
+预览使用 client 的 `/preview/lesson`。admin 配置 `NEXT_PUBLIC_CLIENT_ORIGIN`，client 配置对应的 `NEXT_PUBLIC_ADMIN_ORIGIN`，两者均使用不带路径的 origin。client 的来源配置在构建时生效。素材上传仍需要 API 的 Vercel Blob 配置。
+
+同课时多人同时编辑仍为后写覆盖。发布会更新课程 API；V2 的静态 HTML 接线尚未纳入本阶段。完整验证步骤与未完成验收见 [课程后台 A 验证记录](docs/verification/admin-course-editor.md)。

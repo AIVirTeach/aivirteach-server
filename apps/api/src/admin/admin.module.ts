@@ -1,3 +1,5 @@
+import { AdminCourseListService } from './courses/admin-course-list.service';
+import { CourseAssetListService } from './assets/course-asset-list.service';
 import { Module } from '@nestjs/common';
 import { AdminService } from './admin.service';
 import { InviteCommand } from './commands/invite.command';
@@ -33,6 +35,8 @@ import { CourseAssetUploadService } from './assets/course-asset-upload.service';
   controllers: [AdminCoursesController, AdminCourseCreateController],
   providers: [
     AdminService,
+    AdminCourseListService,
+    CourseAssetListService,
     CourseDraftService,
     CourseCreateService,
     DraftContentService,
