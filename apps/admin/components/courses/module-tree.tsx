@@ -1,5 +1,5 @@
 'use client';
-import { useState } from 'react';
+import { useState, useTransition } from 'react';
 import { useRouter } from 'next/navigation';
 import type { DraftVersion, DraftLesson } from '@aivirteach/admin-contract';
 import { courseMutation } from '@/app/(app)/courses/actions';
@@ -79,12 +79,15 @@ export function ModuleTree({
 }) {
   const router = useRouter();
   const [busy, setBusy] = useState(false);
+  const [refreshing, startRefresh] = useTransition();
+  const operating = busy || refreshing;
   const [message, setMessage] = useState('');
   async function mutation(
     path: string,
     method: 'PUT' | 'DELETE',
     body?: unknown,
   ) {
+    if (locked || operating) return;
     if (
       method === 'DELETE' &&
       !window.confirm('确认删除？该模块或课时的草稿内容将无法恢复。')
@@ -94,9 +97,15 @@ export function ModuleTree({
     onDirty('tree-operation')(true);
     const result = await settleAction(courseMutation(slug, path, method, body));
     setBusy(false);
-    onDirty('tree-operation')(false);
-    if (result.status === 'ok') router.refresh();
-    else setMessage(resultMessage(result));
+    if (result.status === 'ok') {
+      startRefresh(() => {
+        onDirty('tree-operation')(false);
+        router.refresh();
+      });
+    } else {
+      onDirty('tree-operation')(false);
+      setMessage(resultMessage(result));
+    }
   }
   function reorder(
     moduleIndex: number,
@@ -122,7 +131,7 @@ export function ModuleTree({
     void mutation('draft/order', 'PUT', { modules });
   }
   return (
-    <fieldset className="panel module-tree" disabled={busy}>
+    <fieldset className="panel module-tree" disabled={operating}>
       <h2>模块与课时</h2>
       {message && (
         <p className="error" role="alert">
@@ -140,21 +149,23 @@ export function ModuleTree({
             </h3>
             <div className="inline">
               <button
-                disabled={locked || busy || mi === 0}
+                disabled={locked || operating || mi === 0}
                 onClick={() => reorder(mi, -1)}
                 aria-label={`${m.title}模块上移`}
               >
                 ↑
               </button>
               <button
-                disabled={locked || busy || mi === draft.modules.length - 1}
+                disabled={
+                  locked || operating || mi === draft.modules.length - 1
+                }
                 onClick={() => reorder(mi, 1)}
                 aria-label={`${m.title}模块下移`}
               >
                 ↓
               </button>
               <button
-                disabled={locked || busy}
+                disabled={locked || operating}
                 onClick={() => void mutation(`draft/modules/${m.id}`, 'DELETE')}
               >
                 删除模块
@@ -207,21 +218,23 @@ export function ModuleTree({
                 </a>
                 <div className="inline">
                   <button
-                    disabled={locked || busy || li === 0}
+                    disabled={locked || operating || li === 0}
                     aria-label={`${l.title}课时上移`}
                     onClick={() => reorder(mi, -1, li)}
                   >
                     ↑
                   </button>
                   <button
-                    disabled={locked || busy || li === m.lessons.length - 1}
+                    disabled={
+                      locked || operating || li === m.lessons.length - 1
+                    }
                     aria-label={`${l.title}课时下移`}
                     onClick={() => reorder(mi, 1, li)}
                   >
                     ↓
                   </button>
                   <button
-                    disabled={locked || busy}
+                    disabled={locked || operating}
                     onClick={() =>
                       void mutation(`draft/lessons/${l.contentId}`, 'DELETE')
                     }

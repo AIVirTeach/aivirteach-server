@@ -1,10 +1,16 @@
+import { Suspense, startTransition, use, useState } from 'react';
 import { act, fireEvent, render, screen, within } from '@testing-library/react';
-import { vi, it, expect } from 'vitest';
+import { vi, it, expect, beforeEach } from 'vitest';
 import type { DraftVersion } from '@aivirteach/admin-contract';
 import { ModuleTree } from './module-tree';
 import { courseMutation } from '@/app/(app)/courses/actions';
 vi.mock('@/app/(app)/courses/actions', () => ({ courseMutation: vi.fn() }));
-vi.mock('next/navigation', () => ({ useRouter: () => ({ refresh: vi.fn() }) }));
+const refresh = vi.hoisted(() => vi.fn());
+vi.mock('next/navigation', () => ({ useRouter: () => ({ refresh }) }));
+beforeEach(() => {
+  vi.clearAllMocks();
+  refresh.mockReset();
+});
 const lesson = {
   id: 'l',
   contentId: 'first',
@@ -166,4 +172,88 @@ it('creates modules and lessons with required descriptions, minutes and activity
       content: { schemaVersion: 1, blocks: [] },
     }),
   );
+});
+
+it('blocks a second reorder until refreshed module order is available', async () => {
+  vi.mocked(courseMutation).mockResolvedValue({ status: 'ok', data: {} });
+  let finishRefresh!: (value: DraftVersion) => void;
+  const pending = new Promise<DraftVersion>((resolve) => {
+    finishRefresh = resolve;
+  });
+  function Page({ data }: { data: DraftVersion | Promise<DraftVersion> }) {
+    const current = data instanceof Promise ? use(data) : data;
+    const [dirty, setDirty] = useState(false);
+    return (
+      <>
+        <button disabled={dirty}>Publish</button>
+        <ModuleTree
+          slug="course"
+          draft={current}
+          onDirty={() => setDirty}
+          locked={dirty}
+        />
+      </>
+    );
+  }
+  function Route() {
+    const [data, setData] = useState<DraftVersion | Promise<DraftVersion>>(
+      draft,
+    );
+    refresh.mockImplementationOnce(() =>
+      startTransition(() => setData(pending)),
+    );
+    return (
+      <Suspense fallback={<p>Loading route</p>}>
+        <Page data={data} />
+      </Suspense>
+    );
+  }
+  render(<Route />);
+  await act(async () =>
+    fireEvent.click(screen.getByRole('button', { name: 'Two模块上移' })),
+  );
+  expect(screen.getByRole('button', { name: 'Second课时上移' })).toBeDisabled();
+  expect(screen.getByRole('button', { name: 'Publish' })).toBeDisabled();
+  await act(async () =>
+    fireEvent.click(screen.getByRole('button', { name: 'Second课时上移' })),
+  );
+  expect(courseMutation).toHaveBeenCalledTimes(1);
+  await act(async () =>
+    finishRefresh({ ...draft, modules: [draft.modules[1], draft.modules[0]] }),
+  );
+  expect(screen.getByRole('button', { name: 'Second课时上移' })).toBeEnabled();
+  expect(screen.getByRole('button', { name: 'Publish' })).toBeEnabled();
+  await act(async () =>
+    fireEvent.click(screen.getByRole('button', { name: 'Second课时上移' })),
+  );
+  expect(courseMutation).toHaveBeenLastCalledWith(
+    'course',
+    'draft/order',
+    'PUT',
+    {
+      modules: [
+        { id: 'm2', lessons: [] },
+        { id: 'm', lessons: ['second', 'first'] },
+      ],
+    },
+  );
+});
+it('unlocks directory operations after a rejected request without refreshing', async () => {
+  vi.mocked(courseMutation).mockRejectedValue(new Error('connection dropped'));
+  const mark = vi.fn();
+  render(
+    <ModuleTree
+      slug="course"
+      draft={draft}
+      onDirty={() => mark}
+      locked={false}
+    />,
+  );
+  await act(async () =>
+    fireEvent.click(screen.getByRole('button', { name: 'Two模块上移' })),
+  );
+  expect(screen.getByRole('button', { name: 'Two模块上移' })).toBeEnabled();
+  expect(mark).toHaveBeenLastCalledWith(false);
+  expect(refresh).not.toHaveBeenCalled();
+  expect(screen.getByRole('alert')).toHaveTextContent('操作可能已完成');
 });
