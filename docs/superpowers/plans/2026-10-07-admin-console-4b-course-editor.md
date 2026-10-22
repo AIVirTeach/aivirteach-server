@@ -2,7 +2,7 @@
 
 ## 2026-10-23 范围补充
 
-后台 shadcn UI 改造先独立交付。Lab V2 与预览共用 client 渲染组件的后续工作见 [Lab V2 统一渲染计划](2026-10-23-lab-v2-shared-course-renderer.md)，状态为尚未实施。下面的 V1 范围是 4b 原实施边界，不能据此宣称 V2 已接线；“迁移 B”仍指旧内容字段清理。
+后台 shadcn UI 改造先独立交付。Lab V2 与预览共用 client 渲染组件的后续工作见 [Lab V2 统一渲染计划](2026-10-23-lab-v2-shared-course-renderer.md)，客户端实现见 client PR #21，浏览器验收仍待执行。下面的 V1 范围是 4b 原实施边界，不能据此宣称 V2 已接线；“迁移 B”仍指旧内容字段清理。
 
 ## 2026-10-22 pstack 检查
 
