@@ -1,4 +1,11 @@
 'use client';
+import { ArrowUpIcon, ArrowDownIcon } from 'lucide-react';
+import { ConfirmAction } from '@/components/ui/confirm-action';
+import { Button } from '@/components/ui/button';
+import {
+  NativeSelect,
+  NativeSelectOption,
+} from '@/components/ui/native-select';
 import { useEffect, useMemo, useReducer, useRef, useState } from 'react';
 import {
   BLOCK_REGISTRY,
@@ -18,6 +25,7 @@ import { courseMutation } from '@/app/(app)/courses/actions';
 import { resultMessage } from '@/lib/action-result';
 import { reduce, type EditorState, type EditorAction } from './editor-state';
 import { createAutosave, type SaveStatus } from './autosave';
+import { blockSummary } from './block-summary';
 import { BlockForm } from './block-form';
 import { PreviewFrame } from './preview-frame';
 import { AssessmentPanel } from './assessment-panel';
@@ -134,7 +142,7 @@ export function LessonEditor({
     if (id) dispatch({ type: 'select', id });
   }, []);
   return (
-    <main className="editor-page">
+    <main id="main-content" tabIndex={-1} className="editor-page">
       <div className="editor-toolbar">
         <div>
           <a className="breadcrumb" href={`/courses/${slug}`}>
@@ -153,22 +161,30 @@ export function LessonEditor({
             {statuses[saveStatus]}
           </span>
           {saveStatus === 'failed' && (
-            <button onClick={() => void queue.current?.retry()}>
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => void queue.current?.retry()}
+            >
               重试保存
-            </button>
+            </Button>
           )}
-          <button
+          <Button
+            size="sm"
+            variant="outline"
             disabled={!state.past.length}
             onClick={() => dispatch({ type: 'undo' })}
           >
             撤销
-          </button>
-          <button
+          </Button>
+          <Button
+            size="sm"
+            variant="outline"
             disabled={!state.future.length}
             onClick={() => dispatch({ type: 'redo' })}
           >
             重做
-          </button>
+          </Button>
         </div>
       </div>
       {saveMessage && (
@@ -217,24 +233,24 @@ export function LessonEditor({
             <div className="add-block">
               <label className="field">
                 内容类型
-                <select
+                <NativeSelect
                   value={blockType}
                   onChange={(e) => setBlockType(e.target.value as BlockType)}
                 >
                   {BLOCK_TYPES.map((type) => (
-                    <option key={type} value={type}>
+                    <NativeSelectOption key={type} value={type}>
                       {BLOCK_REGISTRY[type].label}
-                    </option>
+                    </NativeSelectOption>
                   ))}
-                </select>
+                </NativeSelect>
               </label>
-              <button
-                className="primary"
+              <Button
+                variant="default"
                 disabled={state.blocks.length >= 300}
                 onClick={() => dispatch({ type: 'add', blockType })}
               >
                 添加内容
-              </button>
+              </Button>
             </div>
             {state.blocks.length >= 300 && <p>已达到 300 个块上限</p>}
             {!state.blocks.length && (
@@ -261,104 +277,116 @@ export function LessonEditor({
                     key={b.id}
                     className={`block-card ${state.selectedId === b.id ? 'selected' : ''}`}
                   >
-                    <button
-                      className="block-select"
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      aria-pressed={state.selectedId === b.id}
+                      className="block-select h-auto w-full flex-wrap justify-start gap-2 rounded-none border-0 bg-transparent p-0 text-left whitespace-normal shadow-none hover:bg-transparent"
                       onClick={() => dispatch({ type: 'select', id: b.id })}
                     >
                       <span className="block-index">
                         {String(i + 1).padStart(2, '0')}
                       </span>
                       <strong>{entry?.label ?? b.type}</strong>
-                      <span className="block-summary">
-                        {JSON.stringify(b.props).slice(0, 90)}
-                      </span>
-                    </button>
+                      <span className="block-summary">{blockSummary(b)}</span>
+                    </Button>
                     <div className="block-actions">
-                      <button
+                      <Button
+                        size="sm"
+                        variant="outline"
                         onClick={() => dispatch({ type: 'select', id: b.id })}
                       >
                         编辑
-                      </button>
-                      <button
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="outline"
                         disabled={state.blocks.length >= 300}
                         onClick={() =>
                           dispatch({ type: 'duplicate', id: b.id })
                         }
                       >
                         复制
-                      </button>
-                      <button
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="outline"
                         disabled={i === 0}
                         aria-label={`第${i + 1}块上移`}
                         onClick={() =>
                           dispatch({ type: 'move', id: b.id, direction: -1 })
                         }
                       >
-                        ↑
-                      </button>
-                      <button
+                        <ArrowUpIcon aria-hidden="true" />
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="outline"
                         disabled={i === state.blocks.length - 1}
                         aria-label={`第${i + 1}块下移`}
                         onClick={() =>
                           dispatch({ type: 'move', id: b.id, direction: 1 })
                         }
                       >
-                        ↓
-                      </button>
-                      <button
-                        onClick={() => {
-                          if (
-                            window.confirm('删除这个内容块？可以使用撤销恢复。')
-                          )
-                            dispatch({ type: 'remove', id: b.id });
-                        }}
+                        <ArrowDownIcon aria-hidden="true" />
+                      </Button>
+                      <ConfirmAction
+                        title="删除内容块？"
+                        description="删除后可以使用撤销恢复。"
+                        onConfirm={() => dispatch({ type: 'remove', id: b.id })}
                       >
-                        删除
-                      </button>
+                        <Button variant="ghost" className="text-destructive">
+                          删除
+                        </Button>
+                      </ConfirmAction>
                     </div>
                     {own.map((p, index) => (
                       <p className={p.level} key={index}>
                         {p.message}
                       </p>
                     ))}
+                    {selected?.id === b.id && (
+                      <BlockForm
+                        key={selected.id}
+                        slug={slug}
+                        block={selected}
+                        assets={assets}
+                        onAssets={(a) =>
+                          setAssets((current) => [
+                            ...current.filter((x) => x.id !== a.id),
+                            a,
+                          ])
+                        }
+                        onBusy={(busy) =>
+                          setPendingUploads((count) => count + (busy ? 1 : -1))
+                        }
+                        onUploadStart={(requestId) =>
+                          dispatch({
+                            type: 'start-upload',
+                            id: selected.id,
+                            requestId,
+                          })
+                        }
+                        onUploadFinish={(requestId, assetId) =>
+                          dispatch({
+                            type: 'finish-upload',
+                            id: selected.id,
+                            requestId,
+                            assetId,
+                          })
+                        }
+                        onPatch={(props) =>
+                          dispatch({ type: 'patch', id: selected.id, props })
+                        }
+                        onChange={(props) =>
+                          dispatch({ type: 'update', id: selected.id, props })
+                        }
+                      />
+                    )}
                   </article>
                 );
               })}
             </div>
-            {selected && (
-              <BlockForm
-                key={selected.id}
-                slug={slug}
-                block={selected}
-                assets={assets}
-                onAssets={(a) =>
-                  setAssets((current) => [
-                    ...current.filter((x) => x.id !== a.id),
-                    a,
-                  ])
-                }
-                onBusy={(busy) =>
-                  setPendingUploads((count) => count + (busy ? 1 : -1))
-                }
-                onUploadStart={(requestId) =>
-                  dispatch({ type: 'start-upload', id: selected.id, requestId })
-                }
-                onUploadFinish={(requestId, assetId) =>
-                  dispatch({
-                    type: 'finish-upload',
-                    id: selected.id,
-                    requestId,
-                    assetId,
-                  })
-                }
-                onPatch={(props) =>
-                  dispatch({ type: 'patch', id: selected.id, props })
-                }
-                onChange={(props) =>
-                  dispatch({ type: 'update', id: selected.id, props })
-                }
-              />
-            )}
           </section>
           <section className="panel">
             <details>

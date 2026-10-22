@@ -1,4 +1,11 @@
 'use client';
+import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import { Textarea } from '@/components/ui/textarea';
+import {
+  NativeSelect,
+  NativeSelectOption,
+} from '@/components/ui/native-select';
 import { z } from 'zod';
 import {
   BLOCK_REGISTRY,
@@ -86,18 +93,18 @@ function Field({
     return (
       <label className="field">
         {name}
-        <select
+        <NativeSelect
           value={String(value ?? '')}
           onChange={(e) =>
             onChange(options.find((v) => String(v) === e.target.value))
           }
         >
           {options.map((v) => (
-            <option key={String(v)} value={String(v)}>
+            <NativeSelectOption key={String(v)} value={String(v)}>
               {String(v)}
-            </option>
+            </NativeSelectOption>
           ))}
-        </select>
+        </NativeSelect>
       </label>
     );
   if (schema.type === 'object') {
@@ -133,21 +140,23 @@ function Field({
                 onChange(values.map((x, j) => (i === j ? next : x)))
               }
             />
-            <button
+            <Button
+              variant="outline"
               type="button"
               onClick={() => onChange(values.filter((_, j) => i !== j))}
             >
               删除第 {i + 1} 项
-            </button>
+            </Button>
           </div>
         ))}
-        <button
+        <Button
+          variant="outline"
           type="button"
           disabled={values.length >= (schema.maxItems ?? Infinity)}
           onClick={() => onChange([...values, initial(item)])}
         >
           添加{name}
-        </button>
+        </Button>
       </fieldset>
     );
   }
@@ -155,7 +164,7 @@ function Field({
     return (
       <label className="field">
         {name}
-        <input
+        <Input
           type="number"
           min={schema.minimum}
           max={schema.maximum}
@@ -169,7 +178,7 @@ function Field({
   return (
     <label className="field">
       {name}
-      <textarea
+      <Textarea
         rows={name.includes('代码') ? 6 : 3}
         maxLength={schema.maxLength}
         value={typeof value === 'string' ? value : ''}
@@ -196,7 +205,7 @@ function TableForm({
         <div className="inline" key={i}>
           <label className="field">
             列 {i + 1}
-            <input
+            <Input
               value={column}
               onChange={(e) =>
                 onChange({
@@ -208,7 +217,8 @@ function TableForm({
               }
             />
           </label>
-          <button
+          <Button
+            variant="outline"
             type="button"
             disabled={columns.length <= 1}
             onClick={() =>
@@ -219,10 +229,11 @@ function TableForm({
             }
           >
             删列
-          </button>
+          </Button>
         </div>
       ))}
-      <button
+      <Button
+        variant="outline"
         type="button"
         disabled={columns.length >= 8}
         onClick={() =>
@@ -233,14 +244,14 @@ function TableForm({
         }
       >
         添加列
-      </button>
+      </Button>
       {rows.map((row, i) => (
         <fieldset key={i}>
           <legend>第 {i + 1} 行</legend>
           {columns.map((_, j) => (
             <label className="field" key={j}>
               单元格 {i + 1}-{j + 1}
-              <input
+              <Input
                 value={row[j] ?? ''}
                 onChange={(e) =>
                   onChange({
@@ -257,17 +268,19 @@ function TableForm({
               />
             </label>
           ))}
-          <button
+          <Button
+            variant="outline"
             type="button"
             onClick={() =>
               onChange({ columns, rows: rows.filter((_, k) => k !== i) })
             }
           >
             删除行
-          </button>
+          </Button>
         </fieldset>
       ))}
-      <button
+      <Button
+        variant="outline"
         type="button"
         disabled={rows.length >= 50}
         onClick={() =>
@@ -275,7 +288,7 @@ function TableForm({
         }
       >
         添加行
-      </button>
+      </Button>
     </div>
   );
 }

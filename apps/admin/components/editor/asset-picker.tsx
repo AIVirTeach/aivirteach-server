@@ -1,4 +1,9 @@
 'use client';
+import { Input } from '@/components/ui/input';
+import {
+  NativeSelect,
+  NativeSelectOption,
+} from '@/components/ui/native-select';
 import { useState } from 'react';
 import type { CourseAsset } from '@aivirteach/admin-contract';
 import { uploadAssetAction } from '@/app/(app)/courses/actions';
@@ -28,18 +33,18 @@ export function AssetPicker({
     <div>
       <label className="field">
         课程图片
-        <select value={value} onChange={(e) => onChange(e.target.value)}>
-          <option value="">请选择图片</option>
+        <NativeSelect value={value} onChange={(e) => onChange(e.target.value)}>
+          <NativeSelectOption value="">请选择图片</NativeSelectOption>
           {assets.map((a) => (
-            <option key={a.id} value={a.id}>
+            <NativeSelectOption key={a.id} value={a.id}>
               {a.altText || a.id}
-            </option>
+            </NativeSelectOption>
           ))}
-        </select>
+        </NativeSelect>
       </label>
       <label className="field">
         上传图片
-        <input
+        <Input
           type="file"
           accept="image/png,image/jpeg,image/webp,image/gif"
           disabled={busy}

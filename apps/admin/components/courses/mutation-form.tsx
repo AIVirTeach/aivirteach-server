@@ -1,4 +1,7 @@
 'use client';
+import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import { Textarea } from '@/components/ui/textarea';
 import { useState, useTransition, type ReactNode } from 'react';
 import { useRouter } from 'next/navigation';
 import { courseMutation } from '@/app/(app)/courses/actions';
@@ -66,9 +69,9 @@ export function MutationForm({
     >
       <fieldset disabled={locked}>{children}</fieldset>
       <div className="form-footer">
-        <button className="primary" disabled={locked} type="submit">
+        <Button variant="default" disabled={locked} type="submit">
           {locked ? '保存中…' : label}
-        </button>
+        </Button>
         <span role="status">{message || (dirty ? '有未保存改动' : '')}</span>
         {message.includes('登录已过期') && (
           <a href="/login" target="_blank" rel="noreferrer">
@@ -104,14 +107,14 @@ export function TextField({
     <label className="field">
       {label}
       {multiline ? (
-        <textarea
+        <Textarea
           name={name}
           defaultValue={value}
           rows={3}
           required={required}
         />
       ) : (
-        <input
+        <Input
           name={name}
           defaultValue={value}
           type={type}

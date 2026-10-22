@@ -1,4 +1,8 @@
 'use client';
+import { PlusIcon, ArrowUpRightIcon } from 'lucide-react';
+import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import { Badge } from '@/components/ui/badge';
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import type { CourseListItem } from '@aivirteach/admin-contract';
@@ -13,20 +17,21 @@ export function CourseList({ courses }: { courses: CourseListItem[] }) {
   const router = useRouter();
   useDepartureGuard(dirty || busy);
   return (
-    <main className="studio-page">
+    <main id="main-content" tabIndex={-1} className="studio-page">
       <div className="page-heading">
         <div>
           <p className="eyebrow">COURSE STUDIO</p>
           <h1>课程</h1>
-          <p className="muted">把知识写成一步步可以完成的学习体验。</p>
+          <p className="muted">管理课程内容、编辑草稿并发布新版本。</p>
         </div>
-        <button
-          className="primary"
+        <Button
+          variant="default"
           onClick={() => setOpen(!open)}
           disabled={dirty || busy}
         >
+          <PlusIcon aria-hidden="true" />
           新建课程
-        </button>
+        </Button>
       </div>
       {open && (
         <section className="panel">
@@ -54,11 +59,11 @@ export function CourseList({ courses }: { courses: CourseListItem[] }) {
             <fieldset disabled={busy}>
               <label className="field">
                 课程名称
-                <input name="title" maxLength={120} required autoFocus />
+                <Input name="title" maxLength={120} required autoFocus />
               </label>
               <label className="field">
                 课程标识
-                <input
+                <Input
                   name="slug"
                   minLength={3}
                   maxLength={60}
@@ -68,9 +73,9 @@ export function CourseList({ courses }: { courses: CourseListItem[] }) {
                 />
                 <small>使用小写字母、数字和短横线，创建后不能修改。</small>
               </label>
-              <button type="submit" className="primary">
+              <Button type="submit" variant="default">
                 {busy ? '创建中…' : '创建课程'}
-              </button>
+              </Button>
             </fieldset>
             {error && (
               <p role="alert" className="error">
@@ -88,9 +93,9 @@ export function CourseList({ courses }: { courses: CourseListItem[] }) {
             key={c.slug}
           >
             <div className="inline">
-              <span className="badge">
+              <Badge variant="secondary">
                 {c.hasDraft ? '有草稿' : c.published ? '已发布' : '未发布'}
-              </span>
+              </Badge>
               <small>
                 {c.latestPublishedVersion
                   ? `v${c.latestPublishedVersion}`
@@ -102,7 +107,10 @@ export function CourseList({ courses }: { courses: CourseListItem[] }) {
             <div className="course-stats">
               <span>{c.lessonCount} 个课时</span>
               <span>{c.activeEnrollments} 名在学学员</span>
-              <span aria-hidden="true">↗</span>
+              <ArrowUpRightIcon
+                aria-hidden="true"
+                className="ml-auto size-4 text-primary"
+              />
             </div>
           </a>
         ))}

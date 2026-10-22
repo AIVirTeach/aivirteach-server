@@ -43,7 +43,6 @@ const draft: CourseDraftRead = {
 beforeEach(() => {
   vi.clearAllMocks();
   refresh.mockReset();
-  vi.spyOn(window, 'confirm').mockReturnValue(true);
 });
 it('locks all editable fields while publishing and unlocks on transport failure', async () => {
   let reject!: (reason: Error) => void;
@@ -56,6 +55,8 @@ it('locks all editable fields while publishing and unlocks on transport failure'
   render(<CourseDetail course={course} draft={draft} />);
   expect(screen.getByLabelText('课程简介')).toHaveValue('Existing description');
   fireEvent.click(screen.getByRole('button', { name: '发布课程' }));
+  expect(courseMutation).not.toHaveBeenCalled();
+  fireEvent.click(screen.getByRole('button', { name: '确认发布' }));
   expect(screen.getByLabelText('课程名称')).toBeDisabled();
   expect(screen.getByLabelText('模块名称')).toBeDisabled();
   await act(async () => reject(new Error('connection dropped')));

@@ -93,7 +93,6 @@ it('retains text on unauthorized, retries the same content, and never hydrates f
 });
 it('duplicates, reorders, deletes, undoes and redoes blocks through the editor controls', () => {
   vi.useFakeTimers();
-  vi.spyOn(window, 'confirm').mockReturnValue(true);
   render(
     <LessonEditor
       slug="course"
@@ -108,6 +107,7 @@ it('duplicates, reorders, deletes, undoes and redoes blocks through the editor c
   expect(screen.getByText('2 / 300 块')).toBeInTheDocument();
   fireEvent.click(screen.getByRole('button', { name: '第2块上移' }));
   fireEvent.click(screen.getAllByRole('button', { name: '删除' })[0]);
+  fireEvent.click(screen.getByRole('button', { name: '确认删除' }));
   expect(screen.getByText('1 / 300 块')).toBeInTheDocument();
   fireEvent.click(screen.getByRole('button', { name: '撤销' }));
   expect(screen.getByText('2 / 300 块')).toBeInTheDocument();

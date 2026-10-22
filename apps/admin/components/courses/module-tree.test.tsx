@@ -66,7 +66,6 @@ const draft: DraftVersion = {
   ],
 };
 it('reorders complete module and lesson permutations, deletes with confirmation', async () => {
-  vi.spyOn(window, 'confirm').mockReturnValue(true);
   vi.mocked(courseMutation).mockResolvedValue({ status: 'ok', data: {} });
   render(
     <ModuleTree
@@ -106,6 +105,9 @@ it('reorders complete module and lesson permutations, deletes with confirmation'
   );
   await act(async () =>
     fireEvent.click(screen.getAllByRole('button', { name: '删除' })[0]),
+  );
+  await act(async () =>
+    fireEvent.click(screen.getByRole('button', { name: '确认删除' })),
   );
   expect(courseMutation).toHaveBeenLastCalledWith(
     'course',
