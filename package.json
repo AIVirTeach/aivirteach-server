@@ -12,5 +12,8 @@
     "test:e2e": "npm run test:e2e --workspaces --if-present",
     "lint": "npm run lint --workspaces --if-present",
     "db:up": "docker compose up -d"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.64.1"
   }
 }

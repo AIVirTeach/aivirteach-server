@@ -2,7 +2,7 @@
 
 ## 2026-10-22 pstack 检查
 
-状态：A 的后端和后台界面已在 `feat/admin-course-editor` 实现，正在完成非浏览器验证。4a 已由 server PR #24 合并；client 渲染器和预览页已由 client PR #14 合并。用户于本次实施中要求暂不使用浏览器，因此 Task 9 的浏览器与生产验收仍未完成，本计划保留。下方原任务勾选为历史计划，不能当作当前执行记录；以 [验证记录](../../verification/admin-course-editor.md) 为准。
+状态：A 的后端和后台界面已在 `feat/admin-course-editor` 实现，已通过单元测试、本地数据库 E2E、类型检查和生产构建。4a 已由 server PR #24 合并；client 渲染器和预览页已由 client PR #14 合并。用户于本次实施中要求暂不使用浏览器，因此 Task 9 的浏览器与生产验收仍未完成，本计划保留。下方原任务勾选为历史计划，不能当作当前执行记录；以 [验证记录](../../verification/admin-course-editor.md) 为准。
 
 开工前需补齐的合同与验收：
 

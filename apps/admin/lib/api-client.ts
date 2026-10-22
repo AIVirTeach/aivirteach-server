@@ -7,9 +7,9 @@ export async function apiFetch(
   path: string,
   init: RequestInit = {},
 ): Promise<Response> {
-  const base = apiBaseUrl();
   const token = await readSessionToken();
   if (!token) redirect('/login');
+  const base = apiBaseUrl();
 
   const headers = new Headers(init.headers);
   headers.set('authorization', `Bearer ${token}`);
@@ -29,4 +29,19 @@ export async function apiFetch(
     redirect('/login');
   }
   return response;
+}
+
+export async function apiFetchNoRedirect(
+  path: string,
+  init: RequestInit = {},
+): Promise<Response> {
+  const token = await readSessionToken();
+  if (!token) return new Response(null, { status: 401 });
+  const headers = new Headers(init.headers);
+  headers.set('authorization', `Bearer ${token}`);
+  return fetch(`${apiBaseUrl()}${path}`, {
+    ...init,
+    headers,
+    cache: 'no-store',
+  });
 }

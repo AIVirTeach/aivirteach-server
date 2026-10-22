@@ -1,0 +1,9 @@
+ts	phase	decision	why	evidence	result
+2026-10-22T13:41:34Z	frame	Isolate A implementation and preserve primary-tree edits	User selected A before V2 work	docs/superpowers/plans/2026-10-07-admin-console-4b-course-editor.md	open
+2026-10-22T13:56:03.796166+00:00	design	Choose per-lesson reducer and revision save queue	Two designs and independent judge found no need for multi-lesson buffers	apps/admin/components/editor/autosave.ts	implemented
+2026-10-22T13:56:03.796260+00:00	database	Use isolated local PostgreSQL on 55439	Exercise transactions without production access	apps/api/test/admin-course-editor.e2e-spec.ts	8 tests passed
+2026-10-22T13:56:03.796263+00:00	review	Add effective metadata read contract	Avoid clearing existing values when editing title	packages/admin-contract/src/courses.ts	regression passed
+2026-10-22T13:56:03.796265+00:00	verification	Suspend browser acceptance after user instruction	User requested no browser for now	docs/verification/admin-course-editor.md	NOT VERIFIED
+2026-10-22T14:05:47.181100+00:00	review	Fix upload races and action failure recovery	Preserve newer user input and pending-operation guards	apps/admin/components/editor/lesson-editor.test.tsx	passed
+2026-10-22T14:05:47.181100+00:00	verification	Finish nonbrowser checks	Honor user browser suspension	docs/verification/admin-course-editor.md	920 tests; types and builds passed
+2026-10-22T14:05:47.181100+00:00	delivery	Use gh for pull request	Origin CLI unavailable	docs/verification/admin-course-editor.md	no merge or deployment
