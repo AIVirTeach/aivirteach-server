@@ -1,5 +1,14 @@
 # 运营后台 4c：邀请、配额、审计页面与接口 Implementation Plan
 
+## 2026-10-22 pstack 检查
+
+状态：尚未实施。当前 admin 只有登录和首页骨架，学员/配额/审计 HTTP 页面及相应列表接口尚未落地。4a 代码已合并，真实登录可用性仍需核实。
+
+- **配额写入与审计（Task 4）**：`AdminService.grantQuota/grantTokenQuota` 先写流水，再单独写审计。审计失败会让请求报错，但配额已经到账；重试可能重复发放。将两者纳入同一事务，并设计请求标识的幂等策略及同标识不同 payload 的拒绝规则。若需要新增持久化字段/索引，应修订“本块无迁移”的假设。验收包含审计失败回滚、响应丢失后重试、重复点击；仅禁用按钮不足以处理重试。
+- **余额数据源（Task 5）**：`GetUsageReport.execute` 从 report 的活动用户生成 userIds，再查询累计额度；必须在读取层合并“有 token 授予无活动”的用户，之后统一计算余额，不能只在页面补零。保留 groupBy=course/day 的原语义，覆盖窗口外消费及负流水。
+- **错误处理（Task 7/8）**：当前 apiFetch 在 401 时跳转登录。需明确写表单的会话过期行为，避免成功状态不明时自动重发邀请或额度；与 4b 的不跳转写请求 helper 统一实现，避免两份合同。
+- **验收前提（Task 10）**：显式使用本地数据库，测试运营登录、邀请接受、额度到账与 OPERATOR 审计闭环。上线顺序使用 README 的最新版本：先迁移/建运营，再部署 API，最后 admin。
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** 让运营在管理后台里邀请学员、发配额（分钟 / token）、查看 token 余额与用量、翻审计记录，不再用 CLI 做这些日常操作。

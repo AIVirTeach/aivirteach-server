@@ -150,4 +150,4 @@
 - **新增接口：** `GET /draft`、`POST /admin/courses`（新建课程）、`POST /admin/courses/:slug/assets`（素材上传）；`POST /draft` 无已发版版本时返回现有草稿；未发版课程的唯一草稿不可丢弃（409）。
 - **摄取与回填：** `course:create` 摄取时同时写 `body` 与 `content`（Markdown→块转换，只在 CLI 里加载 remark）；回填命令同样转换。
 - **第 9 节第 6 条** 的"引用的图片存在"在块之后还包括每个 `image.assetId` 必须属于本课程。
-- **实施：** 路径改为 monorepo 的 `apps/api/...`；任务顺序与"接入块"的改动见 `plans/2026-09-30-course-content-model.md` 开头的修订节和 `plans/2026-10-01-lesson-blocks.md`。
+- **实施：** 主体与课时块代码已合并，路径为 monorepo 的 `apps/api/...`。剩余迁移 B 见 `plans/2026-09-30-course-content-model.md`；后台编辑与预览发布验收见 `plans/2026-10-07-admin-console-4b-course-editor.md`。

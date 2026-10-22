@@ -1,5 +1,26 @@
 # 运营后台 4b：课程列表、块编辑器、预览与发版 Implementation Plan
 
+## 2026-10-22 pstack 检查
+
+状态：A 的后端和后台界面已在 `feat/admin-course-editor` 实现，正在完成非浏览器验证。4a 已由 server PR #24 合并；client 渲染器和预览页已由 client PR #14 合并。用户于本次实施中要求暂不使用浏览器，因此 Task 9 的浏览器与生产验收仍未完成，本计划保留。下方原任务勾选为历史计划，不能当作当前执行记录；以 [验证记录](../../verification/admin-course-editor.md) 为准。
+
+开工前需补齐的合同与验收：
+
+- **测评创建缺口（Task 8）**：`DraftContentService.createLesson` 不创建 assessment，现有控制器只有 PATCH assessment。新课程无法凭空取得 assessmentId。需设计创建测评的 API、课程归属校验和共享 contract，并增加“从空课程创建课时及测评”的测试；不能仅测试修改种子数据里的测评。因此“API 只补两个读接口”的原假设不成立。
+- **发版错误定位（Task 3）**：`validateDraftForPublish` 当前返回 `string[]`，没有 contentId/blockId。保留现有 problems 文案兼容性，另补结构化定位信息的合同后，才实现跳转；不要解析中文标题猜课时 ID。验收包含同名课时、课程级错误及 40 条错误完整展示。
+- **发版人数（Task 3）**：发布返回 DraftSummary，没有 activeEnrollments。定义人数来自刷新后的课程列表还是发布事务的快照，并让提示准确反映其含义；不能把列表缓存的旧人数当作发布时精确人数。
+- **无草稿入口（Task 3）**：已发版且无草稿时 GET draft 会失败。课程页先显示版本状态和“创建草稿”，不应无条件 getDraft；覆盖首次进入、发版后返回、丢弃草稿后返回。
+- **新建必填项（Task 3/8）**：按 `draft.schemas.ts` 收集模块 description/estimatedMinutes、课时 contentId/estimatedMinutes/activity，明确默认值与可编辑字段。自动保存仅更新 content，不能顺便覆盖这些字段。
+- **预览与学员页面（Task 9）**：client PR #14 只接入 V1；当前 `app/workspace/workspace-v2.tsx` 仍用静态课程 HTML iframe。4b 验收必须明确使用 V1；若产品要求 V2 同步看到后台编辑结果，需先补跨仓库接线设计，不能宣称当前发版会更新 V2。
+- **保存和发版顺序（Task 8/9）**：有 dirty/saving/failed 的课时不能直接发版或丢弃草稿。等待最终保存成功后再发布；401、网络失败和其他窗口发布导致的 409 均保留本地内容。测试保存中再次编辑并立即发版的路径。
+- **依赖（Task 4/6）**：`apps/admin/package.json` 目前未声明 lesson-blocks 和 zod；实施时显式声明实际使用的 workspace 依赖并接入构建顺序，不能依赖根目录偶然可解析的包。
+
+从已完成的课时块实施计划转入的发布验收：
+
+- [ ] 核实已部署 client 的 `NEXT_PUBLIC_ADMIN_ORIGIN` 与 admin 的 `NEXT_PUBLIC_CLIENT_ORIGIN`，完成真实 iframe ready/payload 往返。
+- [ ] 在学员 V1 验证 blocks 渲染、无 blocks 时 Markdown 回退及深色主题警告可读性。client PR #14 尚未记录这些浏览器验收。
+- [ ] 记录部署 URL、版本与实际结果；已合并不等于上述线上验收完成。
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** 运营在管理后台里从新建课程到发版全程不用 CLI：课程列表与新建、课程元信息与模块 / 课时树、块编辑器（块卡片 + 属性面板 + 自动保存 + 撤销重做 + 图片素材上传）、client 真实渲染预览、测评题、发版与丢弃草稿。
@@ -11,7 +32,7 @@
 **Spec:** `docs/superpowers/specs/2026-10-01-admin-console-design.md` 第 6（课程页、编辑器）、7、9、10 节；`docs/superpowers/specs/2026-10-01-lesson-blocks-design.md` 第 4、6、7、9、12 节。
 
 **前置：**
-- 4a 已合并（`OperatorAuthGuard`、`@CurrentOperator()`、`packages/admin-contract`、`apps/admin` 登录壳、`apiFetch`）。**4a 在 server PR #24，截至本计划写成时未合并。**
+- 4a 已在 server PR #24 合并；上线与登录验收仍见 4a 计划。
 - client 的块渲染器与 `/preview/lesson` 已合并（client PR #14，2026-10-07）。预览页的约定：收到 `{ type: "lesson-preview", lesson: { title, moduleTitle, blocks }, assets, problems }` 才渲染；加载后向父窗口发 `{ type: "lesson-preview-ready" }`；只信 `NEXT_PUBLIC_ADMIN_ORIGIN` 对应来源。
 - 与 4c 互不依赖，可并行。
 

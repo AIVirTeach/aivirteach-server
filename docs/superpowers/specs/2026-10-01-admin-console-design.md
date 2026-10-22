@@ -165,7 +165,7 @@ aivirteach-server/
 
 ## 11. 实施顺序与拆分
 
-**实施状态（2026-10-05）：** 步骤 0、1 已完成并上线（monorepo 骨架、`packages/lesson-blocks`、课程内容模型与 admin API、迁移 A 与回填）。client 的块渲染器与 `/preview/lesson` 已写好，在 client 仓库 `feat/lesson-blocks-renderer` 分支（已变基到最新 main），**尚未合并**，是 4b 的前置。4a（运营登录、`OperatorAuthGuard`、`operator:*` CLI、`apps/admin` 骨架与登录页、`packages/admin-contract`）代码已实现，生产上线步骤见 README「运营后台上线顺序（4a）」，等 Owen 确认后执行；4b / 4c 还没开始。4a 的计划：`docs/superpowers/plans/2026-10-05-admin-console-4a-operator-auth.md`；4c 的计划：`docs/superpowers/plans/2026-10-05-admin-console-4c-operations-pages.md`。4b 的计划待 client 渲染器合并后再写。
+**实施状态（2026-10-22 核对）：** 课程内容模型与课时块 server 代码已合并（PR #20），client 渲染器与预览页已合并（client PR #14）。4a 运营登录与后台骨架已合并（PR #24），本地 E2E、浏览器登录验收及生产状态仍需核实。4b 课程编辑已在 `feat/admin-course-editor` 实现，浏览器与生产验收待完成；4c 运营页面尚未实施。各计划开头附本次 pstack 静态审查结果；client V2 仍展示静态 HTML，不能将 V1 的块渲染完成等同于 V2 已接通。
 
 一份 spec，三份 plan，另加前置的搬迁：
 

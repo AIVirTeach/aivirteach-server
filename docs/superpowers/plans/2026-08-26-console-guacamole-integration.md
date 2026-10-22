@@ -1,5 +1,11 @@
 # Console/RDP 远程桌面接入（改接 Guacamole）Implementation Plan
 
+## 2026-10-22 状态核对
+
+主体实现已完成，保留的原因是 Task 5/6 手工验证及 Task 7 部署/学员全流程没有完整收尾记录。server PR #22 也因此保留此计划。未核实生产，不能把旧的空复选框直接解释为线上未部署。
+
+后续只执行收尾核查：先盘点当前部署版本与配置，再验证经 server 转发的票据换取、桌面键鼠、超时/失败、离开页面清理；把实际结果补入部署清单。不要按旧 Task 2–6 重写现有实现，也不要仅凭旧计划重复设置生产变量。
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** 把 `aivirteach-server`/`aivirteach-client` 里"学员点一下按钮，浏览器里看到、操作 Labs VM 真实桌面"这条链路，从已实现的 IronRDP+websockify 换成对接 Labs 同事已经部署的 Apache Guacamole（`vm_agent_local` 分支）。

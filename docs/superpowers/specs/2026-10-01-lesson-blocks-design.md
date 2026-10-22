@@ -2,7 +2,7 @@
 
 日期：2026-10-01
 范围：`aivirteach-server`（schema、校验、摄取转换、课时接口）+ `aivirteach-client`（渲染器与预览页）。运营后台里的编辑界面在第 4 块。
-实施计划：`docs/superpowers/plans/2026-10-01-lesson-blocks.md`（server 任务 1–13，client 任务 14–19）。
+实施代码已由 server PR #20、client PR #14 合并，原实施计划于 2026-10-22 清理。预览与学员页面的剩余发布验收转入 `docs/superpowers/plans/2026-10-07-admin-console-4b-course-editor.md`；迁移 B 见 `docs/superpowers/plans/2026-09-30-course-content-model.md`。
 视觉基准：`mockups/2026-10-01-lesson-blocks-mock.html`（可点击，用 client 现有的配色和组件样式，含学员端 / 后台预览、浅色 / 深色、窄侧栏 / 宽布局和全部边界情况）。
 
 ## 1. 目标
