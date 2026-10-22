@@ -1,4 +1,10 @@
 'use client';
+import { ConfirmAction } from '@/components/ui/confirm-action';
+import { Button } from '@/components/ui/button';
+import {
+  NativeSelect,
+  NativeSelectOption,
+} from '@/components/ui/native-select';
 import { useState, useTransition } from 'react';
 import { useRouter } from 'next/navigation';
 import type {
@@ -37,18 +43,6 @@ export function CourseDetail({
     Array.isArray(meta[key]) ? meta[key].join('\n') : '';
   async function mutate(path: string, method: 'POST' | 'DELETE') {
     if (unsaved || locked) return;
-    if (
-      path === 'publish' &&
-      !window.confirm(
-        '确认将当前草稿发布为课程新版本？',
-      )
-    )
-      return;
-    if (
-      method === 'DELETE' &&
-      !window.confirm('丢弃整个草稿？草稿中的未发布改动将无法恢复。')
-    )
-      return;
     setBusy(true);
     setMessage('');
     setProblems([]);
@@ -75,7 +69,7 @@ export function CourseDetail({
     }
   }
   return (
-    <main className="studio-page">
+    <main id="main-content" tabIndex={-1} className="studio-page">
       <a className="breadcrumb" href="/courses">
         ← 全部课程
       </a>
@@ -94,28 +88,39 @@ export function CourseDetail({
         <div className="inline">
           {draft ? (
             <>
-              <button
+              <ConfirmAction
+                title="丢弃草稿？"
+                description="草稿中的未发布改动将无法恢复，已发布版本不受影响。"
+                label="确认丢弃"
+                destructive={true}
                 disabled={unsaved || locked}
-                onClick={() => void mutate('draft', 'DELETE')}
+                onConfirm={() => void mutate('draft', 'DELETE')}
               >
-                丢弃草稿
-              </button>
-              <button
-                className="primary"
+                <Button variant="outline" disabled={unsaved || locked}>
+                  丢弃草稿
+                </Button>
+              </ConfirmAction>
+              <ConfirmAction
+                title="发布课程？"
+                description="将当前草稿发布为课程新版本。发布前会检查内容是否完整。"
+                label="确认发布"
+                destructive={false}
                 disabled={unsaved || locked}
-                onClick={() => void mutate('publish', 'POST')}
+                onConfirm={() => void mutate('publish', 'POST')}
               >
-                发布课程
-              </button>
+                <Button variant="default" disabled={unsaved || locked}>
+                  发布课程
+                </Button>
+              </ConfirmAction>
             </>
           ) : (
-            <button
-              className="primary"
+            <Button
+              variant="default"
               disabled={locked}
               onClick={() => void mutate('draft', 'POST')}
             >
               创建草稿
-            </button>
+            </Button>
           )}
         </div>
       </div>
@@ -197,11 +202,16 @@ export function CourseDetail({
               />
               <label className="field">
                 难度
-                <select name="level" defaultValue={value('level', 'Beginner')}>
-                  <option value="Beginner">入门</option>
-                  <option value="Intermediate">进阶</option>
-                  <option value="Advanced">高级</option>
-                </select>
+                <NativeSelect
+                  name="level"
+                  defaultValue={value('level', 'Beginner')}
+                >
+                  <NativeSelectOption value="Beginner">入门</NativeSelectOption>
+                  <NativeSelectOption value="Intermediate">
+                    进阶
+                  </NativeSelectOption>
+                  <NativeSelectOption value="Advanced">高级</NativeSelectOption>
+                </NativeSelect>
               </label>
               <TextField
                 name="language"

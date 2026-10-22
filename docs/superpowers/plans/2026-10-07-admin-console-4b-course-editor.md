@@ -1,5 +1,9 @@
 # 运营后台 4b：课程列表、块编辑器、预览与发版 Implementation Plan
 
+## 2026-10-23 范围补充
+
+后台 shadcn UI 改造先独立交付。Lab V2 与预览共用 client 渲染组件的后续工作见 [Lab V2 统一渲染计划](2026-10-23-lab-v2-shared-course-renderer.md)，状态为尚未实施。下面的 V1 范围是 4b 原实施边界，不能据此宣称 V2 已接线；“迁移 B”仍指旧内容字段清理。
+
 ## 2026-10-22 pstack 检查
 
 状态：A 的后端和后台界面已在 `feat/admin-course-editor` 实现，已通过单元测试、本地数据库 E2E、类型检查和生产构建。4a 已由 server PR #24 合并；client 渲染器和预览页已由 client PR #14 合并。用户于本次实施中要求暂不使用浏览器，因此 Task 9 的浏览器与生产验收仍未完成，本计划保留。下方原任务勾选为历史计划，不能当作当前执行记录；以 [验证记录](../../verification/admin-course-editor.md) 为准。

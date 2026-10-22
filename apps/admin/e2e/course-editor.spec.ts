@@ -105,6 +105,10 @@ test('operator authors, previews, reloads and publishes a course', async ({
   await page.setViewportSize({ width: 1440, height: 1000 });
   await page.getByRole('link', { name: '← 返回课程', exact: true }).click();
   await page.getByRole('button', { name: '发布课程', exact: true }).click();
+  await page
+    .getByRole('alertdialog')
+    .getByRole('button', { name: '确认发布' })
+    .click();
   await expect(page.getByText('当前没有草稿', { exact: true })).toBeVisible();
   const secret =
     process.env.JWT_SECRET ?? 'local-admin-editor-test-secret-32-characters';

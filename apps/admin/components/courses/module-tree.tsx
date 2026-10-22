@@ -1,4 +1,8 @@
 'use client';
+import { ArrowUpIcon, ArrowDownIcon } from 'lucide-react';
+import { ConfirmAction } from '@/components/ui/confirm-action';
+import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
 import { useState, useTransition } from 'react';
 import { useRouter } from 'next/navigation';
 import type { DraftVersion, DraftLesson } from '@aivirteach/admin-contract';
@@ -12,7 +16,7 @@ export function LessonFields({ lesson }: { lesson?: DraftLesson }) {
       {!lesson && (
         <label className="field">
           课时标识
-          <input
+          <Input
             name="contentId"
             pattern="[a-z0-9]+(-[a-z0-9]+)*"
             required
@@ -88,11 +92,6 @@ export function ModuleTree({
     body?: unknown,
   ) {
     if (locked || operating) return;
-    if (
-      method === 'DELETE' &&
-      !window.confirm('确认删除？该模块或课时的草稿内容将无法恢复。')
-    )
-      return;
     setBusy(true);
     onDirty('tree-operation')(true);
     const result = await settleAction(courseMutation(slug, path, method, body));
@@ -148,28 +147,42 @@ export function ModuleTree({
               {m.title}
             </h3>
             <div className="inline">
-              <button
+              <Button
+                size="sm"
+                variant="outline"
                 disabled={locked || operating || mi === 0}
                 onClick={() => reorder(mi, -1)}
                 aria-label={`${m.title}模块上移`}
               >
-                ↑
-              </button>
-              <button
+                <ArrowUpIcon aria-hidden="true" />
+              </Button>
+              <Button
+                size="sm"
+                variant="outline"
                 disabled={
                   locked || operating || mi === draft.modules.length - 1
                 }
                 onClick={() => reorder(mi, 1)}
                 aria-label={`${m.title}模块下移`}
               >
-                ↓
-              </button>
-              <button
+                <ArrowDownIcon aria-hidden="true" />
+              </Button>
+              <ConfirmAction
+                title="删除模块？"
+                description="模块及其课时的草稿内容将无法恢复。"
                 disabled={locked || operating}
-                onClick={() => void mutation(`draft/modules/${m.id}`, 'DELETE')}
+                onConfirm={() =>
+                  void mutation(`draft/modules/${m.id}`, 'DELETE')
+                }
               >
-                删除模块
-              </button>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  disabled={locked || operating}
+                >
+                  删除模块
+                </Button>
+              </ConfirmAction>
             </div>
           </div>
           <details>
@@ -217,30 +230,42 @@ export function ModuleTree({
                   <small>{l.estimatedMinutes} 分钟</small>
                 </a>
                 <div className="inline">
-                  <button
+                  <Button
+                    size="sm"
+                    variant="outline"
                     disabled={locked || operating || li === 0}
                     aria-label={`${l.title}课时上移`}
                     onClick={() => reorder(mi, -1, li)}
                   >
-                    ↑
-                  </button>
-                  <button
+                    <ArrowUpIcon aria-hidden="true" />
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="outline"
                     disabled={
                       locked || operating || li === m.lessons.length - 1
                     }
                     aria-label={`${l.title}课时下移`}
                     onClick={() => reorder(mi, 1, li)}
                   >
-                    ↓
-                  </button>
-                  <button
+                    <ArrowDownIcon aria-hidden="true" />
+                  </Button>
+                  <ConfirmAction
+                    title="删除课时？"
+                    description="这个课时的草稿内容将无法恢复。"
                     disabled={locked || operating}
-                    onClick={() =>
+                    onConfirm={() =>
                       void mutation(`draft/lessons/${l.contentId}`, 'DELETE')
                     }
                   >
-                    删除
-                  </button>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      disabled={locked || operating}
+                    >
+                      删除
+                    </Button>
+                  </ConfirmAction>
                 </div>
               </li>
             ))}
