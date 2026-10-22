@@ -5,6 +5,8 @@ import { uploadAssetAction } from '@/app/(app)/courses/actions';
 vi.mock('@/app/(app)/courses/actions', () => ({ uploadAssetAction: vi.fn() }));
 it('validates uploads before sending and selects the server asset after completion', async () => {
   const onChange = vi.fn(),
+    onUploadStart = vi.fn(),
+    onUploadFinish = vi.fn(),
     onAssets = vi.fn(),
     onBusy = vi.fn();
   vi.mocked(uploadAssetAction).mockResolvedValue({
@@ -25,6 +27,8 @@ it('validates uploads before sending and selects the server asset after completi
       onChange={onChange}
       onAssets={onAssets}
       onBusy={onBusy}
+      onUploadStart={onUploadStart}
+      onUploadFinish={onUploadFinish}
     />,
   );
   fireEvent.change(screen.getByLabelText('上传图片'), {
@@ -43,12 +47,19 @@ it('validates uploads before sending and selects the server asset after completi
       target: { files: [new File(['x'], 'image.png', { type: 'image/png' })] },
     }),
   );
-  expect(onChange).toHaveBeenCalledWith('asset');
+  expect(onUploadStart).toHaveBeenCalledWith(expect.any(String));
+  expect(onUploadFinish).toHaveBeenCalledWith(
+    onUploadStart.mock.calls[0][0],
+    'asset',
+  );
+  expect(onChange).not.toHaveBeenCalled();
   expect(onAssets).toHaveBeenCalled();
   expect(onBusy.mock.calls).toEqual([[true], [false]]);
 });
 it('clears the upload lock and reports an uncertain outcome when transport rejects', async () => {
   const onBusy = vi.fn();
+  const onUploadStart = vi.fn();
+  const onUploadFinish = vi.fn();
   vi.mocked(uploadAssetAction).mockRejectedValueOnce(
     new Error('lost response'),
   );
@@ -60,12 +71,18 @@ it('clears the upload lock and reports an uncertain outcome when transport rejec
       onChange={vi.fn()}
       onAssets={vi.fn()}
       onBusy={onBusy}
+      onUploadStart={onUploadStart}
+      onUploadFinish={onUploadFinish}
     />,
   );
   await act(async () =>
     fireEvent.change(screen.getByLabelText('上传图片'), {
       target: { files: [new File(['x'], 'image.png', { type: 'image/png' })] },
     }),
+  );
+  expect(onUploadFinish).toHaveBeenCalledWith(
+    onUploadStart.mock.calls[0][0],
+    null,
   );
   expect(screen.getByRole('alert')).toHaveTextContent('操作可能已完成');
   expect(screen.getByLabelText('上传图片')).toBeEnabled();

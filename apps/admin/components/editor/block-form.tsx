@@ -286,6 +286,8 @@ export function BlockForm({
   onAssets,
   onBusy,
   onPatch,
+  onUploadStart,
+  onUploadFinish,
   onChange,
 }: {
   block: LessonBlock;
@@ -293,6 +295,8 @@ export function BlockForm({
   assets: CourseAsset[];
   onAssets: (a: CourseAsset) => void;
   onBusy: (v: boolean) => void;
+  onUploadStart: (requestId: string) => void;
+  onUploadFinish: (requestId: string, assetId: string | null) => void;
   onPatch: (props: Record<string, unknown>) => void;
   onChange: (value: unknown) => void;
 }) {
@@ -316,6 +320,8 @@ export function BlockForm({
               value={typeof value.assetId === 'string' ? value.assetId : ''}
               onAssets={onAssets}
               onBusy={onBusy}
+              onUploadStart={onUploadStart}
+              onUploadFinish={onUploadFinish}
               onChange={(id) => onPatch({ assetId: id })}
             />
           ) : (

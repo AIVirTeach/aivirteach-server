@@ -10,12 +10,16 @@ export function AssetPicker({
   onChange,
   onAssets,
   onBusy,
+  onUploadStart,
+  onUploadFinish,
 }: {
   slug: string;
   assets: CourseAsset[];
   value: string;
   onChange: (id: string) => void;
   onAssets: (asset: CourseAsset) => void;
+  onUploadStart: (requestId: string) => void;
+  onUploadFinish: (requestId: string, assetId: string | null) => void;
   onBusy: (busy: boolean) => void;
 }) {
   const [error, setError] = useState('');
@@ -59,15 +63,19 @@ export function AssetPicker({
             const form = new FormData();
             form.set('file', file);
             form.set('altText', file.name);
+            const requestId = crypto.randomUUID();
+            let uploadedAssetId: string | null = null;
+            onUploadStart(requestId);
             setBusy(true);
             onBusy(true);
             try {
               const result = await settleAction(uploadAssetAction(slug, form));
               if (result.status === 'ok') {
                 onAssets(result.data);
-                onChange(result.data.id);
+                uploadedAssetId = result.data.id;
               } else setError(resultMessage(result));
             } finally {
+              onUploadFinish(requestId, uploadedAssetId);
               setBusy(false);
               onBusy(false);
             }
