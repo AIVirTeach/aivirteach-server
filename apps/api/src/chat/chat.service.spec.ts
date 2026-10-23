@@ -6,6 +6,7 @@ import { TOKEN_WEIGHTS } from '../token-usage/application/check-token-quota';
 import { LATEST_PUBLISHED_VERSION } from '../courses/published-version';
 import { AgentClient } from './agent-client';
 import { ChatService } from './chat.service';
+import type { SendChatMessageInput } from './chat.schemas';
 
 function buildPrisma() {
   return {
@@ -13,13 +14,18 @@ function buildPrisma() {
       findUnique: jest.fn(),
       updateMany: jest.fn().mockResolvedValue({ count: 1 }),
     },
-    conversation: { create: jest.fn(), findMany: jest.fn() },
+    conversation: {
+      create: jest.fn(),
+      findMany: jest.fn(),
+      findFirst: jest.fn().mockResolvedValue(null),
+    },
     quotaLedger: { upsert: jest.fn().mockResolvedValue({}) },
     workspace: { findUnique: jest.fn(), update: jest.fn() },
     progress: { findUnique: jest.fn() },
     course: { findUnique: jest.fn() },
     courseLesson: { findFirst: jest.fn() },
     $transaction: jest.fn(),
+    $queryRaw: jest.fn(),
   };
 }
 
@@ -30,6 +36,10 @@ async function buildService(
   } = {},
 ) {
   const prisma = overrides.prisma ?? buildPrisma();
+  prisma.course.findUnique.mockResolvedValue(PUBLISHED_COURSE);
+  prisma.courseLesson.findFirst.mockResolvedValue({
+    assessments: LESSON.assessments,
+  });
   prisma.$transaction.mockImplementation(
     (callback: (tx: typeof prisma) => unknown) => callback(prisma),
   );
@@ -50,6 +60,19 @@ async function buildService(
     ],
   }).compile();
   return { service: moduleRef.get(ChatService), prisma, agentClient };
+}
+
+let requestSequence = 0;
+function ask(
+  text: string,
+  lessonId = 'verify-virtual-machine',
+): SendChatMessageInput {
+  requestSequence += 1;
+  return {
+    requestId: `00000000-0000-4000-8000-${String(requestSequence).padStart(12, '0')}`,
+    text,
+    context: { courseVersionId: 'version_2', lessonId, generation: 0 },
+  };
 }
 
 const ENROLLMENT = {
@@ -90,9 +113,9 @@ describe('ChatService.getMessages', () => {
       ...ENROLLMENT,
       userId: 'someone_else',
     });
-    await expect(service.getMessages('user_1', 'enr_1')).rejects.toBeInstanceOf(
-      ForbiddenException,
-    );
+    await expect(
+      service.getMessages('user_1', 'enr_1', 0),
+    ).rejects.toBeInstanceOf(ForbiddenException);
   });
 
   it('按时间正序返回消息，role/text 映射成 client 期望的形状', async () => {
@@ -111,10 +134,10 @@ describe('ChatService.getMessages', () => {
       }),
     ]);
 
-    const result = await service.getMessages('user_1', 'enr_1');
+    const result = await service.getMessages('user_1', 'enr_1', 0);
 
     expect(prisma.conversation.findMany).toHaveBeenCalledWith({
-      where: { enrollmentId: 'enr_1' },
+      where: { enrollmentId: 'enr_1', generation: 0 },
       orderBy: { createdAt: 'asc' },
     });
     expect(result).toEqual([
@@ -136,6 +159,15 @@ describe('ChatService.getMessages', () => {
       },
     ]);
   });
+
+  it('旧代 history 在 restart 后拒绝，且不查询对话', async () => {
+    const { service, prisma } = await buildService();
+    prisma.enrollment.findUnique.mockResolvedValue(ENROLLMENT);
+    prisma.enrollment.updateMany.mockResolvedValue({ count: 0 });
+
+    await expect(service.getMessages('user_1', 'enr_1', 0)).rejects.toThrow();
+    expect(prisma.conversation.findMany).not.toHaveBeenCalled();
+  });
 });
 
 import { WorkspaceStatus } from '@prisma/client';
@@ -149,7 +181,7 @@ describe('ChatService.sendMessage — 兜底路径（不调用 Agent）', () => 
     });
 
     await expect(
-      service.sendMessage('user_1', 'enr_1', '你好'),
+      service.sendMessage('user_1', 'enr_1', ask('你好')),
     ).rejects.toBeInstanceOf(ForbiddenException);
     expect(prisma.conversation.create).not.toHaveBeenCalled();
   });
@@ -169,7 +201,7 @@ describe('ChatService.sendMessage — 兜底路径（不调用 Agent）', () => 
       }),
     );
 
-    const result = await service.sendMessage('user_1', 'enr_1', '你好');
+    const result = await service.sendMessage('user_1', 'enr_1', ask('你好'));
 
     expect(result.tutorMessage.text).toBe('请先启动虚拟机后再提问。');
     expect(agentClient.diagnose).not.toHaveBeenCalled();
@@ -194,7 +226,7 @@ describe('ChatService.sendMessage — 兜底路径（不调用 Agent）', () => 
       }),
     );
 
-    const result = await service.sendMessage('user_1', 'enr_1', '你好');
+    const result = await service.sendMessage('user_1', 'enr_1', ask('你好'));
 
     expect(result.tutorMessage.text).toBe('请先启动虚拟机后再提问。');
     expect(agentClient.diagnose).not.toHaveBeenCalled();
@@ -236,6 +268,7 @@ const LESSON = {
 };
 
 const PUBLISHED_COURSE = {
+  published: true,
   slug: 'linux-basics',
   title: 'Linux 基础',
   description: '入门课程',
@@ -282,7 +315,7 @@ describe('ChatService.sendMessage — 调用 Agent', () => {
       .mockResolvedValueOnce({ count: 0 });
 
     await expect(
-      service.sendMessage('user_1', 'enr_1', '你好'),
+      service.sendMessage('user_1', 'enr_1', ask('你好')),
     ).rejects.toThrow();
     expect(prisma.conversation.create).toHaveBeenCalledTimes(1);
     expect(agentClient.diagnose).not.toHaveBeenCalled();
@@ -307,7 +340,7 @@ describe('ChatService.sendMessage — 调用 Agent', () => {
     });
 
     await expect(
-      service.sendMessage('user_1', 'enr_1', '你好'),
+      service.sendMessage('user_1', 'enr_1', ask('你好')),
     ).rejects.toThrow();
     expect(agentClient.diagnose).toHaveBeenCalledTimes(1);
     expect(prisma.conversation.create).toHaveBeenCalledTimes(1);
@@ -320,6 +353,51 @@ describe('ChatService.sendMessage — 调用 Agent', () => {
       where: { id: 'enr_1', generation: 0, active: true },
       data: { active: true },
     });
+  });
+
+  it('同一 requestId 在不同 enrollment 的迟到回复分别结算一次', async () => {
+    const { service, prisma, agentClient } = await buildService();
+    setupReadyWorkspace(prisma);
+    prisma.enrollment.updateMany
+      .mockResolvedValueOnce({ count: 1 })
+      .mockResolvedValueOnce({ count: 0 })
+      .mockResolvedValueOnce({ count: 1 })
+      .mockResolvedValueOnce({ count: 0 });
+    prisma.conversation.create.mockResolvedValue(
+      conversationRow({ id: 'student' }),
+    );
+    agentClient.diagnose.mockResolvedValue({
+      answer: 'late',
+      usage: {
+        input_cache_hit_tokens: 10,
+        input_cache_miss_tokens: 20,
+        output_tokens: 5,
+      },
+    });
+    const command: SendChatMessageInput = {
+      requestId: '00000000-0000-4000-8000-000000000099',
+      text: 'same uuid',
+      context: {
+        courseVersionId: 'version_2',
+        lessonId: 'verify-virtual-machine',
+        generation: 0,
+      },
+    };
+
+    await expect(
+      service.sendMessage('user_1', 'enr_1', command),
+    ).rejects.toThrow();
+    await expect(
+      service.sendMessage('user_1', 'enr_2', command),
+    ).rejects.toThrow();
+
+    expect(prisma.quotaLedger.upsert).toHaveBeenCalledTimes(2);
+    expect(
+      prisma.quotaLedger.upsert.mock.calls.map(([input]) => input.where.id),
+    ).toEqual([
+      'stale-agent-enr_1-0-00000000-0000-4000-8000-000000000099',
+      'stale-agent-enr_2-0-00000000-0000-4000-8000-000000000099',
+    ]);
   });
   function setupReadyWorkspace(prisma: ReturnType<typeof buildPrisma>) {
     prisma.enrollment.findUnique.mockResolvedValue(ENROLLMENT);
@@ -367,7 +445,7 @@ describe('ChatService.sendMessage — 调用 Agent', () => {
     const result = await service.sendMessage(
       'user_1',
       'enr_1',
-      'docker 装不上',
+      ask('docker 装不上'),
     );
     const after = Date.now();
 
@@ -462,7 +540,7 @@ describe('ChatService.sendMessage — 调用 Agent', () => {
       }),
     );
 
-    const result = await service.sendMessage('user_1', 'enr_1', '？');
+    const result = await service.sendMessage('user_1', 'enr_1', ask('？'));
 
     expect(result.tutorMessage.text).toBe(diagnoseResponse.answer);
   });
@@ -482,7 +560,7 @@ describe('ChatService.sendMessage — 调用 Agent', () => {
       }),
     );
 
-    const result = await service.sendMessage('user_1', 'enr_1', '？');
+    const result = await service.sendMessage('user_1', 'enr_1', ask('？'));
 
     expect(result.tutorMessage.text).toBe('助教暂时不可用，请稍后再试。');
   });
@@ -507,7 +585,7 @@ describe('ChatService.sendMessage — 调用 Agent', () => {
       }),
     );
 
-    await service.sendMessage('user_1', 'enr_1', '？');
+    await service.sendMessage('user_1', 'enr_1', ask('？'));
 
     expect(errorSpy).toHaveBeenCalledWith(
       expect.stringContaining('enr_1'),
@@ -519,44 +597,41 @@ describe('ChatService.sendMessage — 调用 Agent', () => {
   it.each([
     ['没有 Progress 记录', null],
     ['Progress 指针为 null', { currentLessonContentId: null }],
-  ])(
-    '%s 时以第一课为上下文调用 Agent，不落"尚未开始"兜底',
-    async (_label, progress) => {
-      const { service, prisma, agentClient } = await buildService();
-      setupReadyWorkspace(prisma);
-      prisma.progress.findUnique.mockResolvedValue(progress);
-      prisma.conversation.create.mockResolvedValueOnce(
-        conversationRow({ id: 'student_1', content: '什么是 docker' }),
-      );
-      agentClient.diagnose.mockResolvedValue(DIAGNOSE_RESPONSE);
-      prisma.conversation.create.mockResolvedValueOnce(
-        conversationRow({
-          id: 'tutor_1',
-          role: ConversationRole.ASSISTANT,
-          content: DIAGNOSE_RESPONSE.answer,
-        }),
-      );
+  ])('%s 时仍以请求携带的已加载课时作为上下文', async (_label, progress) => {
+    const { service, prisma, agentClient } = await buildService();
+    setupReadyWorkspace(prisma);
+    prisma.progress.findUnique.mockResolvedValue(progress);
+    prisma.conversation.create.mockResolvedValueOnce(
+      conversationRow({ id: 'student_1', content: '什么是 docker' }),
+    );
+    agentClient.diagnose.mockResolvedValue(DIAGNOSE_RESPONSE);
+    prisma.conversation.create.mockResolvedValueOnce(
+      conversationRow({
+        id: 'tutor_1',
+        role: ConversationRole.ASSISTANT,
+        content: DIAGNOSE_RESPONSE.answer,
+      }),
+    );
 
-      const result = await service.sendMessage(
-        'user_1',
-        'enr_1',
-        '什么是 docker',
-      );
+    const result = await service.sendMessage(
+      'user_1',
+      'enr_1',
+      ask('什么是 docker'),
+    );
 
-      expect(result.tutorMessage.text).toBe(DIAGNOSE_RESPONSE.answer);
-      expect(agentClient.diagnose).toHaveBeenCalledWith(
-        expect.objectContaining({
-          lab_id: 'lab_1',
-          current_step: expect.objectContaining({
-            module_id: 'module_1',
-            lesson_id: 'previous-lesson',
-            sequence: 1,
-            title: '前一课',
-          }),
+    expect(result.tutorMessage.text).toBe(DIAGNOSE_RESPONSE.answer);
+    expect(agentClient.diagnose).toHaveBeenCalledWith(
+      expect.objectContaining({
+        lab_id: 'lab_1',
+        current_step: expect.objectContaining({
+          module_id: 'module_1',
+          lesson_id: 'verify-virtual-machine',
+          sequence: 2,
+          title: '验证虚拟机',
         }),
-      );
-    },
-  );
+      }),
+    );
+  });
 
   it('已学完整门课（指针为空且 enrollment 有 completedAt）时以最后一课为上下文，而不是第一课', async () => {
     const { service, prisma, agentClient } = await buildService();
@@ -571,7 +646,7 @@ describe('ChatService.sendMessage — 调用 Agent', () => {
     prisma.conversation.create.mockResolvedValue(conversationRow({}));
     agentClient.diagnose.mockResolvedValue(DIAGNOSE_RESPONSE);
 
-    await service.sendMessage('user_1', 'enr_1', '复习一下');
+    await service.sendMessage('user_1', 'enr_1', ask('复习一下'));
 
     expect(agentClient.diagnose).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -583,47 +658,29 @@ describe('ChatService.sendMessage — 调用 Agent', () => {
     );
   });
 
-  it('指针是空字符串时按失效指针处理：返回内容不可用兜底，不调用 Agent', async () => {
+  it('请求课时 ID 不存在时拒绝且不写聊天记录', async () => {
     const { service, prisma, agentClient } = await buildService();
     setupReadyWorkspace(prisma);
-    prisma.progress.findUnique.mockResolvedValue({
-      currentLessonContentId: '',
-    });
-    prisma.conversation.create.mockResolvedValue(conversationRow({}));
-
-    await service.sendMessage('user_1', 'enr_1', '？');
+    await expect(
+      service.sendMessage('user_1', 'enr_1', ask('？', 'missing-lesson')),
+    ).rejects.toThrow();
 
     expect(agentClient.diagnose).not.toHaveBeenCalled();
-    expect(prisma.conversation.create).toHaveBeenLastCalledWith({
-      data: expect.objectContaining({
-        content: '课程内容暂时不可用，请稍后再试。',
-      }),
-    });
+    expect(prisma.conversation.create).not.toHaveBeenCalled();
   });
 
-  it('拿不到课程上下文时记 warn 日志（带 enrollmentId 和指针），线上才能看到有多少人遇到', async () => {
-    const warnSpy = jest
-      .spyOn(Logger.prototype, 'warn')
-      .mockImplementation(() => undefined);
+  it('无效的请求课时不写入对话历史', async () => {
     const { service, prisma } = await buildService();
     setupReadyWorkspace(prisma);
-    prisma.progress.findUnique.mockResolvedValue({
-      currentLessonContentId: 'deleted-lesson',
-    });
-    prisma.conversation.create.mockResolvedValue(conversationRow({}));
-
-    await service.sendMessage('user_1', 'enr_1', '？');
-
-    expect(warnSpy).toHaveBeenCalledWith(
-      expect.stringMatching(/enr_1.*deleted-lesson/),
-    );
-    warnSpy.mockRestore();
+    await expect(
+      service.sendMessage('user_1', 'enr_1', ask('？', 'deleted-lesson')),
+    ).rejects.toThrow();
+    expect(prisma.conversation.create).not.toHaveBeenCalled();
   });
 
-  it('最新已发布版本没有任何课时时返回内容不可用兜底，不抛错也不调用 Agent', async () => {
+  it('最新已发布版本没有请求课时时拒绝且不调用 Agent', async () => {
     const { service, prisma, agentClient } = await buildService();
     setupReadyWorkspace(prisma);
-    prisma.progress.findUnique.mockResolvedValue(null);
     prisma.course.findUnique.mockResolvedValue({
       ...PUBLISHED_COURSE,
       versions: [
@@ -635,29 +692,14 @@ describe('ChatService.sendMessage — 调用 Agent', () => {
         },
       ],
     });
-    prisma.conversation.create.mockResolvedValueOnce(
-      conversationRow({ id: 'student_1', content: '？' }),
-    );
-    prisma.conversation.create.mockResolvedValueOnce(
-      conversationRow({
-        id: 'tutor_1',
-        role: ConversationRole.ASSISTANT,
-        content: '课程内容暂时不可用，请稍后再试。',
-      }),
-    );
-
-    const result = await service.sendMessage('user_1', 'enr_1', '？');
-
-    expect(result.tutorMessage.text).toBe('课程内容暂时不可用，请稍后再试。');
-    expect(prisma.conversation.create).toHaveBeenLastCalledWith({
-      data: expect.objectContaining({
-        content: '课程内容暂时不可用，请稍后再试。',
-      }),
-    });
+    await expect(
+      service.sendMessage('user_1', 'enr_1', ask('？')),
+    ).rejects.toThrow();
+    expect(prisma.conversation.create).not.toHaveBeenCalled();
     expect(agentClient.diagnose).not.toHaveBeenCalled();
   });
 
-  it('当前 contentId 已不在最新已发布版本时返回内容不可用兜底，不调用 Agent', async () => {
+  it('请求课时已不在最新已发布版本时拒绝且不调用 Agent', async () => {
     const { service, prisma, agentClient } = await buildService();
     setupReadyWorkspace(prisma);
     prisma.course.findUnique.mockResolvedValue({
@@ -682,51 +724,21 @@ describe('ChatService.sendMessage — 调用 Agent', () => {
         },
       ],
     });
-    prisma.conversation.create.mockResolvedValueOnce(
-      conversationRow({ id: 'student_1', content: '？' }),
-    );
-    prisma.conversation.create.mockResolvedValueOnce(
-      conversationRow({
-        id: 'tutor_1',
-        role: ConversationRole.ASSISTANT,
-        content: '课程内容暂时不可用，请稍后再试。',
-      }),
-    );
-
-    const result = await service.sendMessage('user_1', 'enr_1', '？');
-
-    expect(result.tutorMessage.text).toBe('课程内容暂时不可用，请稍后再试。');
-    expect(prisma.conversation.create).toHaveBeenLastCalledWith({
-      data: expect.objectContaining({
-        content: '课程内容暂时不可用，请稍后再试。',
-      }),
-    });
+    await expect(
+      service.sendMessage('user_1', 'enr_1', ask('？')),
+    ).rejects.toThrow();
+    expect(prisma.conversation.create).not.toHaveBeenCalled();
     expect(agentClient.diagnose).not.toHaveBeenCalled();
   });
 
-  it('最新版本存在目标课时但查不到对应课时行时返回内容不可用兜底', async () => {
+  it('请求课时缺少对应课程行时拒绝且不调用 Agent', async () => {
     const { service, prisma, agentClient } = await buildService();
     setupReadyWorkspace(prisma);
     prisma.courseLesson.findFirst.mockResolvedValue(null);
-    prisma.conversation.create.mockResolvedValueOnce(
-      conversationRow({ id: 'student_1', content: '？' }),
-    );
-    prisma.conversation.create.mockResolvedValueOnce(
-      conversationRow({
-        id: 'tutor_1',
-        role: ConversationRole.ASSISTANT,
-        content: '课程内容暂时不可用，请稍后再试。',
-      }),
-    );
-
-    const result = await service.sendMessage('user_1', 'enr_1', '？');
-
-    expect(result.tutorMessage.text).toBe('课程内容暂时不可用，请稍后再试。');
-    expect(prisma.conversation.create).toHaveBeenLastCalledWith({
-      data: expect.objectContaining({
-        content: '课程内容暂时不可用，请稍后再试。',
-      }),
-    });
+    await expect(
+      service.sendMessage('user_1', 'enr_1', ask('？')),
+    ).rejects.toThrow();
+    expect(prisma.conversation.create).not.toHaveBeenCalled();
     expect(agentClient.diagnose).not.toHaveBeenCalled();
     expect(prisma.courseLesson.findFirst).toHaveBeenCalledTimes(1);
   });
@@ -765,7 +777,7 @@ describe('ChatService.streamMessage — 兜底路径（不调用 Agent）', () =
       userId: 'someone_else',
     });
     await expect(
-      collect(service.streamMessage('user_1', 'enr_1', '你好')),
+      collect(service.streamMessage('user_1', 'enr_1', ask('你好'))),
     ).rejects.toBeInstanceOf(ForbiddenException);
     expect(prisma.conversation.create).not.toHaveBeenCalled();
   });
@@ -786,7 +798,7 @@ describe('ChatService.streamMessage — 兜底路径（不调用 Agent）', () =
     );
 
     const events = await collect(
-      service.streamMessage('user_1', 'enr_1', '你好'),
+      service.streamMessage('user_1', 'enr_1', ask('你好')),
     );
 
     expect(events).toEqual([
@@ -848,7 +860,7 @@ describe('ChatService.streamMessage — 调用 Agent', () => {
     jest.spyOn(Logger.prototype, 'error').mockImplementation(() => undefined);
 
     const events = await collect(
-      service.streamMessage('user_1', 'enr_1', '你好'),
+      service.streamMessage('user_1', 'enr_1', ask('你好')),
     );
 
     expect(events).toEqual([]);
@@ -858,6 +870,50 @@ describe('ChatService.streamMessage — 调用 Agent', () => {
       update: {},
       create: expect.objectContaining({ userId: 'user_1', tokensDelta: -41 }),
     });
+    jest.restoreAllMocks();
+  });
+
+  it('restart 后不再向客户端发送迟到的 progress 帧，并结算最终 usage', async () => {
+    const { service, prisma, agentClient } = await buildService();
+    setupReadyWorkspace(prisma);
+    prisma.conversation.create.mockResolvedValueOnce(
+      conversationRow({ id: 'student_1' }),
+    );
+    prisma.enrollment.updateMany
+      .mockResolvedValueOnce({ count: 1 })
+      .mockResolvedValueOnce({ count: 0 })
+      .mockResolvedValueOnce({ count: 0 });
+    agentClient.diagnoseStream.mockReturnValue(
+      framesFrom([
+        { event: 'reasoning_started', data: { turn: 1 } },
+        {
+          event: 'result',
+          data: {
+            response: {
+              ...DIAGNOSE_RESPONSE,
+              usage: {
+                input_cache_hit_tokens: 10,
+                input_cache_miss_tokens: 20,
+                output_tokens: 5,
+              },
+            },
+          },
+        },
+      ]),
+    );
+    jest.spyOn(Logger.prototype, 'error').mockImplementation(() => undefined);
+
+    const events = await collect(
+      service.streamMessage('user_1', 'enr_1', ask('stale')),
+    );
+
+    expect(events).toEqual([]);
+    expect(prisma.quotaLedger.upsert).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { id: expect.stringMatching(/^stale-agent-enr_1-0-/) },
+        create: expect.objectContaining({ tokensDelta: -41 }),
+      }),
+    );
     jest.restoreAllMocks();
   });
 
@@ -886,7 +942,7 @@ describe('ChatService.streamMessage — 调用 Agent', () => {
 
     const before = Date.now();
     const events = await collect(
-      service.streamMessage('user_1', 'enr_1', 'docker 装不上'),
+      service.streamMessage('user_1', 'enr_1', ask('docker 装不上')),
     );
     const after = Date.now();
 
@@ -928,7 +984,7 @@ describe('ChatService.streamMessage — 调用 Agent', () => {
     });
   });
 
-  it('没有 Progress 记录时以第一课为上下文调用 diagnoseStream，result 落库后发 complete', async () => {
+  it('没有 Progress 记录时仍以请求课时作为流式上下文，result 落库后发 complete', async () => {
     const { service, prisma, agentClient } = await buildService();
     setupReadyWorkspace(prisma);
     prisma.progress.findUnique.mockResolvedValue(null);
@@ -948,15 +1004,15 @@ describe('ChatService.streamMessage — 调用 Agent', () => {
     );
 
     const events = await collect(
-      service.streamMessage('user_1', 'enr_1', '什么是 docker'),
+      service.streamMessage('user_1', 'enr_1', ask('什么是 docker')),
     );
 
     expect(agentClient.diagnoseStream).toHaveBeenCalledWith(
       expect.objectContaining({
         lab_id: 'lab_1',
         current_step: expect.objectContaining({
-          lesson_id: 'previous-lesson',
-          sequence: 1,
+          lesson_id: 'verify-virtual-machine',
+          sequence: 2,
         }),
       }),
     );
@@ -1003,7 +1059,7 @@ describe('ChatService.streamMessage — 调用 Agent', () => {
     );
 
     const events = await collect(
-      service.streamMessage('user_1', 'enr_1', '？'),
+      service.streamMessage('user_1', 'enr_1', ask('？')),
     );
 
     expect(events).toEqual([
@@ -1042,7 +1098,7 @@ describe('ChatService.streamMessage — 调用 Agent', () => {
     );
 
     const events = await collect(
-      service.streamMessage('user_1', 'enr_1', '？'),
+      service.streamMessage('user_1', 'enr_1', ask('？')),
     );
 
     expect(events).toEqual([
@@ -1076,7 +1132,7 @@ describe('ChatService.streamMessage — 调用 Agent', () => {
     );
 
     const events = await collect(
-      service.streamMessage('user_1', 'enr_1', 'docker 装不上'),
+      service.streamMessage('user_1', 'enr_1', ask('docker 装不上')),
     );
 
     expect(events).toEqual([
@@ -1108,7 +1164,7 @@ describe('ChatService.streamMessage — 调用 Agent', () => {
     );
 
     const events = await collect(
-      service.streamMessage('user_1', 'enr_1', '？'),
+      service.streamMessage('user_1', 'enr_1', ask('？')),
     );
 
     expect(events).toEqual([
@@ -1169,7 +1225,7 @@ describe('ChatService — Agent 回复落库时记录 token usage', () => {
       usage: USAGE,
     });
 
-    await service.sendMessage('user_1', 'enr_1', 'docker 装不上');
+    await service.sendMessage('user_1', 'enr_1', ask('docker 装不上'));
 
     expect(assistantCreateData(prisma)).toMatchObject(USAGE_COLUMNS);
   });
@@ -1179,7 +1235,7 @@ describe('ChatService — Agent 回复落库时记录 token usage', () => {
     setupReadyWorkspace(prisma);
     agentClient.diagnose.mockResolvedValue(DIAGNOSE_RESPONSE);
 
-    await service.sendMessage('user_1', 'enr_1', 'docker 装不上');
+    await service.sendMessage('user_1', 'enr_1', ask('docker 装不上'));
 
     const data = assistantCreateData(prisma);
     expect(data).not.toHaveProperty('inputCacheHitTokens');
@@ -1195,7 +1251,7 @@ describe('ChatService — Agent 回复落库时记录 token usage', () => {
       usage: null,
     });
 
-    await service.sendMessage('user_1', 'enr_1', 'docker 装不上');
+    await service.sendMessage('user_1', 'enr_1', ask('docker 装不上'));
 
     expect(assistantCreateData(prisma)).not.toHaveProperty('outputTokens');
   });
@@ -1206,7 +1262,7 @@ describe('ChatService — Agent 回复落库时记录 token usage', () => {
     jest.spyOn(Logger.prototype, 'error').mockImplementation(() => undefined);
     agentClient.diagnose.mockRejectedValue(new Error('boom'));
 
-    await service.sendMessage('user_1', 'enr_1', 'docker 装不上');
+    await service.sendMessage('user_1', 'enr_1', ask('docker 装不上'));
 
     expect(assistantCreateData(prisma)).not.toHaveProperty('outputTokens');
   });
@@ -1223,7 +1279,9 @@ describe('ChatService — Agent 回复落库时记录 token usage', () => {
       ]),
     );
 
-    await collect(service.streamMessage('user_1', 'enr_1', 'docker 装不上'));
+    await collect(
+      service.streamMessage('user_1', 'enr_1', ask('docker 装不上')),
+    );
 
     expect(assistantCreateData(prisma)).toMatchObject(USAGE_COLUMNS);
   });
@@ -1235,7 +1293,9 @@ describe('ChatService — Agent 回复落库时记录 token usage', () => {
       framesFrom([{ event: 'result', data: { response: DIAGNOSE_RESPONSE } }]),
     );
 
-    await collect(service.streamMessage('user_1', 'enr_1', 'docker 装不上'));
+    await collect(
+      service.streamMessage('user_1', 'enr_1', ask('docker 装不上')),
+    );
 
     expect(assistantCreateData(prisma)).not.toHaveProperty('outputTokens');
   });

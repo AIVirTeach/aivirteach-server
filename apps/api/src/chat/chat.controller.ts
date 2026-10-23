@@ -1,11 +1,28 @@
-import { Body, Controller, Get, HttpCode, Param, Post, Req, RequestMethod, Sse, UseGuards, type MessageEvent } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  Get,
+  HttpCode,
+  Param,
+  Post,
+  Query,
+  Req,
+  Res,
+  UseGuards,
+} from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
-import { from, type Observable } from 'rxjs';
-import { map } from 'rxjs/operators';
-import { JwtAuthGuard, type AuthenticatedRequest } from '../auth/jwt-auth.guard';
+import type { Response } from 'express';
+import {
+  JwtAuthGuard,
+  type AuthenticatedRequest,
+} from '../auth/jwt-auth.guard';
 import { ZodValidationPipe } from '../common/zod-validation.pipe';
 import { TokenQuotaGuard } from '../token-usage/interface/token-quota.guard';
-import { SendChatMessageSchema, type SendChatMessageInput } from './chat.schemas';
+import {
+  ChatGenerationQuerySchema,
+  SendChatMessageSchema,
+  type SendChatMessageInput,
+} from './chat.schemas';
 import { ChatService, type ChatMessage } from './chat.service';
 
 @ApiTags('Chat')
@@ -18,39 +35,83 @@ export class ChatController {
   @Get(':enrollmentId/chat/messages')
   getMessages(
     @Param('enrollmentId') enrollmentId: string,
+    @Query(new ZodValidationPipe(ChatGenerationQuerySchema))
+    query: { generation: number },
     @Req() request: AuthenticatedRequest,
   ): Promise<ChatMessage[]> {
-    return this.chatService.getMessages(request.auth!.userId, enrollmentId);
+    return this.chatService.getMessages(
+      request.auth!.userId,
+      enrollmentId,
+      query.generation,
+    );
   }
 
-  // 额度检查放 Guard（排在类级 JwtAuthGuard 之后）：流式路由的 SSE 响应头会先于 handler
-  // 提交，只有 Guard 能让两条路由都拿到真正的 HTTP 429。
+  // 额度检查放在 JwtAuthGuard 之后的 Guard 中，两条 POST 路由都会在处理前返回 HTTP 429。
   @Post(':enrollmentId/chat/messages')
   @HttpCode(200)
   @UseGuards(TokenQuotaGuard)
   sendMessage(
     @Param('enrollmentId') enrollmentId: string,
-    @Body(new ZodValidationPipe(SendChatMessageSchema)) body: SendChatMessageInput,
+    @Body(new ZodValidationPipe(SendChatMessageSchema))
+    body: SendChatMessageInput,
     @Req() request: AuthenticatedRequest,
   ): Promise<{ studentMessage: ChatMessage; tutorMessage: ChatMessage }> {
-    return this.chatService.sendMessage(request.auth!.userId, enrollmentId, body.text);
+    return this.chatService.sendMessage(
+      request.auth!.userId,
+      enrollmentId,
+      body,
+    );
   }
 
-  // EventSource 只能发 GET，但聊天文本要放 body，所以这条走 POST + client 端手动用
-  // fetch/ReadableStream 消费，不是标准 EventSource。@Sse() 本身负责设 SSE 响应头，
-  // 跟 method 选项正交，不冲突。
-  @Sse(':enrollmentId/chat/messages/stream', { method: RequestMethod.POST })
+  // Validate and persist before committing SSE headers so invalid requests retain HTTP errors.
+  @Post(':enrollmentId/chat/messages/stream')
+  @HttpCode(200)
   @UseGuards(TokenQuotaGuard)
-  streamMessage(
+  async streamMessage(
     @Param('enrollmentId') enrollmentId: string,
-    @Body(new ZodValidationPipe(SendChatMessageSchema)) body: SendChatMessageInput,
+    @Body(new ZodValidationPipe(SendChatMessageSchema))
+    body: SendChatMessageInput,
     @Req() request: AuthenticatedRequest,
-  ): Observable<MessageEvent> {
-    return from(this.chatService.streamMessage(request.auth!.userId, enrollmentId, body.text)).pipe(
-      map((event): MessageEvent => ({
-        type: event.type === 'progress' ? event.event : 'complete',
-        data: event,
-      })),
+    @Res() response: Response,
+  ): Promise<void> {
+    const accepted = await this.chatService.prepareMessage(
+      request.auth!.userId,
+      enrollmentId,
+      body,
     );
+    response.status(200);
+    response.setHeader('Content-Type', 'text/event-stream; charset=utf-8');
+    response.setHeader('Cache-Control', 'no-cache, no-transform');
+    response.setHeader('Connection', 'keep-alive');
+    response.flushHeaders();
+
+    const iterator = this.chatService
+      .streamPrepared(accepted)
+      [Symbol.asyncIterator]();
+    let clientDisconnected = false;
+    const closeStream = () => {
+      clientDisconnected = true;
+    };
+    response.once('close', closeStream);
+    try {
+      while (true) {
+        const next = await iterator.next();
+        if (next.done) break;
+        const event = next.value;
+        const type = event.type === 'progress' ? event.event : 'complete';
+        if (!clientDisconnected && !response.destroyed) {
+          response.write(`event: ${type}\ndata: ${JSON.stringify(event)}\n\n`);
+        }
+      }
+    } catch {
+      if (!clientDisconnected && !response.destroyed) {
+        response.write(
+          `event: error\ndata: ${JSON.stringify({ message: '助教暂时不可用，请稍后再试。' })}\n\n`,
+        );
+      }
+    } finally {
+      response.removeListener('close', closeStream);
+      if (!clientDisconnected && !response.destroyed) response.end();
+    }
   }
 }

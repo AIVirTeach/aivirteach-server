@@ -1,15 +1,21 @@
-import { Inject, Injectable, NotFoundException } from '@nestjs/common';
-import { AuditActorType, WorkspaceStatus } from '@prisma/client';
+import {
+  ConflictException,
+  Inject,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
+import { AuditActorType, WorkspaceStatus, type Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { AuditService } from '../audit/audit.service';
 import { CoursesService } from '../courses/courses.service';
 import { WorkspaceService } from '../workspace/workspace.service';
 import { assertCurrentEnrollment } from './assert-current-enrollment';
 import {
+  completedLessonIds,
   deriveCurrentModuleTitle,
   deriveEnrollmentView,
   type EnrollmentStatus,
-} from './enrollment-view';
+} from './learning-progress-view';
 import { LATEST_PUBLISHED_VERSION } from '../courses/published-version';
 import { TOKEN_WEIGHTS } from '../token-usage/application/check-token-quota';
 import {
@@ -59,7 +65,7 @@ export class EnrollmentsService {
           courseVersionId: latestVersionId,
           active: true,
         },
-        include: { progress: true },
+        include: { progress: true, lessonProgress: true },
       });
     });
 
@@ -75,6 +81,8 @@ export class EnrollmentsService {
       enrollment,
       course.slug,
       deriveEnrollmentView({
+        generation: enrollment.generation,
+        lessonProgress: enrollment.lessonProgress,
         active: enrollment.active,
         completedAt: enrollment.completedAt,
         progress: enrollment.progress,
@@ -104,6 +112,7 @@ export class EnrollmentsService {
           update: {
             active: false,
             generation: { increment: 1 },
+            progressRevision: 0,
             courseVersionId: latestVersionId,
             completedAt: null,
           },
@@ -203,6 +212,7 @@ export class EnrollmentsService {
       include: {
         course: { include: { versions: LATEST_PUBLISHED_VERSION } },
         progress: true,
+        lessonProgress: true,
       },
       orderBy: { createdAt: 'asc' },
     });
@@ -211,6 +221,8 @@ export class EnrollmentsService {
         enrollment,
         enrollment.course.slug,
         deriveEnrollmentView({
+          generation: enrollment.generation,
+          lessonProgress: enrollment.lessonProgress,
           active: enrollment.active,
           completedAt: enrollment.completedAt,
           progress: enrollment.progress,
@@ -224,101 +236,197 @@ export class EnrollmentsService {
     );
   }
 
-  async completeLesson(
-    userId: string,
-    lessonId: string,
-  ): Promise<EnrollmentResponse> {
-    // contentId 只在同一模块内唯一，不同课程会复用同一套课时命名（比如环境搭建步骤），
-    // 所以不能只查 active enrollment——过期的 active 指针会让完成请求记错课程。
-    // 要在用户所有已报名的课程里找出哪门课有这个 contentId，跟 CoursesService.getLesson 一样按 contentId 定位。
-    const enrollments = await this.prisma.enrollment.findMany({
-      where: { userId },
+  async getProgress(userId: string, slug: string) {
+    const enrollment = await this.prisma.enrollment.findFirst({
+      where: { userId, course: { slug, published: true } },
       include: {
         course: { include: { versions: LATEST_PUBLISHED_VERSION } },
         progress: true,
+        lessonProgress: true,
+        completionHistory: { orderBy: { completedAt: 'asc' } },
       },
     });
+    if (!enrollment || !enrollment.course.versions[0])
+      throw new NotFoundException('找不到已报名课程');
+    return this.progressSnapshot(enrollment);
+  }
 
-    const matches = enrollments.flatMap((candidate) => {
-      const modules = candidate.course.versions[0]?.modules ?? [];
-      const flattened = modules.flatMap((courseModule) => courseModule.lessons);
-      const index = flattened.findIndex(
-        (entry) => entry.contentId === lessonId,
-      );
-      return index === -1
-        ? []
-        : [{ enrollment: candidate, modules, flattened, index }];
-    });
+  private progressSnapshot(enrollment: ProgressEnrollment) {
+    const version = enrollment.course.versions[0];
+    const input = { ...enrollment, modules: version.modules };
+    const completedIds = completedLessonIds(input);
+    const ids = version.modules.flatMap((m) =>
+      m.lessons.map((l) => l.contentId),
+    );
+    const currentLessonId = ids.includes(
+      enrollment.progress?.currentLessonContentId ?? '',
+    )
+      ? enrollment.progress!.currentLessonContentId
+      : null;
+    return {
+      enrollmentId: enrollment.id,
+      courseId: enrollment.course.slug,
+      generation: enrollment.generation,
+      revision: enrollment.progressRevision,
+      courseVersionId: version.id,
+      courseVersion: version.version,
+      active: enrollment.active,
+      completedLessonIds: completedIds,
+      totalLessons: ids.length,
+      currentLessonId,
+      nextLessonId: ids.find((id) => !completedIds.includes(id)) ?? null,
+      ...deriveEnrollmentView(input),
+      achievements: enrollment.completionHistory.map((row) => ({
+        generation: row.generation,
+        completedAt: row.completedAt.toISOString(),
+      })),
+    };
+  }
 
-    if (matches.length === 0) {
-      throw new NotFoundException(`找不到课时：${lessonId}`);
-    }
+  async setLessonProgress(
+    userId: string,
+    slug: string,
+    lessonId: string,
+    command: CompletionCommand,
+  ) {
+    return this.writeProgress(userId, slug, lessonId, command);
+  }
 
-    if (matches.length > 1) {
-      // contentId 在用户的多门已报名课程里重复，优先用 active 的那门；
-      // 留审计记录，方便日后排查是否真的完成对了课程。
-      await this.audit.record({
-        actor: { type: AuditActorType.USER, id: userId },
-        action: 'enrollment.completeLesson.ambiguousContentId',
-        success: true,
-        targetType: 'CourseLesson',
-        targetId: lessonId,
+  async setReadingPosition(
+    userId: string,
+    slug: string,
+    command: ReadingCommand,
+  ) {
+    return this.writeProgress(userId, slug, command.lessonId, command);
+  }
+
+  private async writeProgress(
+    userId: string,
+    slug: string,
+    lessonId: string,
+    command: CompletionCommand | ReadingCommand,
+  ) {
+    return this.prisma.$transaction(async (tx) => {
+      // Serialize with publication before reading the latest syllabus.
+      const courses = await tx.$queryRaw<
+        Array<{ id: string }>
+      >`SELECT id FROM "Course" WHERE slug = ${slug} AND published = true FOR SHARE`;
+      if (!courses[0]) throw new NotFoundException('找不到课程');
+      const owned = await tx.enrollment.findUnique({
+        where: { userId_courseId: { userId, courseId: courses[0].id } },
       });
-    }
-
-    const { enrollment, modules, flattened, index } =
-      matches.find((candidate) => candidate.enrollment.active) ?? matches[0];
-    const lesson = flattened[index];
-
-    const nextLessonContentId = flattened[index + 1]?.contentId ?? null;
-    const completedNow = nextLessonContentId === null ? new Date() : null;
-
-    // Activity、completedAt、Progress 放进同一个事务：任何一步失败都不会留下孤立的完成记录，
-    // 学完最后一课时 currentLessonContentId 置空，completedAt 必须同时写入，否则这门课会被判成 not_started。
-    // 首次完成时间由数据库保证：只写 completedAt 仍为空的行，并发请求或已完成的课再次完成都不会覆盖
-    // （enrollment.completedAt 是事务外读的旧值，不能拿来判断）。
-    // 加锁顺序和 restart 一致（先 Enrollment 再 Progress），避免两者并发时互相死锁。
-    await this.prisma.$transaction(async (tx) => {
-      await assertCurrentEnrollment(tx, enrollment.id, enrollment.generation);
-      if (completedNow) {
-        await tx.enrollment.updateMany({
-          where: { id: enrollment.id, completedAt: null },
-          data: { completedAt: completedNow },
+      if (!owned) throw new NotFoundException('找不到已报名课程');
+      await assertCurrentEnrollment(tx, owned.id, command.generation);
+      const enrollment = await tx.enrollment.findUniqueOrThrow({
+        where: { id: owned.id },
+        include: {
+          course: { include: { versions: LATEST_PUBLISHED_VERSION } },
+          progress: true,
+          lessonProgress: true,
+          completionHistory: true,
+        },
+      });
+      const version = enrollment.course.versions[0];
+      if (!version || version.id !== command.courseVersionId)
+        throw new ConflictException('课程已更新，请刷新后重试');
+      const lessons = version.modules.flatMap((m) => m.lessons);
+      const matches = lessons.filter((l) => l.contentId === lessonId);
+      if (matches.length !== 1) throw new NotFoundException('找不到唯一课时');
+      if ('completed' in command) {
+        const previous = enrollment.lessonProgress.find(
+          (row) =>
+            row.generation === command.generation && row.contentId === lessonId,
+        );
+        const alreadyCompleted = !!previous?.completedAt;
+        // Identical retries do not duplicate revision, activities or achievements.
+        if (alreadyCompleted === command.completed)
+          return this.progressSnapshot(enrollment);
+        if (enrollment.progressRevision !== command.revision)
+          throw new ConflictException('学习进度已更新，请刷新后重试');
+        const now = new Date();
+        const record = await tx.lessonProgress.upsert({
+          where: {
+            enrollmentId_generation_contentId: {
+              enrollmentId: enrollment.id,
+              generation: command.generation,
+              contentId: lessonId,
+            },
+          },
+          create: {
+            enrollmentId: enrollment.id,
+            generation: command.generation,
+            contentId: lessonId,
+            completedAt: now,
+            firstCompletedAt: now,
+          },
+          update: {
+            completedAt: command.completed ? now : null,
+            ...(command.completed && !previous?.firstCompletedAt
+              ? { firstCompletedAt: now }
+              : {}),
+          },
+        });
+        enrollment.lessonProgress = enrollment.lessonProgress
+          .filter(
+            (row) =>
+              !(
+                row.generation === command.generation &&
+                row.contentId === lessonId
+              ),
+          )
+          .concat(record);
+        if (command.completed && !previous?.firstCompletedAt)
+          await tx.activity.create({
+            data: {
+              userId,
+              enrollmentId: enrollment.id,
+              kind: 'LESSON',
+              title: matches[0].title,
+              detail: `完成课时：${matches[0].title}`,
+            },
+          });
+        const allComplete =
+          completedLessonIds({ ...enrollment, modules: version.modules })
+            .length === lessons.length;
+        const completedAt =
+          enrollment.completedAt ?? (allComplete ? now : null);
+        const updated = await tx.enrollment.update({
+          where: { id: enrollment.id },
+          data: { progressRevision: { increment: 1 }, completedAt },
+        });
+        enrollment.progressRevision = updated.progressRevision;
+        enrollment.completedAt = updated.completedAt;
+        if (allComplete) {
+          const achievement = await tx.courseCompletionHistory.upsert({
+            where: {
+              enrollmentId_generation: {
+                enrollmentId: enrollment.id,
+                generation: command.generation,
+              },
+            },
+            create: {
+              enrollmentId: enrollment.id,
+              generation: command.generation,
+              completedAt: completedAt!,
+            },
+            update: {},
+          });
+          enrollment.completionHistory = enrollment.completionHistory
+            .filter((row) => row.generation !== command.generation)
+            .concat(achievement);
+        }
+      } else {
+        enrollment.progress = await tx.progress.upsert({
+          where: { enrollmentId: enrollment.id },
+          create: {
+            enrollmentId: enrollment.id,
+            currentLessonContentId: lessonId,
+          },
+          update: { currentLessonId: null, currentLessonContentId: lessonId },
         });
       }
-      await tx.progress.upsert({
-        where: { enrollmentId: enrollment.id },
-        update: { currentLessonContentId: nextLessonContentId },
-        create: {
-          enrollmentId: enrollment.id,
-          currentLessonContentId: nextLessonContentId,
-        },
-      });
-      await tx.activity.create({
-        data: {
-          userId,
-          enrollmentId: enrollment.id,
-          kind: 'LESSON',
-          title: lesson.title,
-          detail: `完成课时：${lesson.title}`,
-        },
-      });
+      return this.progressSnapshot(enrollment);
     });
-
-    return this.toResponse(
-      enrollment,
-      enrollment.course.slug,
-      deriveEnrollmentView({
-        active: enrollment.active,
-        completedAt: enrollment.completedAt ?? completedNow,
-        progress: { currentLessonContentId: nextLessonContentId },
-        modules,
-      }),
-      deriveCurrentModuleTitle({
-        progress: { currentLessonContentId: nextLessonContentId },
-        modules,
-      }),
-    );
   }
 
   private toResponse(
@@ -345,3 +453,23 @@ export class EnrollmentsService {
     };
   }
 }
+
+export type CompletionCommand = {
+  generation: number;
+  revision: number;
+  courseVersionId: string;
+  completed: boolean;
+};
+export type ReadingCommand = {
+  generation: number;
+  courseVersionId: string;
+  lessonId: string;
+};
+type ProgressEnrollment = Prisma.EnrollmentGetPayload<{
+  include: {
+    course: { include: { versions: typeof LATEST_PUBLISHED_VERSION } };
+    progress: true;
+    lessonProgress: true;
+    completionHistory: true;
+  };
+}>;

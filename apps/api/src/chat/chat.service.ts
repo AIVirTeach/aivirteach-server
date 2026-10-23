@@ -1,11 +1,18 @@
-import { ForbiddenException, Inject, Injectable, Logger } from '@nestjs/common';
+import {
+  ConflictException,
+  ForbiddenException,
+  NotFoundException,
+  Inject,
+  Injectable,
+  Logger,
+} from '@nestjs/common';
 import {
   ConversationRole,
   WorkspaceStatus,
   type Conversation,
   type Prisma,
 } from '@prisma/client';
-import { randomUUID } from 'node:crypto';
+import type { SendChatMessageInput } from './chat.schemas';
 import { z } from 'zod';
 import { LATEST_PUBLISHED_VERSION } from '../courses/published-version';
 import {
@@ -55,12 +62,22 @@ function usageColumns(usage: DiagnoseResponseBody['usage']) {
   };
 }
 
-type DiagnoseInputs = Pick<
+type AcceptedDiagnoseContext = Pick<
   DiagnoseRequestBody,
-  'lab_id' | 'course' | 'current_step'
+  'course' | 'current_step'
 >;
+type DiagnoseInputs = AcceptedDiagnoseContext &
+  Pick<DiagnoseRequestBody, 'lab_id'>;
 type ResolvedDiagnoseRequest =
   { ok: true; inputs: DiagnoseInputs } | { ok: false; fallbackMessage: string };
+
+export type AcceptedChat = {
+  userId: string;
+  enrollmentId: string;
+  command: SendChatMessageInput;
+  studentRow: Conversation;
+  resolved: ResolvedDiagnoseRequest;
+};
 
 @Injectable()
 export class ChatService {
@@ -75,11 +92,15 @@ export class ChatService {
   async getMessages(
     userId: string,
     enrollmentId: string,
+    generation: number,
   ): Promise<ChatMessage[]> {
     await this.requireOwnedEnrollment(userId, enrollmentId);
-    const rows = await this.prisma.conversation.findMany({
-      where: { enrollmentId },
-      orderBy: { createdAt: 'asc' },
+    const rows = await this.prisma.$transaction(async (tx) => {
+      await assertCurrentEnrollment(tx, enrollmentId, generation);
+      return tx.conversation.findMany({
+        where: { enrollmentId, generation },
+        orderBy: { createdAt: 'asc' },
+      });
     });
     return rows.map((row) => this.toChatMessage(userId, row));
   }
@@ -87,26 +108,15 @@ export class ChatService {
   async sendMessage(
     userId: string,
     enrollmentId: string,
-    text: string,
+    command: SendChatMessageInput,
   ): Promise<{ studentMessage: ChatMessage; tutorMessage: ChatMessage }> {
-    const enrollment = await this.requireOwnedEnrollment(userId, enrollmentId);
-
-    const studentRow = await this.createCurrentConversation(
-      enrollment.id,
-      enrollment.generation,
-      {
-        enrollmentId: enrollment.id,
-        threadId: enrollment.id,
-        role: ConversationRole.USER,
-        content: text,
-      },
-    );
-
-    const resolved = await this.resolveDiagnoseRequest(
-      enrollment.id,
-      enrollment.courseId,
-      enrollment.completedAt !== null,
-    );
+    const accepted = await this.prepareMessage(userId, enrollmentId, command);
+    const { studentRow, resolved } = accepted;
+    const enrollment = {
+      id: enrollmentId,
+      generation: command.context.generation,
+    };
+    const { text, requestId } = command;
     if (!resolved.ok) {
       return this.respondWithFallback(
         userId,
@@ -117,7 +127,6 @@ export class ChatService {
       );
     }
 
-    const requestId = randomUUID();
     let response: Awaited<ReturnType<AgentClient['diagnose']>>;
     try {
       response = await this.agentClient.diagnose({
@@ -149,6 +158,7 @@ export class ChatService {
       {
         enrollmentId: enrollment.id,
         threadId: enrollment.id,
+        ...this.contextColumns(studentRow),
         role: ConversationRole.ASSISTANT,
         content: response.answer,
         contextRef: response as unknown as Prisma.InputJsonValue,
@@ -165,26 +175,22 @@ export class ChatService {
   async *streamMessage(
     userId: string,
     enrollmentId: string,
-    text: string,
+    command: SendChatMessageInput,
   ): AsyncGenerator<ChatStreamEvent> {
-    const enrollment = await this.requireOwnedEnrollment(userId, enrollmentId);
-
-    const studentRow = await this.createCurrentConversation(
-      enrollment.id,
-      enrollment.generation,
-      {
-        enrollmentId: enrollment.id,
-        threadId: enrollment.id,
-        role: ConversationRole.USER,
-        content: text,
-      },
+    yield* this.streamPrepared(
+      await this.prepareMessage(userId, enrollmentId, command),
     );
+  }
 
-    const resolved = await this.resolveDiagnoseRequest(
-      enrollment.id,
-      enrollment.courseId,
-      enrollment.completedAt !== null,
-    );
+  async *streamPrepared(
+    accepted: AcceptedChat,
+  ): AsyncGenerator<ChatStreamEvent> {
+    const { userId, enrollmentId, command, studentRow, resolved } = accepted;
+    const enrollment = {
+      id: enrollmentId,
+      generation: command.context.generation,
+    };
+    const { text, requestId } = command;
     if (!resolved.ok) {
       yield {
         type: 'complete',
@@ -202,8 +208,8 @@ export class ChatService {
     // result 帧落库前只转发 progress——result 本身不当 progress 转发，落库成功后
     // 才发一个 complete 事件；一个 JSON.parse/schema 校验失败就直接走下面的兜底，
     // 不把半成品结果透传给 client（跟 sendMessage() 的"聊天接口不返回 5xx"约束一致）。
-    const requestId = randomUUID();
     let response: z.infer<typeof DiagnoseResponseSchema> | null = null;
+    let mayForwardProgress = true;
     try {
       for await (const frame of this.agentClient.diagnoseStream({
         request_id: requestId,
@@ -216,6 +222,21 @@ export class ChatService {
           if (parsed.success) response = parsed.data.response;
           continue;
         }
+        if (mayForwardProgress) {
+          try {
+            await this.prisma.$transaction((tx) =>
+              assertCurrentEnrollment(
+                tx,
+                enrollmentId,
+                command.context.generation,
+              ),
+            );
+          } catch (error) {
+            if (!(error instanceof StaleEnrollmentError)) throw error;
+            mayForwardProgress = false;
+          }
+        }
+        if (!mayForwardProgress) continue;
         yield { type: 'progress', event: frame.event, data };
       }
     } catch (error) {
@@ -262,6 +283,7 @@ export class ChatService {
         {
           enrollmentId: enrollment.id,
           threadId: enrollment.id,
+          ...this.contextColumns(studentRow),
           role: ConversationRole.ASSISTANT,
           content: response.answer,
           contextRef: response as unknown as Prisma.InputJsonValue,
@@ -286,88 +308,111 @@ export class ChatService {
     };
   }
 
-  private async resolveDiagnoseRequest(
+  async prepareMessage(
+    userId: string,
     enrollmentId: string,
-    courseId: string,
-    courseCompleted: boolean,
-  ): Promise<ResolvedDiagnoseRequest> {
-    const workspace = await this.prisma.workspace.findUnique({
-      where: { enrollmentId },
-    });
-    if (!workspace?.labId || workspace.status !== WorkspaceStatus.RUNNING) {
-      return { ok: false, fallbackMessage: '请先启动虚拟机后再提问。' };
-    }
-
-    // 聊天本身就是"学生还在用这个 workspace"的活跃信号，顺手刷新 lastSeenAt——不能只靠
-    // 客户端独立的 60 秒心跳定时器，否则一次长对话中如果心跳断了，idle-sweep 可能会在
-    // 对话中途把 VM 收掉。sendMessage/streamMessage 都走这里，改一处即可覆盖两条路径。
-    await this.prisma.workspace.update({
-      where: { enrollmentId },
-      data: { lastSeenAt: new Date() },
-    });
-
-    const progress = await this.prisma.progress.findUnique({
-      where: { enrollmentId },
-    });
-    // 指针为空有两种含义：还没进入任何课时，或已学完整门课（completeLesson 学完最后一课时
-    // 置空）。两者都允许提问，上下文只读不写：没开始用第一课，已学完用最后一课。
-    const pointer = progress?.currentLessonContentId ?? null;
-    const context = await this.buildDiagnoseContext(
-      courseId,
-      pointer,
-      courseCompleted,
-    );
-    if (!context) {
-      this.logger.warn(
-        `enrollmentId=${enrollmentId} 课程内容不可用，未调用 Agent（currentLessonContentId=${pointer ?? 'null'}）`,
+    command: SendChatMessageInput,
+  ): Promise<AcceptedChat> {
+    const owned = await this.requireOwnedEnrollment(userId, enrollmentId);
+    return this.prisma.$transaction(async (tx) => {
+      await tx.$queryRaw`SELECT id FROM "Course" WHERE id = ${owned.courseId} FOR SHARE`;
+      await assertCurrentEnrollment(
+        tx,
+        enrollmentId,
+        command.context.generation,
       );
-      return {
-        ok: false,
-        fallbackMessage: '课程内容暂时不可用，请稍后再试。',
-      };
-    }
-
-    return {
-      ok: true,
-      inputs: {
-        lab_id: workspace.labId,
-        course: context.course,
-        current_step: context.currentStep,
-      },
-    };
+      const duplicate = await tx.conversation.findFirst({
+        where: {
+          enrollmentId,
+          generation: command.context.generation,
+          requestId: command.requestId,
+          role: ConversationRole.USER,
+        },
+      });
+      if (duplicate)
+        throw new ConflictException({
+          code: 'chat_request_exists',
+          message: '这次提问已提交，请查看对话记录',
+        });
+      const context = await this.buildDiagnoseContext(
+        tx,
+        owned.courseId,
+        command.context,
+      );
+      const workspace = await tx.workspace.findUnique({
+        where: { enrollmentId },
+      });
+      let resolved: ResolvedDiagnoseRequest;
+      if (!workspace?.labId || workspace.status !== WorkspaceStatus.RUNNING) {
+        resolved = { ok: false, fallbackMessage: '请先启动虚拟机后再提问。' };
+      } else {
+        await tx.workspace.update({
+          where: { enrollmentId },
+          data: { lastSeenAt: new Date() },
+        });
+        resolved = {
+          ok: true,
+          inputs: { lab_id: workspace.labId, ...context },
+        };
+      }
+      const studentRow = await tx.conversation.create({
+        data: {
+          enrollmentId,
+          threadId: enrollmentId,
+          role: ConversationRole.USER,
+          content: command.text,
+          requestId: command.requestId,
+          generation: command.context.generation,
+          courseVersionId: command.context.courseVersionId,
+          lessonContentId: command.context.lessonId,
+          acceptedContext: {
+            course: context.course,
+            current_step: context.current_step,
+          },
+        },
+      });
+      return { userId, enrollmentId, command, studentRow, resolved };
+    });
   }
 
   private async buildDiagnoseContext(
+    tx: Prisma.TransactionClient,
     courseId: string,
-    currentLessonContentId: string | null,
-    courseCompleted: boolean,
-  ): Promise<{
-    course: DiagnoseRequestBody['course'];
-    currentStep: DiagnoseRequestBody['current_step'];
-  } | null> {
-    const course = await this.prisma.course.findUnique({
+    reference: SendChatMessageInput['context'],
+  ): Promise<AcceptedDiagnoseContext> {
+    const course = await tx.course.findUnique({
       where: { id: courseId },
       include: { versions: LATEST_PUBLISHED_VERSION },
     });
     const version = course?.versions[0];
-    if (!course || !version) return null;
+    if (
+      !course?.published ||
+      !version ||
+      version.id !== reference.courseVersionId
+    )
+      throw new ConflictException({
+        code: 'course_version_changed',
+        message: '课程已更新，请刷新后重试',
+      });
 
     const flattened = version.modules.flatMap((courseModule) =>
       courseModule.lessons.map((lesson) => ({ lesson, courseModule })),
     );
-    if (!flattened.length) return null;
-    const index =
-      currentLessonContentId === null
-        ? courseCompleted
-          ? flattened.length - 1
-          : 0
-        : flattened.findIndex(
-            ({ lesson }) => lesson.contentId === currentLessonContentId,
-          );
-    if (index < 0) return null;
+    const index = flattened.findIndex(
+      ({ lesson }) => lesson.contentId === reference.lessonId,
+    );
+    if (
+      index < 0 ||
+      flattened.filter(({ lesson }) => lesson.contentId === reference.lessonId)
+        .length !== 1
+    )
+      throw new NotFoundException({
+        code: 'lesson_not_found',
+        message: '找不到此版本的唯一课时',
+      });
     const { lesson, courseModule } = flattened[index];
     const sequence = index + 1;
-    const lessonWithAssessment = await this.prisma.courseLesson.findFirst({
+    const lessonWithAssessment = await tx.courseLesson.findFirst({
       where: {
         id: lesson.id,
         moduleId: courseModule.id,
@@ -375,7 +420,7 @@ export class ChatService {
       },
       select: { assessments: { take: 1 } },
     });
-    if (!lessonWithAssessment) return null;
+    if (!lessonWithAssessment) throw new NotFoundException('课时内容不可用');
     const assessment = lessonWithAssessment.assessments[0] ?? null;
 
     return {
@@ -385,7 +430,7 @@ export class ChatService {
         title: course.title,
         summary: course.description,
       },
-      currentStep: {
+      current_step: {
         module_id: courseModule.id,
         lesson_id: lesson.contentId,
         sequence,
@@ -404,6 +449,18 @@ export class ChatService {
     };
   }
 
+  private contextColumns(row: Conversation) {
+    return {
+      requestId: row.requestId,
+      generation: row.generation,
+      courseVersionId: row.courseVersionId,
+      lessonContentId: row.lessonContentId,
+      ...(row.acceptedContext == null
+        ? {}
+        : { acceptedContext: row.acceptedContext as Prisma.InputJsonValue }),
+    };
+  }
+
   private async respondWithFallback(
     userId: string,
     enrollmentId: string,
@@ -417,6 +474,7 @@ export class ChatService {
       {
         enrollmentId,
         threadId: enrollmentId,
+        ...this.contextColumns(studentRow),
         role: ConversationRole.ASSISTANT,
         content: message,
       },
@@ -466,10 +524,12 @@ export class ChatService {
         );
         if (consumed > 0) {
           await this.prisma.quotaLedger.upsert({
-            where: { id: `stale-agent-${requestId}` },
+            where: {
+              id: `stale-agent-${enrollmentId}-${generation}-${requestId}`,
+            },
             update: {},
             create: {
-              id: `stale-agent-${requestId}`,
+              id: `stale-agent-${enrollmentId}-${generation}-${requestId}`,
               userId,
               tokensDelta: -consumed,
             },

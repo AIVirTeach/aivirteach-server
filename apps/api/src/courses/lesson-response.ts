@@ -17,6 +17,8 @@ type ModuleRow = Prisma.CourseModuleGetPayload<object> & {
 
 export type LessonResponse = {
   courseId: string;
+  courseVersionId: string;
+  courseVersion: number;
   module: { id: string; title: string; position: number };
   lesson: {
     id: string;
@@ -41,6 +43,8 @@ export type LessonResponse = {
 
 export function buildLessonResponse(input: {
   courseSlug: string;
+  courseVersionId: string;
+  courseVersion: number;
   modules: ModuleRow[];
   lessonId: string;
   courseAssets: Array<{
@@ -80,6 +84,8 @@ export function buildLessonResponse(input: {
   );
   return {
     courseId: input.courseSlug,
+    courseVersionId: input.courseVersionId,
+    courseVersion: input.courseVersion,
     module: {
       id: courseModule.id,
       title: courseModule.title,
