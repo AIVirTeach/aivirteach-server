@@ -275,6 +275,7 @@ model Enrollment {
   currentModule   CourseModule?  @relation(fields: [currentModuleId], references: [id])
   active          Boolean        @default(true)
   generation      Int            @default(0)
+  progressRevision Int           @default(0)
   completedAt     DateTime?
   createdAt       DateTime       @default(now())
 
@@ -284,6 +285,8 @@ model Enrollment {
   conversations Conversation[]
   activities    Activity[]
   completion    EnrollmentCompletion?
+  lessonProgress LessonProgress[]
+  completionHistory CourseCompletionHistory[]
 
   @@unique([userId, courseId])
   @@index([courseId])
@@ -468,4 +471,23 @@ model EnrollmentCompletion {
   errorMessage    String?
   completedAt     DateTime     @default(now())
   exportedAt      DateTime?
+}
+
+// Stable content IDs survive published version cloning. No FK to version rows.
+model LessonProgress {
+  enrollmentId String
+  generation Int
+  contentId String
+  completedAt DateTime?
+  firstCompletedAt DateTime?
+  enrollment Enrollment @relation(fields: [enrollmentId], references: [id], onDelete: Cascade)
+  @@id([enrollmentId, generation, contentId])
+}
+
+model CourseCompletionHistory {
+  enrollmentId String
+  generation Int
+  completedAt DateTime
+  enrollment Enrollment @relation(fields: [enrollmentId], references: [id], onDelete: Cascade)
+  @@id([enrollmentId, generation])
 }
