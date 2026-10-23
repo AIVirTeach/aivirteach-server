@@ -64,3 +64,13 @@ The first four implementation slices reorganize existing code; they do not compl
 Draft PRs are review slices, not independent deployment units. Breaking client/server contract changes require a coordinated release. No legacy fallback is planned. Check provider Git integrations before merging; absence of .github/workflows is not proof that auto-deployment is disabled. Neither repository has a checked-in GitHub Actions workflow at the inspected baselines (server 6b5f00d, client 5392a6e). Provider auto-deployment state remains unverified.
 
 Existing full-suite counts in source PRs are historical evidence for the original combined implementation, not fresh validation of each split. Record actual split checks in each PR. Browser, real Labs/VM and production acceptance remain pending.
+
+## Review links
+
+- https://github.com/AIVirTeach/aivirteach-server/pull/35
+- https://github.com/AIVirTeach/aivirteach-server/pull/36
+- https://github.com/AIVirTeach/aivirteach-server/pull/37
+- https://github.com/AIVirTeach/aivirteach-client/pull/23
+- https://github.com/AIVirTeach/aivirteach-client/pull/24
+
+Server #37 is based on #36. Client #24 is based on #23. Both chat slices remain planned; no empty placeholder PRs were created. Original #34 and #22 remain draft source records.
