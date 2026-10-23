@@ -1,76 +1,56 @@
-# Learning domain boundaries and PR delivery
+# Learning domain boundaries and implementation status
 
-Status: agreed design; implementation incomplete. Existing server #34 and client #22 are draft source PRs. No merge or deployment is authorized by this plan.
+Status: the explicit chat-context work in server PRs #35–#37 and client PR #23 is merged. This branch implements the backend two-table learning-state refactor. Client PR #24 must adapt to the finalized snapshot/restart contracts. The older PRs #34 and #22 remain draft source records. The user confirmed deployment is manual; no deployment was requested for this work.
 
-## Ownership and principles
+## Ownership and invariants
 
-Course content owns drafts, immutable published versions and stable lesson IDs. Learning owns enrollment, generation, reading position, completion and historical achievements. Assessment owns attempts and PASS evidence. Chat owns questions, replies and their explicit context. Labs owns execution and environment lifecycle.
+Course content owns drafts, immutable published versions and stable lesson IDs. Learning owns enrollment, generation, reading position, completion and historical achievements. Assessment owns attempts and PASS evidence. Chat owns questions, replies and explicit context. Labs owns execution and environment lifecycle.
 
 1. Every chat request supplies courseVersionId, lessonId and generation. Never infer context from reading position, completion percentage or previous messages.
 2. Client identifiers express intent. The server checks ownership and version membership and loads trusted lesson instructions.
-3. Reading, completion and assessment are independent commands. Chat does not mutate their business state.
-4. An accepted question retains its version and lesson throughout execution. Publication must not silently replace its context.
-5. Check generation before accepting work and before saving results. Old responses must not enter a restarted learning session.
+3. Reading, completion and assessment are independent commands. Chat does not mutate learning state.
+4. An accepted question retains its version and lesson throughout execution. Publication does not replace its context.
+5. Check generation before accepting work and before saving results. Old responses cannot enter a restarted learning session.
 6. Agent calls run outside database transactions. Use short transactions around acceptance and finalization.
 7. Invalid or stale context produces an explicit error. Never fall back to the first lesson or latest version.
 8. Streaming and ordinary chat share validation, context construction and persistence rules.
-9. Migrate all callers and delete obsolete endpoints. There are no users requiring a legacy compatibility layer.
-10. Tests accompany each behavior change. Passing builds does not establish browser or production acceptance.
+9. Migrate callers and remove obsolete endpoints when the coordinated client/server contract is ready.
+10. Passing builds does not establish browser or production acceptance.
 
-## Contracts
+## Backend learning state
 
-Completion: lessonId, courseVersionId, generation, revision, completed. Reading: lessonId, courseVersionId, generation. Chat: requestId, text, context containing courseVersionId, lessonId and generation. Enrollment comes from the route and identity from authentication.
+The learning domain has two tables: `Enrollment` for mutable current state and `LearningSnapshot` for immutable saved state. `Enrollment.learningState` schema version 1 is:
 
-requestId correlates a question and reply. Repeated requests need a defined uniqueness scope and duplicate-in-flight result before implementation; correlation alone does not establish idempotence.
+```json
+{
+  "schemaVersion": 1,
+  "readingLessonId": "stable-content-id-or-null",
+  "lessons": {
+    "stable-content-id": {
+      "completedAt": "ISO timestamp or null",
+      "firstCompletedAt": "ISO timestamp or null"
+    }
+  },
+  "completedAt": "first course completion timestamp or null"
+}
+```
 
-Both clients send context from successfully loaded content. Disable send while changing lessons. Keep already submitted questions bound to their original context. Reading persistence is a resume aid, not the authority for current chat context. A reading save failure should allow reading and explicitly scoped chat while exposing a retry.
+JSON is parsed once at the database boundary and changed only through typed learning transitions. `progressRevision` advances for reading, completion and publication remaps so a snapshot command binds the entire current state. Restart increments generation and resets revision to zero.
 
-For a new request, reject an outdated published version with a stable conflict code. After acceptance, finish using the captured version. Recheck generation when persisting results. Verify published versions are immutable and retained before relying on references instead of content snapshots.
+A manual snapshot request is `POST /courses/:slug/snapshots` with `{ requestId, generation, revision, courseVersionId }`. The handler locks the published course, reads the actual latest published version inside the transaction, locks the owned enrollment and saves a coherent state. An identical retry returns the original snapshot; reusing a request ID for different command values returns a conflict.
 
-## Chat persistence and flow
+`GET /courses/:slug/snapshots` returns `{ items, nextCursor }` with at most 50 summary rows. Each summary includes the pinned version and lesson titles/counts; `schemaVersion: 0` legacy records are marked incomplete and omit invented progress. `GET /courses/:slug/snapshots/:snapshotId` returns state with the pinned syllabus. There is no restore endpoint.
 
-Store requestId, generation, courseVersionId and lessonContentId as explicit context, separate from Agent diagnostic JSON. Current Conversation.contextRef receives Agent responses and is not yet this contract. Select uniqueness constraints and migration details in the chat PR.
+`POST /courses/:slug/restart` requires `{ requestId, generation, revision, courseVersionId }`, with a UUID request ID. The restart snapshot and state reset share a transaction. Exact retries do not repeat quota settlement, snapshot creation or generation changes. Workspace cleanup remains retryable after commit.
 
-Validate context and save the user question in a short transaction. Call Agent outside the transaction. Recheck the generation and save the reply in a second short transaction. Apply the same rules to ordinary and streaming paths, including suppression of late UI results after restart.
+The first course completion writes one `COMPLETED` snapshot per generation. Manual saves use `MANUAL`; restart saves use `RESTART`. Existing deployed `Enrollment.completedAt` values are retained as `LEGACY_ACHIEVEMENT` records with `completeStateAvailable: false`; the migration does not invent lesson completion details. `EnrollmentCompletion` has no runtime consumer. The migration aborts before mutation if the placeholder table is unexpectedly populated.
 
-## PR sequence
+The configured Neon migration metadata reports `20261010000000` as the latest applied migration; no 20261023 migration is applied. The configured database has zero `EnrollmentCompletion` rows. These checks do not independently verify provider migration/deployment state. The user confirmed there has been no deployment or migration rollout for this change.
 
-| Slice | Contents | Dependency |
-| --- | --- | --- |
-| Design | This decision, principles and acceptance matrix | main |
-| Progress model | Schema, migration, pure completed-ID projection and its tests | main |
-| Progress API | Commands, dashboard/enrollment integration, HTTP tests and verification script | Progress model |
-| Client controller | API additions, progress controller/hook and controller tests | client main |
-| Client pages | V1/V2 integration, loader tests, remove old client completion caller | Client controller; Progress API contract |
-| Chat API | Explicit context, persistence, shared streaming rules, remove legacy completion endpoint and implicit context path | Progress API |
-| Chat client | Explicit loaded-lesson context in both layouts and late-response protection | Client pages; Chat API contract |
+## HTTP behavior and verification
 
-The first four implementation slices reorganize existing code; they do not complete the new chat architecture. Retain legacy client method only in the controller base so existing callers compile; remove it in the page slice. The existing legacy server adapter remains a known blocker in the extracted API draft until the chat/API cleanup removes it. Do not restore automatic reading advancement.
+Completion remains `PUT /courses/:slug/lessons/:lessonId/progress`; reading remains `PUT /courses/:slug/reading-position`. Both retain the generation and course-version fences. Completion also requires revision. Identical completion retries do not add revisions or activities. Reading advances revision only when the position changes. Achievement history is projected from immutable completion snapshots plus the current generation state.
 
-## Acceptance matrix
+The backend test slice covers typed state transitions, shared progress projection, dashboard and enrollment projections, completion/retry/unmark behavior, revision conflicts, stable-ID publication changes, manual snapshot ownership/idempotency/immutability/version pinning, bounded pagination, completion and restart snapshots, quota settlement, and reset retry behavior. Migration validation covers a fresh schema, upgrade from the configured deployed baseline, timestamp preservation, stable bookmark fallback, no fabricated history, and atomic failure for nonempty `EnrollmentCompletion`.
 
-- Completion changes neither reading nor assessment PASS; reading never completes a lesson.
-- Retry, unmark, concurrent revision, restart and publication preserve the tested learning rules.
-- Two tabs viewing different lessons send different correct tutor contexts.
-- A forged lesson/version pair is rejected before Agent invocation.
-- A stale new request is rejected; publication during an accepted question does not switch content.
-- Restart during Agent work cannot inject the old response into the new generation.
-- Reading persistence failure does not force chat to guess context.
-- V1 streaming and V2 ordinary chat enforce identical business rules.
-- Operator edit, preview, save, publish and learner reading require real end-to-end acceptance.
-
-## Release boundary
-
-Draft PRs are review slices, not independent deployment units. Breaking client/server contract changes require a coordinated release. No legacy fallback is planned. Check provider Git integrations before merging; absence of .github/workflows is not proof that auto-deployment is disabled. Neither repository has a checked-in GitHub Actions workflow at the inspected baselines (server 6b5f00d, client 5392a6e). Provider auto-deployment state remains unverified.
-
-Existing full-suite counts in source PRs are historical evidence for the original combined implementation, not fresh validation of each split. Record actual split checks in each PR. Browser, real Labs/VM and production acceptance remain pending.
-
-## Review links
-
-- https://github.com/AIVirTeach/aivirteach-server/pull/35
-- https://github.com/AIVirTeach/aivirteach-server/pull/36
-- https://github.com/AIVirTeach/aivirteach-server/pull/37
-- https://github.com/AIVirTeach/aivirteach-client/pull/23
-- https://github.com/AIVirTeach/aivirteach-client/pull/24
-
-Server #37 is based on #36. Client #24 is based on #23. Both chat slices remain planned; no empty placeholder PRs were created. Original #34 and #22 remain draft source records.
+Browser flows, real Labs/VM behavior, coordinated release, and production acceptance remain unverified. Deployment remains manual per the user's confirmation.
