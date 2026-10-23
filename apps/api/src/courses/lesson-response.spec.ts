@@ -56,6 +56,8 @@ describe('buildLessonResponse', () => {
   it('returns body as markdown and navigation from the flattened module order', () => {
     expect(
       buildLessonResponse({
+        courseVersionId: 'version-1',
+        courseVersion: 1,
         courseSlug: 'course',
         modules,
         lessonId: 'lesson-two',
@@ -63,6 +65,8 @@ describe('buildLessonResponse', () => {
       }),
     ).toEqual({
       courseId: 'course',
+      courseVersionId: 'version-1',
+      courseVersion: 1,
       module: { id: 'module-1', title: 'Module One', position: 1 },
       lesson: {
         id: 'lesson-two',
@@ -92,6 +96,8 @@ describe('buildLessonResponse', () => {
   it('throws NotFoundException when the contentId is absent', () => {
     expect(() =>
       buildLessonResponse({
+        courseVersionId: 'version-1',
+        courseVersion: 1,
         courseSlug: 'course',
         modules,
         lessonId: 'missing',
@@ -133,6 +139,8 @@ describe('buildLessonResponse', () => {
       ),
     }));
     const result = buildLessonResponse({
+      courseVersionId: 'version-1',
+      courseVersion: 1,
       courseSlug: 'course',
       modules: withContent,
       lessonId: 'lesson-one',
@@ -157,6 +165,8 @@ describe('buildLessonResponse', () => {
       ),
     }));
     const result = buildLessonResponse({
+      courseVersionId: 'version-1',
+      courseVersion: 1,
       courseSlug: 'course',
       modules: withInvalidContent,
       lessonId: 'lesson-one',

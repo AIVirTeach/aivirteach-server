@@ -249,11 +249,7 @@ describe('lesson progress (real PostgreSQL and authenticated HTTP)', () => {
     expect(after.completedLessonIds).toEqual(before.completedLessonIds);
   });
 
-  it('legacy deployed client uses the same completion records', async () => {
-    await request(app.getHttpServer())
-      .post('/api/v1/lessons/b/complete')
-      .set('Authorization', `Bearer ${token}`)
-      .expect(201);
-    expect((await get()).body.completedLessonIds).toEqual(['a', 'b']);
+  it('removes the ambiguous legacy completion endpoint', async () => {
+    await request(app.getHttpServer()).post('/api/v1/lessons/b/complete').expect(404);
   });
 });

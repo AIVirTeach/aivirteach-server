@@ -146,6 +146,8 @@ export class CoursesService {
     );
     return buildLessonResponse({
       courseSlug: course.slug,
+      courseVersionId: version.id,
+      courseVersion: version.version,
       modules,
       lessonId,
       courseAssets,

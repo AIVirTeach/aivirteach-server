@@ -370,6 +370,11 @@ model Conversation {
   content              String
   // 拼给 Labs /v1/agent/diagnose 的素材（当前步骤、截图、评测结果等）。
   contextRef           Json?
+  acceptedContext      Json?
+  requestId            String?
+  generation           Int?
+  courseVersionId      String?
+  lessonContentId      String?
   // 这条 Agent 回复消耗的 token，按计费口径分三类；Labs 没返回 usage 时留空。
   // 不存 total（三项之和）；推理 token 已含在 outputTokens 里。
   inputCacheHitTokens  Int?
@@ -378,6 +383,7 @@ model Conversation {
   createdAt            DateTime         @default(now())
 
   @@index([enrollmentId, threadId])
+  @@unique([enrollmentId, generation, requestId, role])
 }
 
 model Notification {

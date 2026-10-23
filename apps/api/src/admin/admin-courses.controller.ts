@@ -323,6 +323,8 @@ export class AdminCoursesController {
     );
     return buildLessonResponse({
       courseSlug: slug,
+      courseVersionId: draft.id,
+      courseVersion: draft.version,
       modules: draft.modules,
       lessonId: contentId,
       courseAssets,

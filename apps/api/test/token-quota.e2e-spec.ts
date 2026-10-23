@@ -1,4 +1,5 @@
 import 'dotenv/config';
+import { randomUUID } from 'node:crypto';
 import { INestApplication } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
 import { PrismaClient } from '@prisma/client';
@@ -19,9 +20,15 @@ describe('Token 额度 Guard 端到端', () => {
   let userId: string;
   let courseId: string;
   let enrollmentId: string;
+  let courseVersionId: string;
   let accessToken: string;
 
   const messagesUrl = () => `/api/v1/workspaces/${enrollmentId}/chat/messages`;
+  const command = (text: string) => ({
+    requestId: randomUUID(),
+    text,
+    context: { courseVersionId, lessonId: 'quota-lesson', generation: 0 },
+  });
 
   beforeAll(async () => {
     // ConfigModule 在模块编译时读 process.env，必须在 createTestingModule 之前设置。
@@ -40,8 +47,31 @@ describe('Token 额度 Guard 端到端', () => {
     });
     courseId = course.id;
     // restart 要求课程至少有一个已发布版本。
-    await prisma.courseVersion.create({
+    const version = await prisma.courseVersion.create({
       data: { courseId, version: 1, publishedAt: new Date() },
+    });
+    courseVersionId = version.id;
+    const courseModule = await prisma.courseModule.create({
+      data: {
+        courseVersionId,
+        position: 1,
+        title: '模块',
+        description: '',
+        estimatedMinutes: 10,
+      },
+    });
+    await prisma.courseLesson.create({
+      data: {
+        moduleId: courseModule.id,
+        contentId: 'quota-lesson',
+        position: 1,
+        title: '课时',
+        estimatedMinutes: 5,
+        sourceRange: {},
+        activityType: 'terminal',
+        activityPrompt: '运行命令',
+        activityCompletionType: 'manual',
+      },
     });
     enrollmentId = (
       await prisma.enrollment.create({ data: { userId, courseId } })
@@ -66,7 +96,7 @@ describe('Token 额度 Guard 端到端', () => {
     const response = await request(app.getHttpServer())
       .post(messagesUrl())
       .set('Authorization', `Bearer ${accessToken}`)
-      .send({ text: '你好' })
+      .send(command('你好'))
       .expect(429);
 
     expect(response.body.code).toBe('TOKEN_QUOTA_EXHAUSTED');
@@ -79,7 +109,7 @@ describe('Token 额度 Guard 端到端', () => {
     const response = await request(app.getHttpServer())
       .post(`${messagesUrl()}/stream`)
       .set('Authorization', `Bearer ${accessToken}`)
-      .send({ text: '你好' })
+      .send(command('你好'))
       .expect(429);
 
     expect(response.body.code).toBe('TOKEN_QUOTA_EXHAUSTED');
@@ -90,7 +120,7 @@ describe('Token 额度 Guard 端到端', () => {
 
   it('读取历史消息不受额度限制', async () => {
     await request(app.getHttpServer())
-      .get(messagesUrl())
+      .get(`${messagesUrl()}?generation=0`)
       .set('Authorization', `Bearer ${accessToken}`)
       .expect(200);
   });
@@ -101,7 +131,7 @@ describe('Token 额度 Guard 端到端', () => {
     const response = await request(app.getHttpServer())
       .post(messagesUrl())
       .set('Authorization', `Bearer ${accessToken}`)
-      .send({ text: '你好' })
+      .send(command('你好'))
       .expect(200);
 
     expect(response.body.tutorMessage.text).toBe('请先启动虚拟机后再提问。');
@@ -122,7 +152,7 @@ describe('Token 额度 Guard 端到端', () => {
     await request(app.getHttpServer())
       .post(messagesUrl())
       .set('Authorization', `Bearer ${accessToken}`)
-      .send({ text: '再问一次' })
+      .send(command('再问一次'))
       .expect(429);
   });
 
@@ -139,7 +169,7 @@ describe('Token 额度 Guard 端到端', () => {
     await request(app.getHttpServer())
       .post(messagesUrl())
       .set('Authorization', `Bearer ${accessToken}`)
-      .send({ text: '重来后再问' })
+      .send(command('重来后再问'))
       .expect(429);
   });
 });

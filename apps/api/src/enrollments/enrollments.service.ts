@@ -236,34 +236,6 @@ export class EnrollmentsService {
     );
   }
 
-  async completeLesson(
-    userId: string,
-    lessonId: string,
-  ): Promise<EnrollmentResponse> {
-    const candidates = await this.prisma.enrollment.findMany({
-      where: { userId, active: true },
-      include: { course: { include: { versions: LATEST_PUBLISHED_VERSION } } },
-    });
-    const matches = candidates.filter((e) =>
-      e.course.versions[0]?.modules.some((m) =>
-        m.lessons.some((l) => l.contentId === lessonId),
-      ),
-    );
-    if (!matches.length) throw new NotFoundException('找不到课时');
-    if (matches.length !== 1) throw new ConflictException('请刷新课程后重试');
-    const enrollment = matches[0];
-    // Compatibility for the deployed V1 client; all writes use the same domain command.
-    await this.setLessonProgress(userId, enrollment.course.slug, lessonId, {
-      generation: enrollment.generation,
-      revision: enrollment.progressRevision,
-      courseVersionId: enrollment.course.versions[0].id,
-      completed: true,
-    });
-    return (await this.listForUser(userId)).find(
-      (e) => e.id === enrollment.id,
-    )!;
-  }
-
   async getProgress(userId: string, slug: string) {
     const enrollment = await this.prisma.enrollment.findFirst({
       where: { userId, course: { slug, published: true } },

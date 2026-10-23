@@ -11,9 +11,8 @@ import type { AuthenticatedRequest } from '../../auth/jwt-auth.guard';
 import { ENV, type Env } from '../../config/env';
 import { CheckTokenQuota } from '../application/check-token-quota';
 
-// 放在 Guard 而不是 ChatService：流式路由用 @Sse()，Nest 会先写 200 的 SSE 响应头再订阅
-// generator，在 service 里抛异常变不成真正的 HTTP 429。Guard 在 handler 之前执行，
-// 普通和流式两条路由都能拿到 429。必须排在 JwtAuthGuard 之后（需要 request.auth）。
+// Guard 在 handler 之前执行，普通和流式两条路由都能在写入消息前返回 HTTP 429。
+// 必须排在 JwtAuthGuard 之后（需要 request.auth）。
 @Injectable()
 export class TokenQuotaGuard implements CanActivate {
   private readonly logger = new Logger(TokenQuotaGuard.name);

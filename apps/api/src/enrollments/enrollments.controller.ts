@@ -100,15 +100,5 @@ export class EnrollmentsController {
     return this.enrollmentsService.listForUser(request.auth!.userId);
   }
 
-  @Post('lessons/:lessonId/complete')
-  async completeLesson(
-    @Param('lessonId') lessonId: string,
-    @Req() request: AuthenticatedRequest,
-  ): Promise<{ enrollment: EnrollmentResponse }> {
-    const enrollment = await this.enrollmentsService.completeLesson(
-      request.auth!.userId,
-      lessonId,
-    );
-    return { enrollment };
-  }
+
 }
