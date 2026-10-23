@@ -170,25 +170,88 @@ describe('EnrollmentsService', () => {
     });
   });
 
-  it('remaps only the reading pointer through the learning-owned transition and advances revision', async () => {
+  it('does no database work when there are no removed reading pointers', async () => {
+    const { service, tx } = await setup();
+    await service.remapPublishedReadingPointers(tx as any, 'c1', new Map());
+    expect(tx.enrollment.findMany).not.toHaveBeenCalled();
+    expect(tx.$queryRaw).not.toHaveBeenCalled();
+    expect(tx.enrollment.findUniqueOrThrow).not.toHaveBeenCalled();
+    expect(tx.enrollment.update).not.toHaveBeenCalled();
+  });
+
+  it('selects only matching pointers in stable order and preserves lesson completion when remapping', async () => {
     const { service, tx } = await setup();
     tx.enrollment.findMany.mockResolvedValue([{ id: 'e1' }]);
     tx.enrollment.findUniqueOrThrow.mockResolvedValue({
       ...baseEnrollment,
-      learningState: { ...EMPTY_LEARNING_STATE, readingLessonId: 'removed' },
+      learningState: {
+        ...EMPTY_LEARNING_STATE,
+        readingLessonId: 'removed',
+        lessons: {
+          a: {
+            completedAt: '2026-10-02T00:00:00.000Z',
+            firstCompletedAt: '2026-10-02T00:00:00.000Z',
+          },
+        },
+        completedAt: '2026-10-02T00:00:00.000Z',
+      },
     });
     await service.remapPublishedReadingPointers(
       tx as any,
       'c1',
       new Map([['removed', 'a']]),
     );
+    expect(tx.enrollment.findMany).toHaveBeenCalledWith({
+      where: {
+        courseId: 'c1',
+        OR: [
+          {
+            learningState: {
+              path: ['readingLessonId'],
+              equals: 'removed',
+            },
+          },
+        ],
+      },
+      select: { id: true },
+      orderBy: { id: 'asc' },
+    });
     expect(tx.enrollment.update).toHaveBeenCalledWith({
       where: { id: 'e1' },
       data: {
-        learningState: { ...EMPTY_LEARNING_STATE, readingLessonId: 'a' },
+        learningState: {
+          ...EMPTY_LEARNING_STATE,
+          readingLessonId: 'a',
+          lessons: {
+            a: {
+              completedAt: '2026-10-02T00:00:00.000Z',
+              firstCompletedAt: '2026-10-02T00:00:00.000Z',
+            },
+          },
+          completedAt: '2026-10-02T00:00:00.000Z',
+        },
         progressRevision: { increment: 1 },
       },
     });
+  });
+
+  it('rereads a locked candidate and skips it when its reading pointer moved', async () => {
+    const { service, tx } = await setup();
+    tx.enrollment.findMany.mockResolvedValue([{ id: 'e1' }]);
+    tx.enrollment.findUniqueOrThrow.mockResolvedValue({
+      ...baseEnrollment,
+      learningState: { ...EMPTY_LEARNING_STATE, readingLessonId: 'current' },
+    });
+    await service.remapPublishedReadingPointers(
+      tx as any,
+      'c1',
+      new Map([['removed', 'a']]),
+    );
+    expect(tx.$queryRaw).toHaveBeenCalledTimes(1);
+    expect(tx.enrollment.findUniqueOrThrow).toHaveBeenCalledWith({
+      where: { id: 'e1' },
+    });
+    expect(tx.enrollment.update).not.toHaveBeenCalled();
   });
 
   it('restart snapshots and resets atomically, debiting weighted usage before conversation deletion', async () => {

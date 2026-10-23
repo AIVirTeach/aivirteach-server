@@ -37,6 +37,14 @@ Local run logs are `/private/tmp/learning-state-build.log`, `/private/tmp/learni
 
 After the full runs, final cleanup removed unused type assertions, obsolete test mocks, and redundant comments. The reset error branch now assigns its existing pending outcome explicitly. The affected 5 unit suites with 65 tests and 2 HTTP suites with 25 tests passed again, as did TypeScript checking. Scoped ESLint over every changed TypeScript file reports zero errors and 86 test-typing warnings; it is not a warning-free lint result. The full suites were not repeated after this bounded cleanup. The lint log is `/private/tmp/learning-state-eslint-final.log`.
 
+## PR #38 publication review fix
+
+Publication previously queried and locked every enrollment even when no lesson was removed. The learning command now returns without database work for an empty mapping. Otherwise it filters by course and affected JSON reading positions in PostgreSQL, orders candidates by ID, then locks and rereads each candidate. A candidate that has moved is left unchanged. Completion state and saved snapshots are not modified by this operation.
+
+The new database regression holds an unrelated enrollment lock in another transaction. The remap transaction uses a 750 ms PostgreSQL lock timeout. Original PR head `07724dd` fails with `55P03`; the fixed implementation passes. The fixture also verifies exactly one revision increment for the affected record and unchanged state/revision for the unrelated record. Logs: `/private/tmp/pr38-remap-red.log` and `/private/tmp/pr38-remap-green.log`.
+
+Post-fix checks passed: 3 unit suites with 22 tests, the real publication suite with 7 tests, and the learning-state PostgreSQL/HTTP suite with 12 tests. TypeScript, Prettier, and diff checks passed. Scoped ESLint over the three changed TypeScript files has zero errors and 46 warnings. No full-suite rerun was needed for this bounded fix; the earlier complete runs are recorded above. No schema or migration changed.
+
 ## Release boundary
 
 The client follow-up is PR #24. Restart now requires a request ID, generation, revision, and course version. Reading changes advance the progress revision. The client must expose manual snapshot saving and paginated history before the feature is released.

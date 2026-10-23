@@ -6,6 +6,7 @@ import request from 'supertest';
 import { randomUUID } from 'node:crypto';
 import { AppModule } from '../src/app.module';
 import { signAccessToken } from '../src/auth/tokens';
+import { EnrollmentsService } from '../src/enrollments/enrollments.service';
 
 describe('learning state and snapshots (real PostgreSQL and authenticated HTTP)', () => {
   const database = new URL(process.env.DATABASE_URL ?? 'postgresql://invalid');
@@ -217,6 +218,96 @@ describe('learning state and snapshots (real PostgreSQL and authenticated HTTP)'
     await set('d', true, state.revision, 0, old).expect(409);
     await set('a', false, state.revision).expect(200);
     expect((await get()).body.achievements).toHaveLength(1);
+  });
+  it('remaps matching pointers without waiting on an unrelated locked enrollment', async () => {
+    const affectedUser = await prisma.user.create({
+      data: { email: `progress-affected-${randomUUID()}@example.com` },
+    });
+    const lockUser = await prisma.user.create({
+      data: { email: `progress-lock-${randomUUID()}@example.com` },
+    });
+    const affectedEnrollmentId = (
+      await prisma.enrollment.create({
+        data: {
+          userId: affectedUser.id,
+          courseId,
+          active: true,
+          learningState: {
+            schemaVersion: 1,
+            readingLessonId: 'removed-reading-id',
+            lessons: {
+              a: {
+                completedAt: '2026-10-02T00:00:00.000Z',
+                firstCompletedAt: '2026-10-02T00:00:00.000Z',
+              },
+            },
+            completedAt: null,
+          },
+        },
+      })
+    ).id;
+    const unrelatedEnrollmentId = (
+      await prisma.enrollment.create({
+        data: { userId: lockUser.id, courseId, active: true },
+      })
+    ).id;
+
+    let markLocked!: () => void;
+    let releaseLock!: () => void;
+    const lockAcquired = new Promise<void>((resolve) => {
+      markLocked = resolve;
+    });
+    const lockReleased = new Promise<void>((resolve) => {
+      releaseLock = resolve;
+    });
+    const lockHolder = prisma.$transaction(async (tx) => {
+      await tx.$queryRaw`SELECT id FROM "Enrollment" WHERE id = ${unrelatedEnrollmentId} FOR UPDATE`;
+      markLocked();
+      await lockReleased;
+    });
+
+    try {
+      await lockAcquired;
+      await prisma.$transaction(async (tx) => {
+        await tx.$executeRaw`SET LOCAL lock_timeout = '750ms'`;
+        await app
+          .get(EnrollmentsService)
+          .remapPublishedReadingPointers(
+            tx,
+            courseId,
+            new Map([['removed-reading-id', 'a']]),
+          );
+      });
+      const [affected, unrelated] = await Promise.all([
+        prisma.enrollment.findUniqueOrThrow({
+          where: { id: affectedEnrollmentId },
+        }),
+        prisma.enrollment.findUniqueOrThrow({
+          where: { id: unrelatedEnrollmentId },
+        }),
+      ]);
+      expect(affected.learningState).toMatchObject({
+        readingLessonId: 'a',
+        lessons: {
+          a: {
+            completedAt: '2026-10-02T00:00:00.000Z',
+            firstCompletedAt: '2026-10-02T00:00:00.000Z',
+          },
+        },
+      });
+      expect(affected.progressRevision).toBe(1);
+      expect(unrelated.learningState).toMatchObject({
+        readingLessonId: null,
+        lessons: {},
+      });
+      expect(unrelated.progressRevision).toBe(0);
+    } finally {
+      releaseLock();
+      await lockHolder;
+      await prisma.user.deleteMany({
+        where: { id: { in: [affectedUser.id, lockUser.id] } },
+      });
+    }
   });
   it('manual snapshots are idempotent, pinned to the saved syllabus, immutable and private', async () => {
     const current = (await get()).body;

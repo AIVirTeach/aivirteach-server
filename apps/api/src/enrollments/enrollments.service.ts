@@ -679,9 +679,17 @@ export class EnrollmentsService {
     courseId: string,
     removedToReplacement: ReadonlyMap<string, string>,
   ) {
+    if (removedToReplacement.size === 0) return;
+
     const enrollmentIds = await tx.enrollment.findMany({
-      where: { courseId },
+      where: {
+        courseId,
+        OR: [...removedToReplacement.keys()].map((lessonId) => ({
+          learningState: { path: ['readingLessonId'], equals: lessonId },
+        })),
+      },
       select: { id: true },
+      orderBy: { id: 'asc' },
     });
     for (const { id } of enrollmentIds) {
       await tx.$queryRaw`SELECT id FROM "Enrollment" WHERE id = ${id} FOR UPDATE`;
