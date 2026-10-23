@@ -29,10 +29,6 @@ describe('ContentModelBackfillService', () => {
         updateMany: jest.fn().mockResolvedValue({ count: 1 }),
       },
       courseAsset: { findMany: jest.fn().mockResolvedValue([]) },
-      progress: {
-        findMany: jest.fn(),
-        updateMany: jest.fn().mockResolvedValue({ count: 1 }),
-      },
       $transaction: jest.fn(),
     };
     prisma.$transaction.mockImplementation(
@@ -41,7 +37,7 @@ describe('ContentModelBackfillService', () => {
     return prisma;
   };
 
-  it('仅为 body 为空且有来源的课时切片，并将旧进度 id 转成 contentId', async () => {
+  it('仅为 body 为空且有来源的课时切片，并保留已有正文', async () => {
     const markdown = await markdownPromise;
     const prisma = createPrisma();
     prisma.courseLesson.findMany.mockResolvedValue([
@@ -71,14 +67,6 @@ describe('ContentModelBackfillService', () => {
         module: { courseVersion: { sourceMarkdown: null } },
       },
     ]);
-    prisma.progress.findMany.mockResolvedValue([
-      {
-        id: 'p1',
-        currentLessonId: 'legacy_lesson',
-        currentLesson: { contentId: 'verify-network' },
-      },
-      { id: 'p2', currentLessonId: 'missing_lesson', currentLesson: null },
-    ]);
     const service = new ContentModelBackfillService(
       prisma as unknown as PrismaService,
     );
@@ -92,7 +80,6 @@ describe('ContentModelBackfillService', () => {
           { lessonId: 'unresolved', reason: '版本没有 sourceMarkdown' },
         ],
       },
-      progress: { filled: 1, total: 2 },
       // 没有 content 的遗留课时拿不到来源正文：还要再跑一轮，所以也列在 pendingBody。
       content: {
         filled: 0,
@@ -111,15 +98,6 @@ describe('ContentModelBackfillService', () => {
       where: { id: 'l2', body: '' },
       data: { body: sliceLessonBody(markdown, { startLine: 5, endLine: 6 }) },
     });
-    expect(prisma.progress.updateMany).toHaveBeenCalledWith({
-      where: {
-        id: 'p1',
-        currentLessonContentId: null,
-        currentLessonId: 'legacy_lesson',
-      },
-      data: { currentLessonContentId: 'verify-network' },
-    });
-    expect(prisma.progress.updateMany).toHaveBeenCalledTimes(1);
     expect(prisma.$transaction).toHaveBeenCalledTimes(1);
   });
 
@@ -134,13 +112,6 @@ describe('ContentModelBackfillService', () => {
         module: { courseVersion: { sourceMarkdown: markdown } },
       },
     ]);
-    prisma.progress.findMany.mockResolvedValue([
-      {
-        id: 'p1',
-        currentLessonId: 'legacy_lesson',
-        currentLesson: { contentId: 'verify-network' },
-      },
-    ]);
     const service = new ContentModelBackfillService(
       prisma as unknown as PrismaService,
     );
@@ -149,11 +120,9 @@ describe('ContentModelBackfillService', () => {
 
     expect(report).toEqual({
       bodies: { filled: 1, unresolved: [] },
-      progress: { filled: 1, total: 1 },
       content: { filled: 0, skipped: [], reports: [], pendingBody: [] },
     });
     expect(prisma.courseLesson.updateMany).not.toHaveBeenCalled();
-    expect(prisma.progress.updateMany).not.toHaveBeenCalled();
   });
 
   it('CAS 未命中时不计入成功回填数量', async () => {
@@ -168,14 +137,6 @@ describe('ContentModelBackfillService', () => {
       },
     ]);
     prisma.courseLesson.updateMany.mockResolvedValue({ count: 0 });
-    prisma.progress.findMany.mockResolvedValue([
-      {
-        id: 'raced_progress',
-        currentLessonId: 'old_id',
-        currentLesson: { contentId: 'verify-network' },
-      },
-    ]);
-    prisma.progress.updateMany.mockResolvedValue({ count: 0 });
     const service = new ContentModelBackfillService(
       prisma as unknown as PrismaService,
     );
@@ -184,20 +145,10 @@ describe('ContentModelBackfillService', () => {
 
     expect(report).toEqual({
       bodies: { filled: 0, unresolved: [] },
-      progress: { filled: 0, total: 1 },
       content: { filled: 0, skipped: [], reports: [], pendingBody: [] },
     });
     expect(prisma.courseLesson.updateMany).toHaveBeenCalledWith(
       expect.objectContaining({ where: { id: 'raced_lesson', body: '' } }),
-    );
-    expect(prisma.progress.updateMany).toHaveBeenCalledWith(
-      expect.objectContaining({
-        where: {
-          id: 'raced_progress',
-          currentLessonContentId: null,
-          currentLessonId: 'old_id',
-        },
-      }),
     );
   });
   it('converts eligible content, checks equivalence, and respects dry-run', async () => {
@@ -223,7 +174,6 @@ describe('ContentModelBackfillService', () => {
         },
       },
     ]);
-    prisma.progress.findMany.mockResolvedValue([]);
     jest
       .mocked(equivalence.checkPlainTextEquivalence)
       .mockResolvedValue({ equal: true, expected: 'hello', actual: 'hello' });
@@ -285,7 +235,6 @@ describe('ContentModelBackfillService', () => {
         module: { courseVersion: { courseId: 'c', sourceMarkdown: null } },
       },
     ]);
-    prisma.progress.findMany.mockResolvedValue([]);
     jest.mocked(equivalence.checkPlainTextEquivalence).mockResolvedValue({
       equal: false,
       expected: 'source',
@@ -313,24 +262,21 @@ describe('ContentModelBackfillService', () => {
   it('finishes asset reads and equivalence checks before opening the execute transaction', async () => {
     const prisma = createPrisma();
     const events: string[] = [];
-    // eslint-disable-next-line @typescript-eslint/require-await -- mock 需要返回 Promise
-    prisma.courseLesson.findMany.mockImplementation(async () => {
+    prisma.courseLesson.findMany.mockImplementation(() => {
       events.push('lesson-read');
-      return [
+      return Promise.resolve([
         {
           id: 'lesson-1',
           body: 'plain text',
           content: null,
           module: { courseVersion: { courseId: 'c', sourceMarkdown: null } },
         },
-      ];
+      ]);
     });
-    // eslint-disable-next-line @typescript-eslint/require-await -- mock 需要返回 Promise
-    prisma.courseAsset.findMany.mockImplementation(async () => {
+    prisma.courseAsset.findMany.mockImplementation(() => {
       events.push('asset-read');
-      return [];
+      return Promise.resolve([]);
     });
-    prisma.progress.findMany.mockResolvedValue([]);
     prisma.$transaction.mockImplementation(
       // eslint-disable-next-line @typescript-eslint/require-await -- mock 需要返回 Promise
       async (callback: (tx: unknown) => unknown) => {
@@ -377,7 +323,6 @@ describe('ContentModelBackfillService', () => {
         },
       },
     ]);
-    prisma.progress.findMany.mockResolvedValue([]);
     jest.mocked(equivalence.checkPlainTextEquivalence).mockResolvedValue({
       equal: true,
       expected: expectedBody,
@@ -418,7 +363,6 @@ describe('ContentModelBackfillService', () => {
         },
       },
     ]);
-    prisma.progress.findMany.mockResolvedValue([]);
     const service = new ContentModelBackfillService(
       prisma as unknown as PrismaService,
     );
@@ -453,7 +397,6 @@ describe('ContentModelBackfillService', () => {
         },
       },
     ]);
-    prisma.progress.findMany.mockResolvedValue([]);
     const service = new ContentModelBackfillService(
       prisma as unknown as PrismaService,
     );
@@ -468,7 +411,6 @@ describe('ContentModelBackfillService', () => {
   it('run() uses the same long transaction timeout as the CLI', async () => {
     const prisma = createPrisma();
     prisma.courseLesson.findMany.mockResolvedValue([]);
-    prisma.progress.findMany.mockResolvedValue([]);
     const service = new ContentModelBackfillService(
       prisma as unknown as PrismaService,
     );

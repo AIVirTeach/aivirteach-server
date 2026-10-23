@@ -8,7 +8,7 @@ export class StaleEnrollmentError extends ConflictException {
 }
 
 // UPDATE 获取 Enrollment 行锁，并与 restart 的事务串行化。仅在同一事务内使用：
-// 旧请求不能在校验通过后、写 Progress/Conversation 前被 restart 插入。
+// 旧请求不能在校验通过后、写学习状态或 Conversation 前被 restart 插入。
 export async function assertCurrentEnrollment(
   tx: Prisma.TransactionClient,
   enrollmentId: string,

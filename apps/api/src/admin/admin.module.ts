@@ -29,9 +29,10 @@ import {
 } from './admin-courses.controller';
 import { CourseCreateService } from './draft/course-create.service';
 import { CourseAssetUploadService } from './assets/course-asset-upload.service';
+import { EnrollmentsModule } from '../enrollments/enrollments.module';
 
 @Module({
-  imports: [CoursesModule],
+  imports: [CoursesModule, EnrollmentsModule],
   controllers: [AdminCoursesController, AdminCourseCreateController],
   providers: [
     AdminService,

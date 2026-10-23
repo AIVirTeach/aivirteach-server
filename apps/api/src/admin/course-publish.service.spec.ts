@@ -51,7 +51,6 @@ function setup({
         .mockResolvedValue({ ...draft, publishedAt: new Date() }),
     },
     course: { update: jest.fn().mockResolvedValue({}) },
-    progress: { updateMany: jest.fn().mockResolvedValue({ count: 1 }) },
   };
   const prisma = {
     course: {
@@ -95,12 +94,16 @@ function setup({
     record: jest.fn().mockResolvedValue(undefined),
   };
   const drafts = { requireDraft: jest.fn().mockResolvedValue(draft) };
+  const enrollments = {
+    remapPublishedReadingPointers: jest.fn().mockResolvedValue(undefined),
+  };
   const service = new CoursePublishService(
     prisma as unknown as PrismaService,
     drafts as unknown as CourseDraftService,
     audit as unknown as AuditService,
+    enrollments as any,
   );
-  return { service, prisma, tx, audit, drafts };
+  return { service, prisma, tx, audit, drafts, enrollments };
 }
 
 describe('CoursePublishService.publish', () => {
@@ -115,7 +118,7 @@ describe('CoursePublishService.publish', () => {
   });
 
   it('publishes atomically, recomputes course summary, remaps only active removed pointers, and audits inside the transaction', async () => {
-    const { service, prisma, tx, audit } = setup();
+    const { service, prisma, tx, audit, enrollments } = setup();
     const result = await service.publish('demo', 'ops@example.com', 'release');
 
     expect(result.id).toBe('draft-2');
@@ -135,15 +138,11 @@ describe('CoursePublishService.publish', () => {
         }),
       }),
     );
-    expect(tx.progress.updateMany).toHaveBeenCalledTimes(1);
-    expect(tx.progress.updateMany).toHaveBeenCalledWith({
-      where: {
-        currentLessonContentId: 'b',
-        enrollment: { is: { courseId: 'course-1' } },
-      },
-      data: { currentLessonContentId: 'c' },
-    });
-    // Null and completed progress pointers are outside the exact removed-id predicate.
+    expect(enrollments.remapPublishedReadingPointers).toHaveBeenCalledWith(
+      tx,
+      'course-1',
+      new Map([['b', 'c']]),
+    );
     expect(audit.record).toHaveBeenCalledWith(
       {
         actor: { type: AuditActorType.OPERATOR, id: 'ops@example.com' },

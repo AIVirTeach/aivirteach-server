@@ -17,7 +17,7 @@ interface CourseBackfillOptions {
 
 @Command({
   name: 'course:backfill-content-model',
-  description: '回填课程课时正文与学员进度 contentId',
+  description: '回填课程课时正文与结构化内容',
 })
 export class CourseBackfillCommand extends CommandRunner {
   constructor(
@@ -47,10 +47,6 @@ export class CourseBackfillCommand extends CommandRunner {
                 unresolved: result.bodies.unresolved.map(
                   ({ lessonId, reason }) => ({ lessonId, reason }),
                 ),
-              },
-              progress: {
-                filled: result.progress.filled,
-                total: result.progress.total,
               },
               content: {
                 filled: result.content.filled,

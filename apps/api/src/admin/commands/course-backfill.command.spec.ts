@@ -6,7 +6,6 @@ import { CourseBackfillCommand } from './course-backfill.command';
 describe('CourseBackfillCommand', () => {
   const report = {
     bodies: { filled: 2, unresolved: [] },
-    progress: { filled: 1, total: 1 },
     content: {
       filled: 3,
       skipped: [],
@@ -98,7 +97,6 @@ describe('CourseBackfillCommand', () => {
           report: {
             ...report,
             bodies: { ...report.bodies },
-            progress: { ...report.progress },
             content: { ...report.content },
           },
         },

@@ -6,6 +6,7 @@ import {
   type EnrollmentStatus,
 } from '../enrollments/learning-progress-view';
 import { LATEST_PUBLISHED_VERSION } from '../courses/published-version';
+import { parseLearningState } from '../enrollments/learning-state';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -103,8 +104,6 @@ export class DashboardService {
       where: { userId, active: true },
       include: {
         course: { include: { versions: LATEST_PUBLISHED_VERSION } },
-        progress: true,
-        lessonProgress: true,
       },
     });
 
@@ -163,15 +162,16 @@ export class DashboardService {
               courseId: activeEnrollment.course.slug,
               active: activeEnrollment.active,
               ...deriveEnrollmentView({
-                generation: activeEnrollment.generation,
-                lessonProgress: activeEnrollment.lessonProgress,
+                learningState: parseLearningState(
+                  activeEnrollment.learningState,
+                ),
                 active: activeEnrollment.active,
-                completedAt: activeEnrollment.completedAt,
-                progress: activeEnrollment.progress,
                 modules: activeEnrollment.course.versions[0]?.modules ?? [],
               }),
               currentModule: deriveCurrentModuleTitle({
-                progress: activeEnrollment.progress,
+                learningState: parseLearningState(
+                  activeEnrollment.learningState,
+                ),
                 modules: activeEnrollment.course.versions[0]?.modules ?? [],
               }),
               enrolledAt: activeEnrollment.createdAt.toISOString(),

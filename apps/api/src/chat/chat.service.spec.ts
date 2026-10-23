@@ -21,7 +21,6 @@ function buildPrisma() {
     },
     quotaLedger: { upsert: jest.fn().mockResolvedValue({}) },
     workspace: { findUnique: jest.fn(), update: jest.fn() },
-    progress: { findUnique: jest.fn() },
     course: { findUnique: jest.fn() },
     courseLesson: { findFirst: jest.fn() },
     $transaction: jest.fn(),
@@ -79,7 +78,6 @@ const ENROLLMENT = {
   id: 'enr_1',
   userId: 'user_1',
   courseId: 'course_1',
-  completedAt: null,
   active: true,
   generation: 0,
 };
@@ -392,21 +390,28 @@ describe('ChatService.sendMessage — 调用 Agent', () => {
     ).rejects.toThrow();
 
     expect(prisma.quotaLedger.upsert).toHaveBeenCalledTimes(2);
-    expect(
-      prisma.quotaLedger.upsert.mock.calls.map(([input]) => input.where.id),
-    ).toEqual([
-      'stale-agent-enr_1-0-00000000-0000-4000-8000-000000000099',
-      'stale-agent-enr_2-0-00000000-0000-4000-8000-000000000099',
-    ]);
+    expect(prisma.quotaLedger.upsert).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        where: {
+          id: 'stale-agent-enr_1-0-00000000-0000-4000-8000-000000000099',
+        },
+      }),
+    );
+    expect(prisma.quotaLedger.upsert).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        where: {
+          id: 'stale-agent-enr_2-0-00000000-0000-4000-8000-000000000099',
+        },
+      }),
+    );
   });
   function setupReadyWorkspace(prisma: ReturnType<typeof buildPrisma>) {
     prisma.enrollment.findUnique.mockResolvedValue(ENROLLMENT);
     prisma.workspace.findUnique.mockResolvedValue({
       labId: 'lab_1',
       status: WorkspaceStatus.RUNNING,
-    });
-    prisma.progress.findUnique.mockResolvedValue({
-      currentLessonContentId: 'verify-virtual-machine',
     });
     prisma.course.findUnique.mockResolvedValue(PUBLISHED_COURSE);
     prisma.courseLesson.findFirst.mockResolvedValue({
@@ -595,53 +600,59 @@ describe('ChatService.sendMessage — 调用 Agent', () => {
   });
 
   it.each([
-    ['没有 Progress 记录', null],
-    ['Progress 指针为 null', { currentLessonContentId: null }],
-  ])('%s 时仍以请求携带的已加载课时作为上下文', async (_label, progress) => {
-    const { service, prisma, agentClient } = await buildService();
-    setupReadyWorkspace(prisma);
-    prisma.progress.findUnique.mockResolvedValue(progress);
-    prisma.conversation.create.mockResolvedValueOnce(
-      conversationRow({ id: 'student_1', content: '什么是 docker' }),
-    );
-    agentClient.diagnose.mockResolvedValue(DIAGNOSE_RESPONSE);
-    prisma.conversation.create.mockResolvedValueOnce(
-      conversationRow({
-        id: 'tutor_1',
-        role: ConversationRole.ASSISTANT,
-        content: DIAGNOSE_RESPONSE.answer,
-      }),
-    );
-
-    const result = await service.sendMessage(
-      'user_1',
-      'enr_1',
-      ask('什么是 docker'),
-    );
-
-    expect(result.tutorMessage.text).toBe(DIAGNOSE_RESPONSE.answer);
-    expect(agentClient.diagnose).toHaveBeenCalledWith(
-      expect.objectContaining({
-        lab_id: 'lab_1',
-        current_step: expect.objectContaining({
-          module_id: 'module_1',
-          lesson_id: 'verify-virtual-machine',
-          sequence: 2,
-          title: '验证虚拟机',
+    ['没有 reading position', null],
+    ['reading position 指向另一课时', 'another-lesson'],
+  ])(
+    '%s 时仍以请求携带的已加载课时作为上下文',
+    async (_label, readingLessonId) => {
+      const { service, prisma, agentClient } = await buildService();
+      setupReadyWorkspace(prisma);
+      prisma.enrollment.findUnique.mockResolvedValue({
+        ...ENROLLMENT,
+        learningState: { readingLessonId, completedAt: null },
+      });
+      prisma.conversation.create.mockResolvedValueOnce(
+        conversationRow({ id: 'student_1', content: '什么是 docker' }),
+      );
+      agentClient.diagnose.mockResolvedValue(DIAGNOSE_RESPONSE);
+      prisma.conversation.create.mockResolvedValueOnce(
+        conversationRow({
+          id: 'tutor_1',
+          role: ConversationRole.ASSISTANT,
+          content: DIAGNOSE_RESPONSE.answer,
         }),
-      }),
-    );
-  });
+      );
 
-  it('已学完整门课（指针为空且 enrollment 有 completedAt）时以最后一课为上下文，而不是第一课', async () => {
+      const result = await service.sendMessage(
+        'user_1',
+        'enr_1',
+        ask('什么是 docker'),
+      );
+
+      expect(result.tutorMessage.text).toBe(DIAGNOSE_RESPONSE.answer);
+      expect(agentClient.diagnose).toHaveBeenCalledWith(
+        expect.objectContaining({
+          lab_id: 'lab_1',
+          current_step: expect.objectContaining({
+            module_id: 'module_1',
+            lesson_id: 'verify-virtual-machine',
+            sequence: 2,
+            title: '验证虚拟机',
+          }),
+        }),
+      );
+    },
+  );
+
+  it('completedAt 和 reading position 不覆盖请求明确选择的聊天课时', async () => {
     const { service, prisma, agentClient } = await buildService();
     setupReadyWorkspace(prisma);
     prisma.enrollment.findUnique.mockResolvedValue({
       ...ENROLLMENT,
-      completedAt: new Date('2026-09-01T00:00:00.000Z'),
-    });
-    prisma.progress.findUnique.mockResolvedValue({
-      currentLessonContentId: null,
+      learningState: {
+        readingLessonId: null,
+        completedAt: '2026-09-01T00:00:00.000Z',
+      },
     });
     prisma.conversation.create.mockResolvedValue(conversationRow({}));
     agentClient.diagnose.mockResolvedValue(DIAGNOSE_RESPONSE);
@@ -822,9 +833,6 @@ describe('ChatService.streamMessage — 调用 Agent', () => {
       labId: 'lab_1',
       status: WorkspaceStatus.RUNNING,
     });
-    prisma.progress.findUnique.mockResolvedValue({
-      currentLessonContentId: 'verify-virtual-machine',
-    });
     prisma.course.findUnique.mockResolvedValue(PUBLISHED_COURSE);
     prisma.courseLesson.findFirst.mockResolvedValue({
       assessments: LESSON.assessments,
@@ -984,10 +992,9 @@ describe('ChatService.streamMessage — 调用 Agent', () => {
     });
   });
 
-  it('没有 Progress 记录时仍以请求课时作为流式上下文，result 落库后发 complete', async () => {
+  it('reading position 为空时仍以请求课时作为流式上下文，result 落库后发 complete', async () => {
     const { service, prisma, agentClient } = await buildService();
     setupReadyWorkspace(prisma);
-    prisma.progress.findUnique.mockResolvedValue(null);
     prisma.conversation.create.mockResolvedValueOnce(
       conversationRow({ id: 'student_1', content: '什么是 docker' }),
     );
@@ -1199,9 +1206,6 @@ describe('ChatService — Agent 回复落库时记录 token usage', () => {
     prisma.workspace.findUnique.mockResolvedValue({
       labId: 'lab_1',
       status: WorkspaceStatus.RUNNING,
-    });
-    prisma.progress.findUnique.mockResolvedValue({
-      currentLessonContentId: 'verify-virtual-machine',
     });
     prisma.course.findUnique.mockResolvedValue(PUBLISHED_COURSE);
     prisma.courseLesson.findFirst.mockResolvedValue({

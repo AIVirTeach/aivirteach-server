@@ -62,11 +62,11 @@ enum ActivityKind {
   ACHIEVEMENT
 }
 
-enum ExportStatus {
-  PENDING
-  PACKAGING
-  READY
-  FAILED
+enum LearningSnapshotReason {
+  MANUAL
+  COMPLETED
+  RESTART
+  LEGACY_ACHIEVEMENT
 }
 
 model User {
@@ -180,6 +180,7 @@ model CourseVersion {
   modules     CourseModule[]
   welcome     CourseWelcome?
   enrollments Enrollment[]
+  snapshots   LearningSnapshot[]
 
   @@unique([courseId, version])
   @@index([courseId])
@@ -194,8 +195,7 @@ model CourseModule {
   description      String
   estimatedMinutes Int
 
-  lessons     CourseLesson[]
-  enrollments Enrollment[]
+  lessons CourseLesson[]
 
   @@unique([courseVersionId, position])
   @@index([courseVersionId])
@@ -223,7 +223,6 @@ model CourseLesson {
   assessmentIds          String[]     @default([])
 
   assessments LessonAssessment[]
-  progresses  Progress[]
 
   @@unique([moduleId, position])
   @@unique([moduleId, contentId])
@@ -264,34 +263,28 @@ model LessonAssessment {
 }
 
 model Enrollment {
-  id              String         @id @default(cuid())
-  userId          String
-  courseId        String
-  courseVersionId String?
-  currentModuleId String?
-  user            User           @relation(fields: [userId], references: [id], onDelete: Cascade)
-  course          Course         @relation(fields: [courseId], references: [id], onDelete: Cascade)
-  courseVersion   CourseVersion? @relation(fields: [courseVersionId], references: [id])
-  currentModule   CourseModule?  @relation(fields: [currentModuleId], references: [id])
-  active          Boolean        @default(true)
-  generation      Int            @default(0)
-  progressRevision Int           @default(0)
-  completedAt     DateTime?
-  createdAt       DateTime       @default(now())
+  id               String         @id @default(cuid())
+  userId           String
+  courseId         String
+  courseVersionId  String?
+  user             User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  course           Course         @relation(fields: [courseId], references: [id], onDelete: Cascade)
+  courseVersion    CourseVersion? @relation(fields: [courseVersionId], references: [id])
+  active           Boolean        @default(true)
+  generation       Int            @default(0)
+  progressRevision Int            @default(0)
+  learningState    Json           @default("{\"schemaVersion\":1,\"readingLessonId\":null,\"lessons\":{},\"completedAt\":null}")
+  createdAt        DateTime       @default(now())
 
   workspace     Workspace?
-  progress      Progress?
   attempts      Attempt[]
   conversations Conversation[]
   activities    Activity[]
-  completion    EnrollmentCompletion?
-  lessonProgress LessonProgress[]
-  completionHistory CourseCompletionHistory[]
+  snapshots     LearningSnapshot[]
 
   @@unique([userId, courseId])
   @@index([courseId])
   @@index([courseVersionId])
-  @@index([currentModuleId])
 }
 
 // 字段和调用顺序都对着 labs main 上真实的 service.py 核对过：
@@ -333,18 +326,6 @@ model WorkspaceProvision {
   @@index([cleanupAt])
 }
 
-model Progress {
-  id                     String        @id @default(cuid())
-  enrollmentId           String        @unique
-  enrollment             Enrollment    @relation(fields: [enrollmentId], references: [id], onDelete: Cascade)
-  currentLessonId        String?
-  currentLesson          CourseLesson? @relation(fields: [currentLessonId], references: [id])
-  currentLessonContentId String?
-  updatedAt              DateTime      @updatedAt
-
-  @@index([currentLessonId])
-}
-
 model Attempt {
   id           String           @id @default(cuid())
   enrollmentId String
@@ -382,8 +363,8 @@ model Conversation {
   outputTokens         Int?
   createdAt            DateTime         @default(now())
 
-  @@index([enrollmentId, threadId])
   @@unique([enrollmentId, generation, requestId, role])
+  @@index([enrollmentId, threadId])
 }
 
 model Notification {
@@ -465,35 +446,20 @@ model AuditEvent {
   @@index([createdAt])
 }
 
-// 架构文件模块网格里的"总结与导出编排"（SRV-016 · LAB-015），之前完全没建。
-model EnrollmentCompletion {
-  id              String       @id @default(cuid())
-  enrollmentId    String       @unique
-  enrollment      Enrollment   @relation(fields: [enrollmentId], references: [id], onDelete: Cascade)
-  summary         String?
-  exportStatus    ExportStatus @default(PENDING)
-  exportObjectKey String?
-  exportFileHash  String?
-  errorMessage    String?
-  completedAt     DateTime     @default(now())
-  exportedAt      DateTime?
-}
+model LearningSnapshot {
+  id               String                 @id @default(cuid())
+  enrollmentId     String
+  enrollment       Enrollment             @relation(fields: [enrollmentId], references: [id], onDelete: Cascade)
+  sourceGeneration Int
+  sourceRevision   Int
+  courseVersionId  String?
+  courseVersion    CourseVersion?         @relation(fields: [courseVersionId], references: [id], onDelete: Restrict)
+  schemaVersion    Int
+  state            Json
+  reason           LearningSnapshotReason
+  idempotencyKey   String
+  createdAt        DateTime               @default(now())
 
-// Stable content IDs survive published version cloning. No FK to version rows.
-model LessonProgress {
-  enrollmentId String
-  generation Int
-  contentId String
-  completedAt DateTime?
-  firstCompletedAt DateTime?
-  enrollment Enrollment @relation(fields: [enrollmentId], references: [id], onDelete: Cascade)
-  @@id([enrollmentId, generation, contentId])
-}
-
-model CourseCompletionHistory {
-  enrollmentId String
-  generation Int
-  completedAt DateTime
-  enrollment Enrollment @relation(fields: [enrollmentId], references: [id], onDelete: Cascade)
-  @@id([enrollmentId, generation])
+  @@unique([enrollmentId, idempotencyKey])
+  @@index([enrollmentId, createdAt])
 }

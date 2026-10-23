@@ -3,44 +3,73 @@ import { ENV } from '../config/env';
 import { EnrollmentsController } from './enrollments.controller';
 import { EnrollmentsService } from './enrollments.service';
 
-const JWT_AUTH_GUARD_STUB = { provide: ENV, useValue: { JWT_SECRET: 'test-secret' } };
-const AUTH_REQUEST = { auth: { userId: 'user_1', email: 'learner@example.com' } };
+const JWT_AUTH_GUARD_STUB = {
+  provide: ENV,
+  useValue: { JWT_SECRET: 'test-secret' },
+};
+const AUTH_REQUEST = {
+  auth: { userId: 'user_1', email: 'learner@example.com' },
+};
 
 describe('EnrollmentsController', () => {
   it('POST /courses/:slug/enroll 用认证用户的 userId 调用 service.enroll', async () => {
-    const service = { enroll: jest.fn().mockResolvedValue({ id: 'enrollment_1' }) };
+    const service = {
+      enroll: jest.fn().mockResolvedValue({ id: 'enrollment_1' }),
+    };
     const moduleRef = await Test.createTestingModule({
       controllers: [EnrollmentsController],
-      providers: [{ provide: EnrollmentsService, useValue: service }, JWT_AUTH_GUARD_STUB],
+      providers: [
+        { provide: EnrollmentsService, useValue: service },
+        JWT_AUTH_GUARD_STUB,
+      ],
     }).compile();
     const controller = moduleRef.get(EnrollmentsController);
 
-    await expect(controller.enroll('sample', AUTH_REQUEST as any)).resolves.toEqual({ id: 'enrollment_1' });
+    await expect(
+      controller.enroll('sample', AUTH_REQUEST as any),
+    ).resolves.toEqual({ id: 'enrollment_1' });
     expect(service.enroll).toHaveBeenCalledWith('user_1', 'sample');
   });
 
   it('POST /courses/:slug/restart 用认证用户的 userId 调用 service.restart', async () => {
-    const service = { restart: jest.fn().mockResolvedValue({ id: 'enrollment_1' }) };
+    const service = {
+      restart: jest.fn().mockResolvedValue({ id: 'enrollment_1' }),
+    };
     const moduleRef = await Test.createTestingModule({
       controllers: [EnrollmentsController],
-      providers: [{ provide: EnrollmentsService, useValue: service }, JWT_AUTH_GUARD_STUB],
+      providers: [
+        { provide: EnrollmentsService, useValue: service },
+        JWT_AUTH_GUARD_STUB,
+      ],
     }).compile();
     const controller = moduleRef.get(EnrollmentsController);
 
-    await expect(controller.restart('sample', AUTH_REQUEST as any)).resolves.toEqual({ id: 'enrollment_1' });
-    expect(service.restart).toHaveBeenCalledWith('user_1', 'sample');
+    const command = {
+      requestId: '096e8c4a-12ef-46c8-900b-200b5323f52f',
+      generation: 1,
+      revision: 4,
+      courseVersionId: 'version_2',
+    };
+    await expect(
+      controller.restart('sample', AUTH_REQUEST as any, command),
+    ).resolves.toEqual({ id: 'enrollment_1' });
+    expect(service.restart).toHaveBeenCalledWith('user_1', 'sample', command);
   });
 
   it('GET /me/enrollments 用认证用户的 userId 调用 service.listForUser', async () => {
     const service = { listForUser: jest.fn().mockResolvedValue([]) };
     const moduleRef = await Test.createTestingModule({
       controllers: [EnrollmentsController],
-      providers: [{ provide: EnrollmentsService, useValue: service }, JWT_AUTH_GUARD_STUB],
+      providers: [
+        { provide: EnrollmentsService, useValue: service },
+        JWT_AUTH_GUARD_STUB,
+      ],
     }).compile();
     const controller = moduleRef.get(EnrollmentsController);
 
-    await expect(controller.myEnrollments(AUTH_REQUEST as any)).resolves.toEqual([]);
+    await expect(
+      controller.myEnrollments(AUTH_REQUEST as any),
+    ).resolves.toEqual([]);
     expect(service.listForUser).toHaveBeenCalledWith('user_1');
   });
-
 });
