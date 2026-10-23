@@ -1,64 +1,90 @@
 import {
-  completedLessonIds,
   deriveCurrentModuleTitle,
   deriveEnrollmentView,
 } from './learning-progress-view';
+import {
+  EMPTY_LEARNING_STATE,
+  parseLearningState,
+  setLessonCompletion,
+  setReadingPosition,
+} from './learning-state';
+
 const modules = [
   { title: 'One', lessons: [{ contentId: 'a' }, { contentId: 'b' }] },
 ];
-const base = {
-  active: true,
-  completedAt: null,
-  progress: null,
-  modules,
-  generation: 1,
-};
-const done = (contentId: string, generation = 1) => ({
-  contentId,
-  generation,
-  completedAt: new Date(),
-});
 
-describe('per-lesson progress projection', () => {
-  it('never infers completion from reading position or legacy achievement', () => {
+describe('learning state projection and transitions', () => {
+  it('reading is independent from completion and all progress uses stable ids', () => {
+    const read = setReadingPosition(EMPTY_LEARNING_STATE, 'b');
     expect(
-      deriveEnrollmentView({
-        ...base,
-        completedAt: new Date(),
-        progress: { currentLessonContentId: 'b' },
-      }),
+      deriveEnrollmentView({ learningState: read, modules, active: true }),
+    ).toEqual({ status: 'in_progress', progressPercent: 0 });
+    const completed = setLessonCompletion(
+      read,
+      'b',
+      true,
+      new Date('2026-10-23T00:00:00.000Z'),
+    );
+    expect(
+      deriveEnrollmentView({ learningState: completed, modules, active: true }),
+    ).toEqual({ status: 'in_progress', progressPercent: 50 });
+    expect(
+      deriveCurrentModuleTitle({ learningState: completed, modules }),
+    ).toBe('One');
+  });
+
+  it('preserves first lesson completion time while allowing the current mark to change', () => {
+    const first = new Date('2026-10-23T00:00:00.000Z');
+    const second = new Date('2026-10-24T00:00:00.000Z');
+    const completed = setLessonCompletion(
+      EMPTY_LEARNING_STATE,
+      'a',
+      true,
+      first,
+    );
+    const unmarked = setLessonCompletion(completed, 'a', false, second);
+    const remarked = setLessonCompletion(unmarked, 'a', true, second);
+    expect(remarked.lessons.a).toEqual({
+      completedAt: second.toISOString(),
+      firstCompletedAt: first.toISOString(),
+    });
+  });
+
+  it('filters removed syllabus ids and lessons currently unmarked', () => {
+    const state = {
+      ...EMPTY_LEARNING_STATE,
+      lessons: {
+        a: { completedAt: null, firstCompletedAt: '2026-10-20T00:00:00.000Z' },
+        removed: {
+          completedAt: '2026-10-20T00:00:00.000Z',
+          firstCompletedAt: '2026-10-20T00:00:00.000Z',
+        },
+      },
+    };
+    expect(
+      deriveEnrollmentView({ learningState: state, modules, active: true }),
     ).toEqual({ status: 'in_progress', progressPercent: 0 });
   });
-  it('counts a skipped-to final lesson as one lesson, not the whole course', () => {
-    expect(
-      deriveEnrollmentView({ ...base, lessonProgress: [done('b')] }),
-    ).toEqual({ status: 'in_progress', progressPercent: 50 });
-  });
-  it('excludes previous generations, removed lessons and unmarked records', () => {
-    expect(
-      completedLessonIds({
-        ...base,
-        lessonProgress: [
-          done('a', 0),
-          done('removed'),
-          { ...done('b'), completedAt: null },
-        ],
-      }),
-    ).toEqual([]);
-  });
-  it('preserves completion on reorder and text edits but added lessons start pending', () => {
-    const lessonProgress = [done('a'), done('b')];
-    expect(deriveEnrollmentView({ ...base, lessonProgress })).toEqual({
-      status: 'completed',
-      progressPercent: 100,
-    });
+
+  it('retains completion through reorder and starts added stable ids pending', () => {
+    const state = {
+      ...EMPTY_LEARNING_STATE,
+      lessons: Object.fromEntries(
+        ['a', 'b'].map((id) => [
+          id,
+          {
+            completedAt: '2026-10-20T00:00:00.000Z',
+            firstCompletedAt: '2026-10-20T00:00:00.000Z',
+          },
+        ]),
+      ),
+    };
     expect(
       deriveEnrollmentView({
-        ...base,
-        lessonProgress,
+        learningState: state,
         modules: [
           {
-            title: 'Edited',
+            title: 'Reordered',
             lessons: [
               { contentId: 'b' },
               { contentId: 'a' },
@@ -66,21 +92,38 @@ describe('per-lesson progress projection', () => {
             ],
           },
         ],
+        active: true,
       }),
     ).toEqual({ status: 'in_progress', progressPercent: 67 });
   });
-  it('does not call an empty syllabus completed', () => {
+
+  it('does not infer lesson completion from a course achievement timestamp', () => {
+    const state = {
+      ...EMPTY_LEARNING_STATE,
+      completedAt: '2026-10-20T00:00:00.000Z',
+    };
     expect(
-      deriveEnrollmentView({ ...base, active: false, modules: [] }),
-    ).toEqual({ status: 'not_started', progressPercent: 0 });
+      deriveEnrollmentView({ learningState: state, modules, active: false }),
+    ).toEqual({ status: 'in_progress', progressPercent: 0 });
   });
-  it('module title comes from reading position independently of completion', () => {
+
+  it('does not report an empty syllabus as completed', () => {
+    const state = {
+      ...EMPTY_LEARNING_STATE,
+      completedAt: '2026-10-20T00:00:00.000Z',
+    };
     expect(
-      deriveCurrentModuleTitle({
-        ...base,
-        progress: { currentLessonContentId: 'b' },
-        lessonProgress: [],
-      }),
-    ).toBe('One');
+      deriveEnrollmentView({ learningState: state, modules: [], active: false })
+        .status,
+    ).toBe('in_progress');
+  });
+
+  it('parses persisted JSON at the boundary and rejects unknown shapes', () => {
+    expect(parseLearningState(EMPTY_LEARNING_STATE)).toEqual(
+      EMPTY_LEARNING_STATE,
+    );
+    expect(() => parseLearningState({ readingLessonId: 'a' })).toThrow(
+      'unsupported shape',
+    );
   });
 });

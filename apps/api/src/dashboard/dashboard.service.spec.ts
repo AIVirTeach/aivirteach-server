@@ -92,12 +92,20 @@ describe('DashboardService.getDashboard', () => {
           },
         ],
       },
-      lessonProgress: ['lesson_1', 'lesson_2', 'lesson_3'].map((contentId) => ({
-        contentId,
-        generation: 0,
-        completedAt: new Date(),
-      })),
-      progress: { currentLessonContentId: 'lesson_3' },
+      learningState: {
+        schemaVersion: 1,
+        readingLessonId: 'lesson_3',
+        lessons: Object.fromEntries(
+          ['lesson_1', 'lesson_2', 'lesson_3'].map((id) => [
+            id,
+            {
+              completedAt: new Date().toISOString(),
+              firstCompletedAt: new Date().toISOString(),
+            },
+          ]),
+        ),
+        completedAt: null,
+      },
       courseVersion: { modules: [] },
     });
     const service = await buildService(prisma);
@@ -159,12 +167,20 @@ describe('DashboardService.getDashboard', () => {
           },
         ],
       },
-      lessonProgress: ['lesson_1', 'lesson_2'].map((contentId) => ({
-        contentId,
-        generation: 0,
-        completedAt: new Date(),
-      })),
-      progress: { currentLessonContentId: null },
+      learningState: {
+        schemaVersion: 1,
+        readingLessonId: null,
+        lessons: Object.fromEntries(
+          ['lesson_1', 'lesson_2'].map((id) => [
+            id,
+            {
+              completedAt: new Date().toISOString(),
+              firstCompletedAt: new Date().toISOString(),
+            },
+          ]),
+        ),
+        completedAt: new Date().toISOString(),
+      },
       courseVersion: { modules: [] },
     });
     const service = await buildService(prisma);
@@ -191,7 +207,12 @@ describe('DashboardService.getDashboard', () => {
       id: 'enrollment_1',
       userId: 'user_1',
       active: true,
-      completedAt: null,
+      learningState: {
+        schemaVersion: 1,
+        readingLessonId: null,
+        lessons: {},
+        completedAt: null,
+      },
       createdAt: new Date('2026-08-10T00:00:00.000Z'),
       course: {
         slug: 'sample-course',
@@ -205,7 +226,6 @@ describe('DashboardService.getDashboard', () => {
         coverAssetId: null,
         versions: [],
       },
-      progress: null,
     });
     const service = await buildService(prisma);
 

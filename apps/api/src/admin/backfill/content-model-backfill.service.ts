@@ -12,7 +12,6 @@ export interface BackfillReport {
     filled: number;
     unresolved: Array<{ lessonId: string; reason: string }>;
   };
-  progress: { filled: number; total: number };
   content: {
     filled: number;
     skipped: Array<{ lessonId: string; reason: string }>;
@@ -24,11 +23,6 @@ export interface BackfillReport {
 export interface PreparedBackfill {
   report: BackfillReport;
   bodyUpdates: Array<{ id: string; body: string }>;
-  progressUpdates: Array<{
-    id: string;
-    currentLessonId: string;
-    contentId: string;
-  }>;
   contentUpdates: Array<{
     id: string;
     expectedBody: string;
@@ -46,12 +40,6 @@ type LessonBackfillRow = {
   };
 };
 
-type ProgressBackfillRow = {
-  id: string;
-  currentLessonId: string;
-  currentLesson: { contentId: string } | null;
-};
-
 // 写库事务可能很大（每课一条 updateMany），远程库上要远超 Prisma 默认的 5 秒。
 export const BACKFILL_TX_OPTIONS = { timeout: 120_000 };
 
@@ -61,32 +49,22 @@ export class ContentModelBackfillService {
 
   async prepare(): Promise<PreparedBackfill> {
     const client = this.prisma;
-    const [lessons, progresses] = await Promise.all([
-      client.courseLesson.findMany({
-        where: { OR: [{ body: '' }, { content: { equals: Prisma.DbNull } }] },
-        select: {
-          id: true,
-          body: true,
-          content: true,
-          sourceRange: true,
-          module: {
-            select: {
-              courseVersion: {
-                select: { courseId: true, sourceMarkdown: true },
-              },
+    const lessons = await client.courseLesson.findMany({
+      where: { OR: [{ body: '' }, { content: { equals: Prisma.DbNull } }] },
+      select: {
+        id: true,
+        body: true,
+        content: true,
+        sourceRange: true,
+        module: {
+          select: {
+            courseVersion: {
+              select: { courseId: true, sourceMarkdown: true },
             },
           },
         },
-      }),
-      client.progress.findMany({
-        where: { currentLessonContentId: null, currentLessonId: { not: null } },
-        select: {
-          id: true,
-          currentLessonId: true,
-          currentLesson: { select: { contentId: true } },
-        },
-      }),
-    ]);
+      },
+    });
 
     const unresolved: BackfillReport['bodies']['unresolved'] = [];
     const bodyUpdates: Array<{ id: string; body: string }> = [];
@@ -117,19 +95,6 @@ export class ContentModelBackfillService {
       }
       bodyUpdates.push({ id: row.id, body: sliceLessonBody(markdown, range) });
     }
-
-    const progressUpdates = (progresses as ProgressBackfillRow[]).flatMap(
-      (row) =>
-        row.currentLesson
-          ? [
-              {
-                id: row.id,
-                currentLessonId: row.currentLessonId,
-                contentId: row.currentLesson.contentId,
-              },
-            ]
-          : [],
-    );
 
     const contentSkipped: BackfillReport['content']['skipped'] = [];
     const pendingBody: BackfillReport['content']['pendingBody'] = [];
@@ -198,7 +163,6 @@ export class ContentModelBackfillService {
     return {
       report: {
         bodies: { filled: bodyUpdates.length, unresolved },
-        progress: { filled: progressUpdates.length, total: progresses.length },
         content: {
           filled: contentUpdates.length,
           skipped: contentSkipped,
@@ -207,7 +171,6 @@ export class ContentModelBackfillService {
         },
       },
       bodyUpdates,
-      progressUpdates,
       contentUpdates,
     };
   }
@@ -224,18 +187,6 @@ export class ContentModelBackfillService {
       });
       bodyFilled += result.count;
     }
-    let progressFilled = 0;
-    for (const update of plan.progressUpdates) {
-      const result = await transaction.progress.updateMany({
-        where: {
-          id: update.id,
-          currentLessonContentId: null,
-          currentLessonId: update.currentLessonId,
-        },
-        data: { currentLessonContentId: update.contentId },
-      });
-      progressFilled += result.count;
-    }
     let contentFilled = 0;
     for (const update of plan.contentUpdates) {
       const result = await transaction.courseLesson.updateMany({
@@ -251,7 +202,6 @@ export class ContentModelBackfillService {
     return {
       ...plan.report,
       bodies: { ...plan.report.bodies, filled: bodyFilled },
-      progress: { ...plan.report.progress, filled: progressFilled },
       content: { ...plan.report.content, filled: contentFilled },
     };
   }

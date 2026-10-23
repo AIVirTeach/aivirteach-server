@@ -1,75 +1,65 @@
+import {
+  completedLessonIds as stateCompletedLessonIds,
+  type LearningState,
+} from './learning-state';
+
 export type EnrollmentStatus = 'not_started' | 'in_progress' | 'completed';
-type ProgressPointer = { currentLessonContentId: string | null } | null;
 type ModulesWithLessons = Array<{
   title: string;
   lessons: Array<{ contentId: string }>;
 }>;
-type Completion = {
-  generation: number;
-  contentId: string;
-  completedAt: Date | null;
-};
-type ProgressInput = {
-  progress: ProgressPointer;
+
+export type LearningProgressInput = {
+  learningState: LearningState;
   modules: ModulesWithLessons;
-  generation?: number;
-  lessonProgress?: Completion[];
+  active?: boolean;
 };
 
-export function completedLessonIds(input: ProgressInput): string[] {
-  const completed = new Set(
-    (input.lessonProgress ?? [])
-      .filter(
-        (row) => row.generation === (input.generation ?? 0) && row.completedAt,
-      )
-      .map((row) => row.contentId),
-  );
+export function completedLessonIds(input: LearningProgressInput): string[] {
+  const completed = new Set(stateCompletedLessonIds(input.learningState));
   return [
-    ...new Set(
-      input.modules.flatMap((module) =>
-        module.lessons.map((lesson) => lesson.contentId),
-      ),
-    ),
+    ...new Set(input.modules.flatMap((m) => m.lessons.map((l) => l.contentId))),
   ].filter((id) => completed.has(id));
 }
 
-export function computeProgressPercent(input: ProgressInput): number {
+export function computeProgressPercent(input: LearningProgressInput): number {
   const total = new Set(
-    input.modules.flatMap((module) =>
-      module.lessons.map((lesson) => lesson.contentId),
-    ),
+    input.modules.flatMap((m) => m.lessons.map((l) => l.contentId)),
   ).size;
   return total
     ? Math.round((completedLessonIds(input).length / total) * 100)
     : 0;
 }
 
-export function deriveCurrentModuleTitle(input: ProgressInput): string {
+export function deriveCurrentModuleTitle(input: LearningProgressInput): string {
   return (
     input.modules.find((module) =>
       module.lessons.some(
-        (lesson) => lesson.contentId === input.progress?.currentLessonContentId,
+        (lesson) => lesson.contentId === input.learningState.readingLessonId,
       ),
     )?.title ?? ''
   );
 }
 
-export function deriveEnrollmentView(
-  input: ProgressInput & {
-    active?: boolean;
-    completedAt: Date | null;
-  },
-): { status: EnrollmentStatus; progressPercent: number } {
+export function deriveEnrollmentView(input: LearningProgressInput): {
+  status: EnrollmentStatus;
+  progressPercent: number;
+} {
   const progressPercent = computeProgressPercent(input);
-  const total = input.modules.flatMap((module) => module.lessons).length;
-  const complete = total > 0 && completedLessonIds(input).length === total;
+  const ids = new Set(
+    input.modules.flatMap((module) =>
+      module.lessons.map((lesson) => lesson.contentId),
+    ),
+  );
+  const complete =
+    ids.size > 0 && completedLessonIds(input).length === ids.size;
   return {
     status: complete
       ? 'completed'
       : input.active ||
-          input.progress?.currentLessonContentId ||
+          input.learningState.readingLessonId ||
           progressPercent > 0 ||
-          input.completedAt
+          input.learningState.completedAt
         ? 'in_progress'
         : 'not_started',
     progressPercent,

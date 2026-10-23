@@ -18,6 +18,7 @@ import {
 } from './draft/draft-version';
 import { collectDraftPublishIssues } from './publish-validation';
 import { remapRemovedLessons } from './progress-remap';
+import { EnrollmentsService } from '../enrollments/enrollments.service';
 
 @Injectable()
 export class CoursePublishService {
@@ -25,6 +26,7 @@ export class CoursePublishService {
     private readonly prisma: PrismaService,
     private readonly drafts: CourseDraftService,
     private readonly audit: AuditService,
+    private readonly enrollments: EnrollmentsService,
   ) {}
 
   async publish(
@@ -157,15 +159,11 @@ export class CoursePublishService {
         },
       });
 
-      for (const [removedId, nextId] of remap) {
-        await tx.progress.updateMany({
-          where: {
-            currentLessonContentId: removedId,
-            enrollment: { is: { courseId: course.id } },
-          },
-          data: { currentLessonContentId: nextId },
-        });
-      }
+      await this.enrollments.remapPublishedReadingPointers(
+        tx,
+        course.id,
+        remap,
+      );
 
       // 响应不带课时正文（最多 300 × 256 KB）；调用方要完整草稿用 GET draft。
       const version = await tx.courseVersion.findUnique({

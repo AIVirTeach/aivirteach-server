@@ -158,9 +158,19 @@ describe('Token 额度 Guard 端到端', () => {
 
   it('restart 清空对话后消耗不会被清零：额度仍然用尽，无法靠重来续杯', async () => {
     // 上一条用例已把余额消耗到 0（对话里有 250 个 output token -> 加权 1000）。
+    const progress = await request(app.getHttpServer())
+      .get(`/api/v1/courses/${courseSlug}/progress`)
+      .set('Authorization', `Bearer ${accessToken}`)
+      .expect(200);
     await request(app.getHttpServer())
       .post('/api/v1/courses/' + courseSlug + '/restart')
       .set('Authorization', `Bearer ${accessToken}`)
+      .send({
+        requestId: randomUUID(),
+        generation: progress.body.generation,
+        revision: progress.body.revision,
+        courseVersionId: progress.body.courseVersionId,
+      })
       .expect(201);
 
     await expect(

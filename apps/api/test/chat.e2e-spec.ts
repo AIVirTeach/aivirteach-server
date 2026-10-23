@@ -280,11 +280,16 @@ describe('Chat 端到端', () => {
         labId: `lab_${Date.now()}`,
       },
     });
-    await prisma.progress.create({
+    if (!lesson) throw new Error('Expected seeded lesson');
+    await prisma.enrollment.update({
+      where: { id: enrollmentId },
       data: {
-        enrollmentId,
-        currentLessonId: lesson.id,
-        currentLessonContentId: lesson.contentId,
+        learningState: {
+          schemaVersion: 1,
+          readingLessonId: lesson.contentId,
+          lessons: {},
+          completedAt: null,
+        },
       },
     });
 
@@ -361,17 +366,19 @@ describe('Chat 端到端', () => {
   it('两个标签页的不同已加载课时分别作为 Agent 上下文', async () => {
     const diagnoseSpy = jest
       .spyOn(app.get(AgentClient), 'diagnose')
-      .mockImplementation(async (input) => ({
-        request_id: input.request_id,
-        status: 'completed',
-        answer: input.current_step.title,
-        diagnosis: {},
-        course_alignment: {},
-        evidence: [],
-        suggested_actions: [],
-        limitations: [],
-        tool_trace: [],
-      }));
+      .mockImplementation((input) =>
+        Promise.resolve({
+          request_id: input.request_id,
+          status: 'completed',
+          answer: input.current_step.title,
+          diagnosis: {},
+          course_alignment: {},
+          evidence: [],
+          suggested_actions: [],
+          limitations: [],
+          tool_trace: [],
+        }),
+      );
     for (const [lessonId, expectedTitle] of [
       ['verify-virtual-machine', '验证虚拟机'],
       ['another-lesson', '另一课'],
@@ -482,9 +489,19 @@ describe('Chat 端到端', () => {
   });
 
   it('restart 后旧代请求拒绝且不会写入新代对话', async () => {
+    const progress = await request(app.getHttpServer())
+      .get(`/api/v1/courses/${courseSlug}/progress`)
+      .set('Authorization', `Bearer ${accessToken}`)
+      .expect(200);
     await request(app.getHttpServer())
       .post(`/api/v1/courses/${courseSlug}/restart`)
       .set('Authorization', `Bearer ${accessToken}`)
+      .send({
+        requestId: randomUUID(),
+        generation: progress.body.generation,
+        revision: progress.body.revision,
+        courseVersionId: progress.body.courseVersionId,
+      })
       .expect(201);
     const oldRequest = command('old generation', { generation: 0 });
     await request(app.getHttpServer())

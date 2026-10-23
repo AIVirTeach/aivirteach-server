@@ -1,6 +1,7 @@
 import 'dotenv/config';
 import { INestApplication } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
+import { randomUUID } from 'node:crypto';
 import { PrismaClient, WorkspaceStatus } from '@prisma/client';
 import request from 'supertest';
 import { AppModule } from '../src/app.module';
@@ -15,6 +16,7 @@ describe('Enrollment restart -> refresh -> enroll (database and HTTP)', () => {
   let app: INestApplication;
   let userId: string;
   let courseId: string;
+  let versionId: string;
   let enrollmentId: string;
   let token: string;
   let deleteVm: jest.SpyInstance;
@@ -36,22 +38,34 @@ describe('Enrollment restart -> refresh -> enroll (database and HTTP)', () => {
       data: { slug, title: 'Restart E2E', published: true },
     });
     courseId = course.id;
-    await prisma.courseVersion.create({
+    const version = await prisma.courseVersion.create({
       data: { courseId, version: 1, publishedAt: new Date() },
     });
+    versionId = version.id;
     const enrollment = await prisma.enrollment.create({
-      data: { userId, courseId, active: true },
+      data: {
+        userId,
+        courseId,
+        courseVersionId: version.id,
+        active: true,
+        learningState: {
+          schemaVersion: 1,
+          readingLessonId: 'previous-step',
+          lessons: {},
+          completedAt: null,
+        },
+      },
     });
     enrollmentId = enrollment.id;
-    await prisma.progress.create({
-      data: { enrollmentId, currentLessonContentId: 'previous-step' },
-    });
     await prisma.conversation.create({
       data: {
         enrollmentId,
         threadId: enrollmentId,
         role: 'USER',
         content: 'old chat',
+        inputCacheHitTokens: 500,
+        inputCacheMissTokens: 100,
+        outputTokens: 50,
       },
     });
     await prisma.workspace.create({
@@ -78,9 +92,16 @@ describe('Enrollment restart -> refresh -> enroll (database and HTTP)', () => {
   });
 
   it('returns the persisted reset state and starts again only on enroll', async () => {
+    const command = {
+      requestId: randomUUID(),
+      generation: 0,
+      revision: 0,
+      courseVersionId: versionId,
+    };
     const restarted = await request(app.getHttpServer())
       .post(`/api/v1/courses/${slug}/restart`)
       .set('Authorization', `Bearer ${token}`)
+      .send(command)
       .expect(201);
     expect(restarted.body).toMatchObject({
       active: false,
@@ -106,10 +127,15 @@ describe('Enrollment restart -> refresh -> enroll (database and HTTP)', () => {
       ),
     ).toBe(false);
     await expect(
-      prisma.progress.findUniqueOrThrow({ where: { enrollmentId } }),
+      prisma.enrollment.findUniqueOrThrow({ where: { id: enrollmentId } }),
     ).resolves.toMatchObject({
-      currentLessonId: null,
-      currentLessonContentId: null,
+      generation: 1,
+      learningState: {
+        schemaVersion: 1,
+        readingLessonId: null,
+        lessons: {},
+        completedAt: null,
+      },
     });
     await expect(
       prisma.conversation.count({ where: { enrollmentId } }),
@@ -118,6 +144,28 @@ describe('Enrollment restart -> refresh -> enroll (database and HTTP)', () => {
       prisma.workspace.count({ where: { enrollmentId } }),
     ).resolves.toBe(0);
     expect(deleteVm).toHaveBeenCalledWith(`lab-${stamp}`);
+    await expect(
+      prisma.quotaLedger.findMany({
+        where: { userId },
+        select: { tokensDelta: true },
+      }),
+    ).resolves.toEqual([{ tokensDelta: -310 }]);
+    const snapshotCount = await prisma.learningSnapshot.count({
+      where: { enrollmentId, reason: 'RESTART' },
+    });
+    await request(app.getHttpServer())
+      .post(`/api/v1/courses/${slug}/restart`)
+      .set('Authorization', `Bearer ${token}`)
+      .send(command)
+      .expect(201);
+    expect(
+      await prisma.learningSnapshot.count({
+        where: { enrollmentId, reason: 'RESTART' },
+      }),
+    ).toBe(snapshotCount);
+    await expect(prisma.quotaLedger.count({ where: { userId } })).resolves.toBe(
+      1,
+    );
 
     const started = await request(app.getHttpServer())
       .post(`/api/v1/courses/${slug}/enroll`)
@@ -139,5 +187,45 @@ describe('Enrollment restart -> refresh -> enroll (database and HTTP)', () => {
         progressPercent: 0,
       }),
     ]);
+  });
+
+  it('keeps reset retry discoverable and replays one restart while Labs cleanup is failing', async () => {
+    await prisma.workspace.create({
+      data: {
+        enrollmentId,
+        status: WorkspaceStatus.RUNNING,
+        labId: `lab-fail-${stamp}`,
+      },
+    });
+    deleteVm.mockRejectedValue(new Error('Labs unavailable'));
+    const command = {
+      requestId: randomUUID(),
+      generation: 1,
+      revision: 0,
+      courseVersionId: versionId,
+    };
+    const result = await request(app.getHttpServer())
+      .post(`/api/v1/courses/${slug}/restart`)
+      .set('Authorization', `Bearer ${token}`)
+      .send(command)
+      .expect(201);
+    expect(result.body.workspaceResetPending).toBe(true);
+    expect(
+      await prisma.workspace.findUnique({ where: { enrollmentId } }),
+    ).toMatchObject({ status: 'RESETTING' });
+    const count = await prisma.learningSnapshot.count({
+      where: { enrollmentId, reason: 'RESTART', sourceGeneration: 1 },
+    });
+    const replay = await request(app.getHttpServer())
+      .post(`/api/v1/courses/${slug}/restart`)
+      .set('Authorization', `Bearer ${token}`)
+      .send(command)
+      .expect(201);
+    expect(replay.body.workspaceResetPending).toBe(true);
+    expect(
+      await prisma.learningSnapshot.count({
+        where: { enrollmentId, reason: 'RESTART', sourceGeneration: 1 },
+      }),
+    ).toBe(count);
   });
 });

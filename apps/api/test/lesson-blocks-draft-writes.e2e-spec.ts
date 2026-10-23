@@ -192,8 +192,16 @@ describe('草稿写入与发版（真库）', () => {
     const enrollment = await prisma.enrollment.create({
       data: { userId: user.id, courseId: course.id },
     });
-    await prisma.progress.create({
-      data: { enrollmentId: enrollment.id, currentLessonContentId: 'lesson-b' },
+    await prisma.enrollment.update({
+      where: { id: enrollment.id },
+      data: {
+        learningState: {
+          schemaVersion: 1,
+          readingLessonId: 'lesson-b',
+          lessons: {},
+          completedAt: null,
+        },
+      },
     });
 
     await admin(request(app.getHttpServer()).post(api(slug, '/draft')).send());
@@ -204,10 +212,12 @@ describe('草稿写入与发版（真库）', () => {
       request(app.getHttpServer()).post(api(slug, '/publish')).send({}),
     ).expect(201);
 
-    const progress = await prisma.progress.findUniqueOrThrow({
-      where: { enrollmentId: enrollment.id },
+    const updatedEnrollment = await prisma.enrollment.findUniqueOrThrow({
+      where: { id: enrollment.id },
     });
-    expect(progress.currentLessonContentId).toBe('lesson-c');
+    expect(updatedEnrollment.learningState).toMatchObject({
+      readingLessonId: 'lesson-c',
+    });
     const audits = await prisma.auditEvent.count({
       where: {
         action: 'admin.publishCourse',

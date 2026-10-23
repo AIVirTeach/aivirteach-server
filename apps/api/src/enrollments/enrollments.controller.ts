@@ -6,11 +6,17 @@ import {
   Post,
   Get,
   Req,
+  Query,
   UseGuards,
 } from '@nestjs/common';
 import { z } from 'zod';
 import { ZodValidationPipe } from '../common/zod-validation.pipe';
-import type { CompletionCommand, ReadingCommand } from './enrollments.service';
+import type {
+  CompletionCommand,
+  ReadingCommand,
+  RestartCommand,
+  SnapshotCommand,
+} from './enrollments.service';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import {
   JwtAuthGuard,
@@ -35,6 +41,14 @@ const completion = z
 const reading = z
   .object({ ...version, lessonId: z.string().min(1).max(200) })
   .strict();
+const restart = z
+  .object({
+    requestId: z.string().uuid(),
+    ...version,
+    revision: z.number().int().nonnegative(),
+  })
+  .strict();
+const snapshot = restart;
 
 @ApiTags('Enrollments')
 @ApiBearerAuth()
@@ -89,8 +103,48 @@ export class EnrollmentsController {
   restart(
     @Param('slug') slug: string,
     @Req() request: AuthenticatedRequest,
+    @Body(new ZodValidationPipe(restart)) command: RestartCommand,
   ): Promise<EnrollmentResponse> {
-    return this.enrollmentsService.restart(request.auth!.userId, slug);
+    return this.enrollmentsService.restart(request.auth!.userId, slug, command);
+  }
+
+  @Post('courses/:slug/snapshots')
+  createSnapshot(
+    @Param('slug') slug: string,
+    @Req() request: AuthenticatedRequest,
+    @Body(new ZodValidationPipe(snapshot)) command: SnapshotCommand,
+  ) {
+    return this.enrollmentsService.createSnapshot(
+      request.auth!.userId,
+      slug,
+      command,
+    );
+  }
+
+  @Get('courses/:slug/snapshots')
+  listSnapshots(
+    @Param('slug') slug: string,
+    @Req() request: AuthenticatedRequest,
+    @Query('cursor') cursor?: string,
+  ) {
+    return this.enrollmentsService.listSnapshots(
+      request.auth!.userId,
+      slug,
+      cursor,
+    );
+  }
+
+  @Get('courses/:slug/snapshots/:snapshotId')
+  getSnapshot(
+    @Param('slug') slug: string,
+    @Param('snapshotId') snapshotId: string,
+    @Req() request: AuthenticatedRequest,
+  ) {
+    return this.enrollmentsService.getSnapshot(
+      request.auth!.userId,
+      slug,
+      snapshotId,
+    );
   }
 
   @Get('me/enrollments')
@@ -99,6 +153,4 @@ export class EnrollmentsController {
   ): Promise<EnrollmentResponse[]> {
     return this.enrollmentsService.listForUser(request.auth!.userId);
   }
-
-
 }
