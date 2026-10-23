@@ -18,7 +18,7 @@ export type DraftVersion = Prisma.CourseVersionGetPayload<{
   include: typeof DRAFT_INCLUDE;
 }>;
 
-// 写接口的响应和事务内快照用：不带课时正文 body/content（每课最多 256 KB），
+// 写接口的响应和事务内快照用：不带课时 content（每课最多 256 KB），
 // 完整内容只由 GET draft 返回，自动保存才不会每次回传整门课。
 export const DRAFT_SUMMARY_INCLUDE = {
   modules: {
@@ -26,7 +26,7 @@ export const DRAFT_SUMMARY_INCLUDE = {
     include: {
       lessons: {
         orderBy: { position: 'asc' },
-        omit: { body: true, content: true },
+        omit: { content: true },
         include: { assessments: true },
       },
     },

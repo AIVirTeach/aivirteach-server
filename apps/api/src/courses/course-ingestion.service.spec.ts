@@ -8,7 +8,6 @@ import { tmpdir } from 'node:os';
 import { PrismaService } from '../prisma/prisma.service';
 import { CourseAssetStorageService } from './course-asset-storage.service';
 import { CourseIngestionService } from './course-ingestion.service';
-import { sliceLessonBody } from './lesson-body';
 
 import {
   blocksToPlainText,
@@ -106,10 +105,6 @@ describe('CourseIngestionService.ingestFromDirectory', () => {
                           position: 1,
                           title: 'Lesson One',
                           assessmentIds: ['check-lesson-1'],
-                          body: sliceLessonBody(SOURCE_MARKDOWN, {
-                            startLine: 3,
-                            endLine: 4,
-                          }),
                           sourceRange: { startLine: 3, endLine: 4 },
                         }),
                         expect.objectContaining({
@@ -117,10 +112,6 @@ describe('CourseIngestionService.ingestFromDirectory', () => {
                           position: 2,
                           title: 'Lesson Two',
                           assessmentIds: ['check-lesson-2'],
-                          body: sliceLessonBody(SOURCE_MARKDOWN, {
-                            startLine: 5,
-                            endLine: 6,
-                          }),
                           sourceRange: { startLine: 5, endLine: 6 },
                         }),
                       ],
@@ -135,7 +126,7 @@ describe('CourseIngestionService.ingestFromDirectory', () => {
     );
   });
 
-  it('写入切片 body 与校验通过的转换块，并返回每节转换报告', async () => {
+  it('写入来源范围与校验通过的转换块，并返回每节转换报告', async () => {
     const prisma = buildPrisma();
     const service = await buildService(prisma);
 
@@ -148,13 +139,8 @@ describe('CourseIngestionService.ingestFromDirectory', () => {
       prisma.course.create.mock.calls[0][0].data.assets.create.map(
         (asset: { id: string }) => asset.id,
       );
-    for (const [index, lesson] of lessons.entries()) {
-      expect(lesson.body).toBe(
-        sliceLessonBody(SOURCE_MARKDOWN, {
-          startLine: index ? 5 : 3,
-          endLine: index ? 6 : 4,
-        }),
-      );
+    for (const lesson of lessons) {
+      expect(lesson).not.toHaveProperty('body');
       expect(lesson.content.blocks.length).toBeGreaterThan(0);
       expect(
         validateLessonContent(lesson.content, {
@@ -377,7 +363,7 @@ describe('CourseIngestionService.ingestFromDirectory', () => {
     expect(assetStorage.upload).not.toHaveBeenCalled();
   });
 
-  it('转换报告含 error 时只将该节 content 设 null，保留 body 并继续摄取', async () => {
+  it('转换报告含 error 时只将该节 content 设 null 并继续摄取', async () => {
     const prisma = buildPrisma();
     const service = await buildService(prisma);
     jest
@@ -401,9 +387,6 @@ describe('CourseIngestionService.ingestFromDirectory', () => {
       .modules.create[0].lessons.create as any[];
 
     expect(lessons[0].content).not.toBeNull();
-    expect(lessons[1].body).toBe(
-      sliceLessonBody(SOURCE_MARKDOWN, { startLine: 5, endLine: 6 }),
-    );
     expect(lessons[1].content).toBe(Prisma.DbNull);
     expect(result.conversionReports[1]).toEqual({
       lessonContentId: 'lesson-2',

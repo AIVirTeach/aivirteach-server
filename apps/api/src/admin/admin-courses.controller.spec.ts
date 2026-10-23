@@ -412,7 +412,6 @@ describe('AdminCoursesController', () => {
       activityType: 'read',
       activityPrompt: '',
       activityCompletionType: 'none',
-      body: 'markdown',
       content: { schemaVersion: 1, blocks: [] },
     };
     const module = {
@@ -429,9 +428,9 @@ describe('AdminCoursesController', () => {
     expect(response.body).toMatchObject({
       courseId: 'demo',
       lesson: { id: 'lesson-1' },
-      markdown: 'markdown',
       blocks: [],
     });
+    expect(response.body).not.toHaveProperty('markdown');
     expect(prisma.courseAsset.findMany).not.toHaveBeenCalled();
     const missing = await request(app.getHttpServer())
       .get('/admin/courses/demo/draft/lessons/missing')
@@ -450,7 +449,6 @@ describe('AdminCoursesController', () => {
       activityType: 'read',
       activityPrompt: '',
       activityCompletionType: 'none',
-      body: 'markdown',
       content: {
         schemaVersion: 1,
         blocks: [

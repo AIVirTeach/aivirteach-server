@@ -214,7 +214,6 @@ model CourseLesson {
   estimatedMinutes       Int
   objectives             String[]     @default([])
   sourceRange            Json?
-  body                   String       @default("") @db.Text
   content                Json?
   activityType           String
   activityPrompt         String

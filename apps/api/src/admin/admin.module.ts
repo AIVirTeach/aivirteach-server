@@ -18,8 +18,6 @@ import {
 import { OperatorAdminService } from './operator-admin.service';
 import { QuotaGrantTokensCommand } from './commands/quota-tokens.command';
 import { CoursesModule } from '../courses/courses.module';
-import { ContentModelBackfillService } from './backfill/content-model-backfill.service';
-import { CourseBackfillCommand } from './commands/course-backfill.command';
 import { CourseDraftService } from './draft/course-draft.service';
 import { CoursePublishService } from './course-publish.service';
 import { DraftContentService } from './draft/draft-content.service';
@@ -54,8 +52,6 @@ import { EnrollmentsModule } from '../enrollments/enrollments.module';
     OperatorAddCommand,
     OperatorResetCommand,
     OperatorDisableCommand,
-    ContentModelBackfillService,
-    CourseBackfillCommand,
   ],
   exports: [AdminService],
 })

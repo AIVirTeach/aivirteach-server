@@ -224,12 +224,6 @@ export function LessonEditor({
               <h2>课时内容</h2>
               <small>{state.blocks.length} / 300 块</small>
             </div>
-            {lesson.body && !parsed.success && (
-              <p className="notice">
-                这个课时原先使用
-                Markdown。添加内容块并保存后，将使用内容块预览和发布。
-              </p>
-            )}
             <div className="add-block">
               <label className="field">
                 内容类型

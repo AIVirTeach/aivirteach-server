@@ -76,7 +76,6 @@ export class CourseDraftService {
                     estimatedMinutes: lesson.estimatedMinutes,
                     objectives: lesson.objectives,
                     sourceRange: lesson.sourceRange ?? undefined,
-                    body: lesson.body,
                     content:
                       lesson.content === null ? Prisma.DbNull : lesson.content,
                     activityType: lesson.activityType,

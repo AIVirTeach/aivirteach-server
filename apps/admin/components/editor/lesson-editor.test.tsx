@@ -21,7 +21,6 @@ const lesson: DraftLesson = {
   activityCompletionType: 'manual',
   assessmentIds: [],
   assessments: [],
-  body: '',
   content: { schemaVersion: 1, blocks: [] },
 };
 const draft: DraftVersion = {

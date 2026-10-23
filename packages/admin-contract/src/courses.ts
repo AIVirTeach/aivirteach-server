@@ -51,7 +51,6 @@ const LessonSummarySchema = z.object({
   assessments: z.array(DraftAssessmentSchema),
 });
 export const DraftLessonSchema = LessonSummarySchema.extend({
-  body: z.string(),
   content: z.json().nullable(),
 });
 export type DraftLesson = z.infer<typeof DraftLessonSchema>;

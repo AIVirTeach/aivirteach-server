@@ -242,7 +242,7 @@ describe('课时块 端到端', () => {
     ).expect(200);
     expect(lesson.body.blocks).toEqual(imageLesson(assetId).blocks);
     expect(lesson.body.assets[assetId]).toMatchObject({ alt: '终端截图' });
-    expect(typeof lesson.body.markdown).toBe('string');
+    expect(lesson.body).not.toHaveProperty('markdown');
     expect(
       (await prisma.course.findUniqueOrThrow({ where: { slug } })).level,
     ).toBe('INTERMEDIATE');

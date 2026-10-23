@@ -27,10 +27,10 @@ describe('LATEST_PUBLISHED_VERSION', () => {
     });
   });
 
-  it('does not load lesson body/content with the version tree', () => {
+  it('does not load lesson content with the version tree', () => {
     expect(
       LATEST_PUBLISHED_VERSION.include.modules.include.lessons,
-    ).toMatchObject({ omit: { body: true, content: true } });
+    ).toMatchObject({ omit: { content: true } });
   });
 });
 
@@ -186,27 +186,29 @@ describe('CoursesService.getWelcome', () => {
   });
 });
 
-// 学员读取只在版本树里拿到不含 body/content 的课时，正文单独按 id 取一节。
+// 学员读取只在版本树里拿到不含 content 的课时，正文单独按 id 取一节。
 function givenPublishedVersion(
   prisma: ReturnType<typeof buildPrisma>,
   version: {
     modules: {
-      lessons: Array<{ id: string; body: string; content: unknown }>;
+      lessons: Array<{ id: string; content: unknown }>;
     }[];
   },
 ) {
   const full = new Map(
     version.modules.flatMap((m) =>
-      m.lessons.map(
-        (l) => [l.id, { body: l.body, content: l.content }] as const,
-      ),
+      m.lessons.map((l) => [l.id, { content: l.content }] as const),
     ),
   );
   const slim = {
     ...version,
     modules: version.modules.map((m) => ({
       ...m,
-      lessons: m.lessons.map(({ body: _b, content: _c, ...rest }) => rest),
+      lessons: m.lessons.map((lesson) => {
+        const { content, ...rest } = lesson;
+        void content;
+        return rest;
+      }),
     })),
   };
   prisma.course.findUnique.mockResolvedValue({
@@ -240,8 +242,7 @@ describe('CoursesService.getLesson', () => {
             estimatedMinutes: 15,
             objectives: ['a'],
             sourceRange: { startLine: 1, endLine: 2 },
-            body: 'body from lesson one',
-            content: null as Prisma.JsonValue,
+            content: { schemaVersion: 1, blocks: [] } as Prisma.JsonValue,
             activityType: 'guided-lab',
             activityPrompt: 'p',
             activityCompletionType: 'learner-confirmation',
@@ -254,8 +255,7 @@ describe('CoursesService.getLesson', () => {
             estimatedMinutes: 15,
             objectives: ['b'],
             sourceRange: { startLine: 3, endLine: 4 },
-            body: 'body from lesson two',
-            content: null as Prisma.JsonValue,
+            content: { schemaVersion: 1, blocks: [] } as Prisma.JsonValue,
             activityType: 'guided-lab',
             activityPrompt: 'p',
             activityCompletionType: 'learner-confirmation',
@@ -265,14 +265,15 @@ describe('CoursesService.getLesson', () => {
     ],
   };
 
-  it('从 lesson body 读取正文并计算 navigation', async () => {
+  it('读取结构化课时内容并计算 navigation', async () => {
     const prisma = buildPrisma();
     givenPublishedVersion(prisma, versionWithTwoLessons);
     const service = await buildService(prisma);
 
     const lesson = await service.getLesson('sample', 'verify-virtual-machine');
 
-    expect(lesson.markdown).toBe('body from lesson one');
+    expect(lesson.blocks).toEqual([]);
+    expect(lesson).not.toHaveProperty('markdown');
     expect(prisma.course.findUnique).toHaveBeenCalledWith({
       where: { slug: 'sample' },
       include: { versions: LATEST_PUBLISHED_VERSION },
@@ -322,7 +323,7 @@ describe('CoursesService.getLesson', () => {
     });
   });
 
-  it('只按 id 取被读的那一课的正文，找不到课时时不查正文', async () => {
+  it('只按 id 取被读的那一课的结构化内容，找不到课时时不查正文', async () => {
     const prisma = buildPrisma();
     givenPublishedVersion(prisma, versionWithTwoLessons);
     const service = await buildService(prisma);
@@ -331,7 +332,7 @@ describe('CoursesService.getLesson', () => {
     expect(prisma.courseLesson.findUnique).toHaveBeenCalledTimes(1);
     expect(prisma.courseLesson.findUnique).toHaveBeenCalledWith({
       where: { id: 'lesson_cuid_2' },
-      select: { body: true, content: true },
+      select: { content: true },
     });
 
     prisma.courseLesson.findUnique.mockClear();
@@ -348,7 +349,8 @@ describe('CoursesService.getLesson', () => {
 
     const lesson = await service.getLesson('sample', 'verify-network');
 
-    expect(lesson.markdown).toBe('body from lesson two');
+    expect(lesson.blocks).toEqual([]);
+    expect(lesson).not.toHaveProperty('markdown');
     expect(lesson.navigation).toEqual({
       previousLessonId: 'verify-virtual-machine',
       nextLessonId: null,

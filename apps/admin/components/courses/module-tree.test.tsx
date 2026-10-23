@@ -24,7 +24,6 @@ const lesson = {
   activityCompletionType: 'manual',
   assessmentIds: [],
   assessments: [],
-  body: '',
   content: null,
 };
 const draft: DraftVersion = {
