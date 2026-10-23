@@ -45,8 +45,22 @@ The new database regression holds an unrelated enrollment lock in another transa
 
 Post-fix checks passed: 3 unit suites with 22 tests, the real publication suite with 7 tests, and the learning-state PostgreSQL/HTTP suite with 12 tests. TypeScript, Prettier, and diff checks passed. Scoped ESLint over the three changed TypeScript files has zero errors and 46 warnings. No full-suite rerun was needed for this bounded fix; the earlier complete runs are recorded above. No schema or migration changed.
 
+## Merged-main local release gate
+
+Server baseline `d573fab` and client merge `fd38776` contain the completed learning-state implementation. Run `python3 scripts/verify-learning-release.py --port 55440 --user aivirteach` after installing workspace dependencies and starting a local PostgreSQL server with a role permitted to create test databases. The runner requires the generated Prisma client from dependency installation.
+
+The runner fixes the database host to `127.0.0.1`, creates one uniquely named database and applies migrations. It runs every API unit suite and every authenticated HTTP/PostgreSQL suite without a filename filter, builds the API, then invokes the existing fresh/upgrade/guarded migration verifier. Shared packages are built by the API pretest hooks; their separate unit suites are not part of this gate. The old `verify-lesson-progress.sh` is removed because its filename filter could omit the renamed `learning-state` suite.
+
+The completed run passed 68 API unit suites with 642 tests, 17 PostgreSQL/HTTP suites with 108 tests, the API build and all three migration scenarios. Labs and Agent calls remain mocked. This pass changes no application runtime, database schema or migration SQL.
+
+Isolation was exercised with inherited `DATABASE_URL`, `PGHOST`, `DOTENV_CONFIG_PATH` and `DOTENV_CONFIG_OVERRIDE` deliberately pointing to an invalid remote configuration. The gate discards those controls and uses its generated local URL. The learning-state suite still rejects any non-loopback host and allows only the original dedicated database or the exact generated name format.
+
+An initial run failed because that suite allowed only the fixed database name. The runner returned nonzero and removed its database. After the guarded name update, the complete gate passed. Queries of the local database catalog confirmed no `learning_release_*` or `learning_verify_*` databases remained after either verification. Cleanup failure also makes the runner fail; abrupt process termination still requires checking for abandoned test databases.
+
+Independent review found the dotenv override path before the final run and verified its removal. Script syntax, invalid-port rejection, Prettier and diff checks passed. Scoped ESLint on the changed E2E file reports zero errors and 43 test-typing warnings. Logs are `/private/tmp/learning-release-gate-first-failure.log` and `/private/tmp/learning-release-gate-final.log`.
+
 ## Release boundary
 
-The client follow-up is PR #24. Restart now requires a request ID, generation, revision, and course version. Reading changes advance the progress revision. The client must expose manual snapshot saving and paginated history before the feature is released.
+Client PR #24 is merged at `fd38776`. It supplies the restart command, manual snapshot saving and paginated history. Server main is `d573fab`. The client record reports 229 passing tests, including mounted console lifecycle tests; this is separate from browser or live provider acceptance.
 
 There is no snapshot restore endpoint. Snapshots do not restore chats, VM files, assessment attempts, or consumed quota. Browser interaction, real Labs/VM behavior, and production rollout are separate acceptance steps. No browser, merge, deployment, or remote database write was performed for this change.

@@ -6,11 +6,11 @@
 
 运营在后台编辑课程后，预览使用与正式 Lab V2 相同的课程展示组件、样式和块渲染规则。发布后，正式 Lab 按既有课程版本与学员 enrollment 规则读取内容，不再展示与后台数据无关的静态课程 HTML。
 
-已核对的 client 入口：
+实施前核对的 client 入口，以下静态 HTML 描述为历史基线；当前实现见文末实施记录：
 
 - `app/preview/lesson/PreviewClient.tsx` 接收草稿消息，使用 `LessonBlocks`。
 - `app/components/CourseLessonContent.tsx` 在 V1 使用 `LessonBlocks`，无 blocks 时回退 Markdown。
-- `app/workspace/workspace-v2.tsx` 目前通过 `courseDesignUrl(selectedDesign)` 加载静态 HTML，并通过 iframe DOM 操作接入复制到 VM。
+- `app/workspace/workspace-v2.tsx` 当时通过 `courseDesignUrl(selectedDesign)` 加载静态 HTML，并通过 iframe DOM 操作接入复制到 VM。
 - `app/lib/api.ts` 的 `courseDesigns()` 返回内置设计列表，不能证明正式课程已接入后台发布数据。
 
 这补充了 [4b 计划](2026-10-07-admin-console-4b-course-editor.md) 中明确留出的 V2 接线工作。课程模型计划中的“迁移 B”仍然指删除旧 `body/markdown` 字段，是另一项工作。
