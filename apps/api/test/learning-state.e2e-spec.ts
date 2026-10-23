@@ -10,12 +10,12 @@ import { EnrollmentsService } from '../src/enrollments/enrollments.service';
 
 describe('learning state and snapshots (real PostgreSQL and authenticated HTTP)', () => {
   const database = new URL(process.env.DATABASE_URL ?? 'postgresql://invalid');
-  const allowedDatabasePath =
-    database.pathname === '/aivirteach_learning_state' ||
-    /^\/learning_release_[0-9a-f]{12}$/.test(database.pathname);
-  if (database.hostname !== '127.0.0.1' || !allowedDatabasePath) {
+  if (
+    database.hostname !== '127.0.0.1' ||
+    !['/aivirteach_learning_state'].includes(database.pathname)
+  ) {
     throw new Error(
-      'Run learning state E2E only against local aivirteach_learning_state or a generated learning_release_<12 hex> database',
+      'Run learning state E2E only against dedicated local aivirteach_learning_state database',
     );
   }
 

@@ -61,7 +61,7 @@ Browser flows, real Labs/VM behavior, coordinated release, and production accept
 - [x] Merge the two-table backend, explicit chat contract and client consumers.
 - [x] Add manual snapshot saving/history and retry-safe restart to both client layouts.
 - [x] Centralize console session ownership; mounted React tests cover callback-only renders, scope changes, stop/resume, late results and StrictMode.
-- [x] Complete the merged-main local release gate and independent review: 642 API unit tests, 108 PostgreSQL/authenticated HTTP tests, API build and three migration scenarios passed. Use `python3 scripts/verify-learning-release.py`; see the verification record for boundaries.
+- [x] Complete the merged-main local verification: 642 API unit tests, 108 PostgreSQL/authenticated HTTP tests, API build and three migration scenarios passed. See the verification record for commands and coverage boundaries; the temporary runner is not retained.
 - [ ] When browser use is authorized, verify admin edit, draft preview, save, publish and learner rendering on a dedicated test course. Verify snapshot/history/restart and a real Labs connection separately.
 - [ ] Confirm the provider targets, applied migration checksums and backup/restore procedure. The earlier configured-database query is insufficient for this gate.
 - [ ] In an explicitly authorized maintenance window, suspend affected traffic and writes, apply the final migrations and deploy the matching API/client before restoring traffic. These contracts and dropped tables do not support a mixed old/new rollout.
