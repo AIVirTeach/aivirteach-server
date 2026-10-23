@@ -1,6 +1,6 @@
 # Learning domain boundaries and implementation status
 
-Status: the explicit chat-context work in server PRs #35–#37 and client PR #23 is merged. This branch implements the backend two-table learning-state refactor. Client PR #24 must adapt to the finalized snapshot/restart contracts. The older PRs #34 and #22 remain draft source records. The user confirmed deployment is manual; no deployment was requested for this work.
+Status: implementation is merged in server PRs [#35](https://github.com/AIVirTeach/aivirteach-server/pull/35), [#36](https://github.com/AIVirTeach/aivirteach-server/pull/36), [#37](https://github.com/AIVirTeach/aivirteach-server/pull/37), [#38](https://github.com/AIVirTeach/aivirteach-server/pull/38) and client PRs [#23](https://github.com/AIVirTeach/aivirteach-client/pull/23), [#24](https://github.com/AIVirTeach/aivirteach-client/pull/24). Verified main tips on 2026-10-23: server `d573fab`, client `fd38776`. Older server #34 and client #22 are closed as superseded source records; their branches and review history are retained. Deployment remains manual and has not been performed for this work.
 
 ## Ownership and invariants
 
@@ -45,7 +45,7 @@ A manual snapshot request is `POST /courses/:slug/snapshots` with `{ requestId, 
 
 The first course completion writes one `COMPLETED` snapshot per generation. Manual saves use `MANUAL`; restart saves use `RESTART`. Existing deployed `Enrollment.completedAt` values are retained as `LEGACY_ACHIEVEMENT` records with `completeStateAvailable: false`; the migration does not invent lesson completion details. `EnrollmentCompletion` has no runtime consumer. The migration aborts before mutation if the placeholder table is unexpectedly populated.
 
-The configured Neon migration metadata reports `20261010000000` as the latest applied migration; no 20261023 migration is applied. The configured database has zero `EnrollmentCompletion` rows. These checks do not independently verify provider migration/deployment state. The user confirmed there has been no deployment or migration rollout for this change.
+The earlier read-only check recorded that the configured Neon migration metadata reported `20261010000000` as the latest applied migration; no 20261023 migration is applied. That check found zero `EnrollmentCompletion` rows. These checks do not independently verify provider migration/deployment state. The user confirmed no rollout at that time. Recheck the actual provider database before release; these observations are historical, not current production proof.
 
 ## HTTP behavior and verification
 
@@ -54,3 +54,17 @@ Completion remains `PUT /courses/:slug/lessons/:lessonId/progress`; reading rema
 The backend test slice covers typed state transitions, shared progress projection, dashboard and enrollment projections, completion/retry/unmark behavior, revision conflicts, stable-ID publication changes, manual snapshot ownership/idempotency/immutability/version pinning, bounded pagination, completion and restart snapshots, quota settlement, and reset retry behavior. Migration validation covers a fresh schema, upgrade from the configured deployed baseline, timestamp preservation, stable bookmark fallback, no fabricated history, and atomic failure for nonempty `EnrollmentCompletion`.
 
 Browser flows, real Labs/VM behavior, coordinated release, and production acceptance remain unverified. Deployment remains manual per the user's confirmation.
+
+
+## Remaining work and order
+
+- [x] Merge the two-table backend, explicit chat contract and client consumers.
+- [x] Add manual snapshot saving/history and retry-safe restart to both client layouts.
+- [x] Centralize console session ownership; mounted React tests cover callback-only renders, scope changes, stop/resume, late results and StrictMode.
+- [x] Complete the merged-main local verification: 642 API unit tests, 108 PostgreSQL/authenticated HTTP tests, API build and three migration scenarios passed. See the verification record for commands and coverage boundaries; the temporary runner is not retained.
+- [ ] When browser use is authorized, verify admin edit, draft preview, save, publish and learner rendering on a dedicated test course. Verify snapshot/history/restart and a real Labs connection separately.
+- [ ] Confirm the provider targets, applied migration checksums and backup/restore procedure. The earlier configured-database query is insufficient for this gate.
+- [ ] In an explicitly authorized maintenance window, suspend affected traffic and writes, apply the final migrations and deploy the matching API/client before restoring traffic. These contracts and dropped tables do not support a mixed old/new rollout.
+- [ ] Verify authenticated production flows and record deployed revisions. A code rollback alone cannot restore dropped tables; recovery must account for any writes after migration.
+
+The admin 4c operations pages and course-content migration B remain separate plans. They are not missing pieces of the completed learning-state implementation. Do not delete this plan while browser/provider acceptance remains open.

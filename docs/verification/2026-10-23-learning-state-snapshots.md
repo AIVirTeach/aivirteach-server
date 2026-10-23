@@ -45,8 +45,28 @@ The new database regression holds an unrelated enrollment lock in another transa
 
 Post-fix checks passed: 3 unit suites with 22 tests, the real publication suite with 7 tests, and the learning-state PostgreSQL/HTTP suite with 12 tests. TypeScript, Prettier, and diff checks passed. Scoped ESLint over the three changed TypeScript files has zero errors and 46 warnings. No full-suite rerun was needed for this bounded fix; the earlier complete runs are recorded above. No schema or migration changed.
 
+## Merged-main local verification
+
+Server baseline `d573fab` and client merge `fd38776` contain the completed learning-state implementation. A local verification run passed 68 API unit suites with 642 tests, 17 PostgreSQL/HTTP suites with 108 tests, the API build and all three migration scenarios. Labs and Agent calls were mocked. Shared packages were built by the API pretest hooks; their separate unit suites were not part of this run.
+
+That run used a temporary orchestration script and a temporary E2E allowance for generated database names. Neither is retained in this PR. The E2E guard remains unchanged from main and requires the dedicated local `aivirteach_learning_state` database. The counts above record the completed run, not a new run after removing the tooling. Logs from that run are `/private/tmp/learning-release-gate-first-failure.log` and `/private/tmp/learning-release-gate-final.log`.
+
+To repeat the checks, install workspace dependencies and generate the Prisma client. Prepare an empty, disposable `aivirteach_learning_state` database on local PostgreSQL port 55440, owned by `aivirteach`. These tests modify test data. Set the following environment in a shell without dotenv override settings:
+
+```sh
+export DATABASE_URL=postgresql://aivirteach@127.0.0.1:55440/aivirteach_learning_state
+export JWT_SECRET=local-learning-release-test-secret-at-least-32-chars
+node node_modules/prisma/build/index.js migrate deploy --schema apps/api/prisma/schema.prisma
+npm run test -w api -- --runInBand
+npm run test:e2e -w api -- --runInBand
+npm run build -w api
+python3 scripts/verify-learning-migration.py --port 55440 --user aivirteach
+```
+
+Run the migration verifier with Python optimization disabled because its checks use assertions. It creates and removes its own disposable databases; remove the dedicated E2E database after testing. The old `verify-lesson-progress.sh` is removed because its filename filter could omit the renamed `learning-state` suite. This PR changes no application runtime, tests, database schema or migration SQL.
+
 ## Release boundary
 
-The client follow-up is PR #24. Restart now requires a request ID, generation, revision, and course version. Reading changes advance the progress revision. The client must expose manual snapshot saving and paginated history before the feature is released.
+Client PR #24 is merged at `fd38776`. It supplies the restart command, manual snapshot saving and paginated history. Server main is `d573fab`. The client record reports 229 passing tests, including mounted console lifecycle tests; this is separate from browser or live provider acceptance.
 
 There is no snapshot restore endpoint. Snapshots do not restore chats, VM files, assessment attempts, or consumed quota. Browser interaction, real Labs/VM behavior, and production rollout are separate acceptance steps. No browser, merge, deployment, or remote database write was performed for this change.
