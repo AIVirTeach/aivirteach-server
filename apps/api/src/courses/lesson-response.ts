@@ -3,15 +3,15 @@ import type { Prisma } from '@prisma/client';
 import {
   LessonEnvelopeSchema,
   collectImageAssetIds,
+  validateLessonContent,
 } from '@aivirteach/lesson-blocks';
 import type { LessonBlock } from '@aivirteach/lesson-blocks';
 
 type LessonRow = Prisma.CourseLessonGetPayload<object>;
 type ModuleRow = Prisma.CourseModuleGetPayload<object> & {
-  // body/content 只在被读取的那一课上必须有；其余课时只用来算导航。
+  // content 只在被读取的那一课上必须有；其余课时只用来算导航。
   lessons: Array<
-    Omit<LessonRow, 'body' | 'content'> &
-      Partial<Pick<LessonRow, 'body' | 'content'>>
+    Omit<LessonRow, 'content'> & Partial<Pick<LessonRow, 'content'>>
   >;
 };
 
@@ -28,9 +28,7 @@ export type LessonResponse = {
     objectives: string[];
     activity: { type: string; prompt: string; completionType: string };
   };
-  /** @deprecated 迁移 B 删除；迁移期供旧 client 回退。 */
-  markdown: string;
-  blocks: LessonBlock[] | null;
+  blocks: LessonBlock[];
   assets: Record<string, { url: string; alt?: string }>;
   assessment: null;
   navigation: {
@@ -40,6 +38,16 @@ export type LessonResponse = {
     total: number;
   };
 };
+
+/**
+ * 课时 content 不可用。学习者读课不捕获它（发布门禁保证不会发生，发生就是服务端 500）；
+ * 草稿预览捕获它并返回 422，告诉运营哪里要改。
+ */
+export class InvalidLessonContentError extends Error {
+  constructor(readonly problems: string[]) {
+    super(problems.join('; '));
+  }
+}
 
 export function buildLessonResponse(input: {
   courseSlug: string;
@@ -67,7 +75,20 @@ export function buildLessonResponse(input: {
 
   const { courseModule, lesson } = flattened[index];
   const parsedContent = LessonEnvelopeSchema.safeParse(lesson.content ?? null);
-  const blocks = parsedContent.success ? parsedContent.data.blocks : null;
+  if (!parsedContent.success) {
+    throw new InvalidLessonContentError([
+      `课时 ${lesson.contentId} 缺少有效的结构化内容`,
+    ]);
+  }
+  const validation = validateLessonContent(lesson.content, {
+    courseAssetIds: new Set(input.courseAssets.map(({ id }) => id)),
+  });
+  if (validation.errors.length) {
+    throw new InvalidLessonContentError([
+      `课时 ${lesson.contentId} 的结构化内容无效：${validation.errors.map(({ code }) => code).join(', ')}`,
+    ]);
+  }
+  const blocks = parsedContent.data.blocks;
   const referencedAssetIds = new Set(
     collectImageAssetIds(lesson.content ?? null),
   );
@@ -103,7 +124,6 @@ export function buildLessonResponse(input: {
         completionType: lesson.activityCompletionType,
       },
     },
-    markdown: lesson.body ?? '',
     blocks,
     assets,
     // LessonAssessment 行要等 assessments.json 落地才会存在，这轮之前先固定返回 null。

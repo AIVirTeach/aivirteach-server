@@ -169,7 +169,6 @@ export class DraftContentService {
         await tx.courseLesson.create({
           data: {
             ...lesson,
-            body: '',
             content: content as Prisma.InputJsonValue,
             objectives: lesson.objectives ?? [],
             moduleId,

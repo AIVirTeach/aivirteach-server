@@ -1,5 +1,8 @@
 import { NotFoundException } from '@nestjs/common';
-import { buildLessonResponse } from './lesson-response';
+import {
+  buildLessonResponse,
+  InvalidLessonContentError,
+} from './lesson-response';
 
 const modules = [
   {
@@ -19,7 +22,6 @@ const modules = [
         estimatedMinutes: 10,
         objectives: ['objective'],
         sourceRange: { startLine: 1, endLine: 1 },
-        body: 'body one',
         content: null,
         activityType: 'lab',
         activityPrompt: 'prompt',
@@ -35,8 +37,7 @@ const modules = [
         estimatedMinutes: 10,
         objectives: [],
         sourceRange: null,
-        body: 'body two',
-        content: null,
+        content: { schemaVersion: 1, blocks: [] },
         activityType: 'lab',
         activityPrompt: 'prompt two',
         activityCompletionType: 'confirmation',
@@ -53,7 +54,7 @@ const courseAssets = [
 ];
 
 describe('buildLessonResponse', () => {
-  it('returns body as markdown and navigation from the flattened module order', () => {
+  it('returns valid blocks and navigation from the flattened module order', () => {
     expect(
       buildLessonResponse({
         courseVersionId: 'version-1',
@@ -80,8 +81,7 @@ describe('buildLessonResponse', () => {
           completionType: 'confirmation',
         },
       },
-      markdown: 'body two',
-      blocks: null,
+      blocks: [],
       assets: {},
       assessment: null,
       navigation: {
@@ -127,11 +127,6 @@ describe('buildLessonResponse', () => {
                     type: 'image',
                     props: { assetId: 'asset-b', alt: 'Image B' },
                   },
-                  {
-                    id: 'img-foreign',
-                    type: 'image',
-                    props: { assetId: 'foreign', alt: 'Foreign' },
-                  },
                 ],
               },
             }
@@ -147,15 +142,14 @@ describe('buildLessonResponse', () => {
       courseAssets,
     });
 
-    expect(result.blocks).toHaveLength(4);
+    expect(result.blocks).toHaveLength(3);
     expect(result.assets).toEqual({
       'asset-a': { url: 'https://cdn.test/a.png', alt: 'A' },
       'asset-b': { url: 'https://cdn.test/b.png' },
     });
-    expect(result.markdown).toBe('body one');
   });
 
-  it('returns null blocks and no assets for an invalid content envelope', () => {
+  it('throws for missing or invalid stored content', () => {
     const withInvalidContent = modules.map((courseModule) => ({
       ...courseModule,
       lessons: courseModule.lessons.map((lesson) =>
@@ -164,15 +158,64 @@ describe('buildLessonResponse', () => {
           : lesson,
       ),
     }));
-    const result = buildLessonResponse({
-      courseVersionId: 'version-1',
-      courseVersion: 1,
-      courseSlug: 'course',
-      modules: withInvalidContent,
-      lessonId: 'lesson-one',
-      courseAssets,
-    });
-    expect(result.blocks).toBeNull();
-    expect(result.assets).toEqual({});
+    expect(() =>
+      buildLessonResponse({
+        courseVersionId: 'version-1',
+        courseVersion: 1,
+        courseSlug: 'course',
+        modules: withInvalidContent,
+        lessonId: 'lesson-one',
+        courseAssets,
+      }),
+    ).toThrow(InvalidLessonContentError);
+
+    expect(() =>
+      buildLessonResponse({
+        courseVersionId: 'version-1',
+        courseVersion: 1,
+        courseSlug: 'course',
+        modules,
+        lessonId: 'lesson-one',
+        courseAssets,
+      }),
+    ).toThrow(InvalidLessonContentError);
+  });
+
+  it.each([
+    {
+      schemaVersion: 1,
+      blocks: [{ id: 'bad-props', type: 'paragraph', props: {} }],
+    },
+    {
+      schemaVersion: 1,
+      blocks: [
+        {
+          id: 'missing-asset',
+          type: 'image',
+          props: { assetId: 'missing', alt: 'x' },
+        },
+      ],
+    },
+    {
+      schemaVersion: 1,
+      blocks: [{ id: 'unknown', type: 'future-widget', props: {} }],
+    },
+  ])('rejects stored content that fails strict block validation', (content) => {
+    const withContent = modules.map((courseModule) => ({
+      ...courseModule,
+      lessons: courseModule.lessons.map((lesson) =>
+        lesson.contentId === 'lesson-one' ? { ...lesson, content } : lesson,
+      ),
+    }));
+    expect(() =>
+      buildLessonResponse({
+        courseVersionId: 'version-1',
+        courseVersion: 1,
+        courseSlug: 'course',
+        modules: withContent,
+        lessonId: 'lesson-one',
+        courseAssets,
+      }),
+    ).toThrow(InvalidLessonContentError);
   });
 });

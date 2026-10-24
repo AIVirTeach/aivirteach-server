@@ -155,8 +155,11 @@ export class CourseIngestionService {
     for (const courseModule of content.modules) {
       const lessons: Prisma.CourseLessonCreateWithoutModuleInput[] = [];
       for (const lesson of courseModule.lessons) {
-        const body = sliceLessonBody(sourceMarkdown, lesson.sourceRange);
-        const converted = await this.convertMarkdown(body, {
+        const lessonMarkdown = sliceLessonBody(
+          sourceMarkdown,
+          lesson.sourceRange,
+        );
+        const converted = await this.convertMarkdown(lessonMarkdown, {
           assetIdsByFilename,
         });
         conversionReports.push({
@@ -170,7 +173,6 @@ export class CourseIngestionService {
           estimatedMinutes: lesson.estimatedMinutes,
           objectives: lesson.objectives,
           sourceRange: lesson.sourceRange,
-          body,
           content: converted.report.some((issue) => issue.level === 'error')
             ? Prisma.DbNull
             : (converted.content as unknown as Prisma.InputJsonValue),

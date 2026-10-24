@@ -639,7 +639,7 @@ describe('DraftContentService', () => {
     expect(prisma.courseModule.update).not.toHaveBeenCalled();
   });
 
-  it('answers writes with a summary that omits lesson body and content', async () => {
+  it('answers writes with a summary that omits lesson content', async () => {
     const { service, prisma } = setup();
     await service.createModule(
       'demo',
@@ -647,9 +647,6 @@ describe('DraftContentService', () => {
       'op',
     );
     const arg = prisma.courseVersion.findUnique.mock.calls.at(-1)[0];
-    expect(arg.include.modules.include.lessons.omit).toEqual({
-      body: true,
-      content: true,
-    });
+    expect(arg.include.modules.include.lessons.omit).toEqual({ content: true });
   });
 });

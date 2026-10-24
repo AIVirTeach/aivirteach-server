@@ -43,7 +43,6 @@ describe('CourseDraftService', () => {
             estimatedMinutes: 5,
             objectives: ['objective'],
             sourceRange: { startLine: 1, endLine: 2 },
-            body: 'lesson body',
             content: { legacy: true },
             activityType: 'guided',
             activityPrompt: 'Do it',
@@ -68,7 +67,6 @@ describe('CourseDraftService', () => {
             estimatedMinutes: 1,
             objectives: [],
             sourceRange: null,
-            body: '',
             content: null,
             activityType: 'guided',
             activityPrompt: 'Do it',
@@ -144,7 +142,6 @@ describe('CourseDraftService', () => {
               create: expect.arrayContaining([
                 expect.objectContaining({
                   contentId: 'lesson-1',
-                  body: 'lesson body',
                   assessmentIds: ['assessment-1'],
                   assessments: {
                     create: [
@@ -162,6 +159,8 @@ describe('CourseDraftService', () => {
       },
     });
     const clonedLessons = createArg.data.modules.create[0].lessons.create;
+    expect(clonedLessons[0]).not.toHaveProperty('body');
+    expect(clonedLessons[1]).not.toHaveProperty('body');
     expect(clonedLessons[0].content).toEqual({ legacy: true });
     expect(clonedLessons[1].content).toBe(Prisma.DbNull);
     expect(createArg.data.welcome.create.howItWorksSteps).toBe(Prisma.DbNull);

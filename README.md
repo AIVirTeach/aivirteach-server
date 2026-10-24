@@ -103,7 +103,6 @@ node -e "console.log(require('node:crypto').randomBytes(48).toString('base64url'
 | `invite <email>` | | 邀请一个用户，生成一次性 `invitationToken` |
 | `course:create <contentDir>` | `--image-digest`（可选） | 从课程内容目录（含 `course.json`）摄取新建课程，同时建第一个未发布的版本 |
 | `course:publish <slug>` | | 发布课程的最新版本 |
-| `course:backfill-content-model` | `--execute`（默认 dry-run） | 回填课时 `body`、课时块 `content` 和学员进度的 `currentLessonContentId`（迁移 A 之后跑，见下方"课时块上线顺序"） |
 | `enroll <email> <courseSlug>` | | 给用户开课 |
 | `quota:grant <email> <minutes>` | | 给用户发运行额度（分钟） |
 | `operator:add <email>` | | 新增运营账号，随机密码只在输出里出现一次 |
@@ -115,7 +114,7 @@ node -e "console.log(require('node:crypto').randomBytes(48).toString('base64url'
 
 ## 课时块 / admin API
 
-课时正文 `CourseLesson.content` 是课时块 JSON（`{schemaVersion:1, blocks:[…]}`，13 种块，最多 300 块、256 KB），由 client 渲染；`body`（Markdown）是弃用的兜底字段，管理员新建或编辑的课时只写 `content`，老客户端读到的 `markdown` 可能为空或过期。
+课时正文只使用 `CourseLesson.content`，格式为 `{schemaVersion:1, blocks:[…]}`，支持 13 种块，最多 300 块、256 KB。课时 API 返回 `blocks` 与 `assets`，不提供课程 Markdown 回退。Markdown 文件仍可作为摄取源，经转换后写入 content。聊天 Markdown 渲染不受影响。
 
 `/api/v1/admin/*` 供运营后台用，每个请求要带：
 
@@ -125,30 +124,13 @@ node -e "console.log(require('node:crypto').randomBytes(48).toString('base64url'
 
 草稿写接口（`PATCH/PUT/DELETE /admin/courses/:slug/draft*`、模块和课时的 `POST`）只返回不含课时正文的摘要，完整草稿用 `GET /admin/courses/:slug/draft`，单课预览用 `GET /admin/courses/:slug/draft/lessons/:contentId`。发版（`POST /admin/courses/:slug/publish`）会在事务内锁住草稿并重新校验，校验未通过返回 422 和 `problems`。
 
-### 课时块上线顺序
+### 内容迁移 B 的交付边界
 
-学员进度现在只读 `Progress.currentLessonContentId`。**代码比迁移 A 和回填先上线，所有已有学员会显示未开始（0%），下一次完成课时还会覆盖进度指针**，所以必须按这个顺序：
+本次代码移除 `CourseLesson.body` 和课程 API 的 `markdown`。旧的 `course:backfill-content-model` 命令已经退役，不要再用历史迁移 A 的步骤修改进度或回填正文。
 
-1. 核对项目的 Root Directory / "include files outside root"（仓库是 npm workspaces monorepo）。
-2. 预检：同一课程不能有多个未发布版本，否则迁移 A 的部分唯一索引会失败：
-   ```sql
-   SELECT "courseId", count(*) FROM "CourseVersion" WHERE "publishedAt" IS NULL GROUP BY 1 HAVING count(*) > 1;
-   ```
-3. `npx prisma migrate deploy`（迁移 A，只加列和索引）。
-4. 回填 dry-run，随时可以先跑、先审：`unresolved` / `skipped` / `pendingBody` 要为空或逐条确认。
-   ```bash
-   npm run cli -w api -- course:backfill-content-model -o "你的邮箱" -r "迁移 A 回填"
-   ```
-5. 真正回填（`--execute`）要**紧贴着部署**，选低峰期，执行完立刻部署：
-   ```bash
-   npm run cli -w api -- course:backfill-content-model -o "你的邮箱" -r "迁移 A 回填" --execute
-   ```
-6. 部署代码，观察学员读课和进度。**部署之后不要再跑回填。**
-7. 迁移 B（不可逆，删旧列）单独执行，必须有明确的批准，不随上面几步一起跑。
+数据库删列由 Owen 使用 Neon MCP 单独执行，本仓库此次没有新增迁移文件，也没有执行生产操作。先核验全部课程版本内容完整，再按 client、admin、API 的顺序部署（旧 admin 的草稿接口要求 `body`，不能先上新 API），最后删列；不要在旧 API/admin 仍运行时删除 body。
 
-**已知的上线窗口：** 旧代码一直在线到步骤 6，它只写旧字段 `currentLessonId`；回填只补 `currentLessonContentId` 为空的行，不会修正已经填过、之后又被旧代码推进的进度。所以步骤 5 执行之后、部署完成之前这几分钟里仍在推进课时的学员，部署后会回到回填时的位置；在这段时间里新开始学习的学员会显示未开始。其余学员不受影响。窗口越短越好，所以要求紧贴部署和低峰期。要做到零损失，需要新代码在迁移 B 之前同时写两个字段，这不在本 PR 范围内。
-
-代码上线后**不能直接回滚**：新代码不再写旧的 `currentLessonId`，回滚到旧版本会丢掉上线后产生的学员进度。
+**开发库警告：** schema 已移除 `body`，但删列迁移刻意留到之后单独执行。在那之前对仍有 `body` 列的库运行 `npm run db:migrate -w api`（`prisma migrate dev`）会提议生成 `DROP COLUMN "body"`，不要接受，也不要提交这条迁移。详见 [内容迁移 B 数据库交接与验证](docs/verification/2026-10-24-content-only.md)。
 
 ## Token 用量与额度
 

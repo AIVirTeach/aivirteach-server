@@ -214,7 +214,7 @@ model CourseLesson {
   estimatedMinutes       Int
   objectives             String[]     @default([])
   sourceRange            Json?
-  body                   String       @default("") @db.Text
+  // 旧 body 列已不在代码里使用，但物理列要等单独的删列迁移执行后才消失；别让 migrate dev 生成 DROP COLUMN "body"。
   content                Json?
   activityType           String
   activityPrompt         String
