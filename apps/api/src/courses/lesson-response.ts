@@ -1,7 +1,4 @@
-import {
-  InternalServerErrorException,
-  NotFoundException,
-} from '@nestjs/common';
+import { NotFoundException } from '@nestjs/common';
 import type { Prisma } from '@prisma/client';
 import {
   LessonEnvelopeSchema,
@@ -42,6 +39,16 @@ export type LessonResponse = {
   };
 };
 
+/**
+ * 课时 content 不可用。学习者读课不捕获它（发布门禁保证不会发生，发生就是服务端 500）；
+ * 草稿预览捕获它并返回 422，告诉运营哪里要改。
+ */
+export class InvalidLessonContentError extends Error {
+  constructor(readonly problems: string[]) {
+    super(problems.join('; '));
+  }
+}
+
 export function buildLessonResponse(input: {
   courseSlug: string;
   courseVersionId: string;
@@ -69,17 +76,17 @@ export function buildLessonResponse(input: {
   const { courseModule, lesson } = flattened[index];
   const parsedContent = LessonEnvelopeSchema.safeParse(lesson.content ?? null);
   if (!parsedContent.success) {
-    throw new InternalServerErrorException(
+    throw new InvalidLessonContentError([
       `课时 ${lesson.contentId} 缺少有效的结构化内容`,
-    );
+    ]);
   }
   const validation = validateLessonContent(lesson.content, {
     courseAssetIds: new Set(input.courseAssets.map(({ id }) => id)),
   });
   if (validation.errors.length) {
-    throw new InternalServerErrorException(
+    throw new InvalidLessonContentError([
       `课时 ${lesson.contentId} 的结构化内容无效：${validation.errors.map(({ code }) => code).join(', ')}`,
-    );
+    ]);
   }
   const blocks = parsedContent.data.blocks;
   const referencedAssetIds = new Set(

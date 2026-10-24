@@ -17,6 +17,7 @@ import {
   Post,
   Put,
   Res,
+  UnprocessableEntityException,
   UploadedFile,
   UseGuards,
   UseInterceptors,
@@ -34,7 +35,10 @@ import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { z } from 'zod';
 import { ZodValidationPipe } from '../common/zod-validation.pipe';
 import { PrismaService } from '../prisma/prisma.service';
-import { buildLessonResponse } from '../courses/lesson-response';
+import {
+  buildLessonResponse,
+  InvalidLessonContentError,
+} from '../courses/lesson-response';
 import { loadCourseAssets } from '../courses/course-assets';
 import { collectImageAssetIds } from '@aivirteach/lesson-blocks';
 import { CurrentOperator } from '../operator-auth/current-operator.decorator';
@@ -321,14 +325,24 @@ export class AdminCoursesController {
       draft.courseId,
       assetIds,
     );
-    return buildLessonResponse({
-      courseSlug: slug,
-      courseVersionId: draft.id,
-      courseVersion: draft.version,
-      modules: draft.modules,
-      lessonId: contentId,
-      courseAssets,
-    });
+    try {
+      return buildLessonResponse({
+        courseSlug: slug,
+        courseVersionId: draft.id,
+        courseVersion: draft.version,
+        modules: draft.modules,
+        lessonId: contentId,
+        courseAssets,
+      });
+    } catch (error) {
+      if (error instanceof InvalidLessonContentError) {
+        throw new UnprocessableEntityException({
+          message: '课时内容无法预览',
+          problems: error.problems,
+        });
+      }
+      throw error;
+    }
   }
 
   @Post('publish')

@@ -128,7 +128,9 @@ node -e "console.log(require('node:crypto').randomBytes(48).toString('base64url'
 
 本次代码移除 `CourseLesson.body` 和课程 API 的 `markdown`。旧的 `course:backfill-content-model` 命令已经退役，不要再用历史迁移 A 的步骤修改进度或回填正文。
 
-数据库删列由 Owen 使用 Neon MCP 单独执行，本仓库此次没有新增迁移文件，也没有执行生产操作。先核验全部课程版本内容完整，再部署匹配的 API、admin、client，最后删列；不要在旧 API/admin 仍运行时删除 body。详见 [内容迁移 B 数据库交接与验证](docs/verification/2026-10-24-content-only.md)。
+数据库删列由 Owen 使用 Neon MCP 单独执行，本仓库此次没有新增迁移文件，也没有执行生产操作。先核验全部课程版本内容完整，再按 client、admin、API 的顺序部署（旧 admin 的草稿接口要求 `body`，不能先上新 API），最后删列；不要在旧 API/admin 仍运行时删除 body。
+
+**开发库警告：** schema 已移除 `body`，但删列迁移刻意留到之后单独执行。在那之前对仍有 `body` 列的库运行 `npm run db:migrate -w api`（`prisma migrate dev`）会提议生成 `DROP COLUMN "body"`，不要接受，也不要提交这条迁移。详见 [内容迁移 B 数据库交接与验证](docs/verification/2026-10-24-content-only.md)。
 
 ## Token 用量与额度
 

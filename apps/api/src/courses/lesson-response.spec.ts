@@ -1,8 +1,8 @@
+import { NotFoundException } from '@nestjs/common';
 import {
-  InternalServerErrorException,
-  NotFoundException,
-} from '@nestjs/common';
-import { buildLessonResponse } from './lesson-response';
+  buildLessonResponse,
+  InvalidLessonContentError,
+} from './lesson-response';
 
 const modules = [
   {
@@ -167,7 +167,7 @@ describe('buildLessonResponse', () => {
         lessonId: 'lesson-one',
         courseAssets,
       }),
-    ).toThrow(InternalServerErrorException);
+    ).toThrow(InvalidLessonContentError);
 
     expect(() =>
       buildLessonResponse({
@@ -178,7 +178,7 @@ describe('buildLessonResponse', () => {
         lessonId: 'lesson-one',
         courseAssets,
       }),
-    ).toThrow(InternalServerErrorException);
+    ).toThrow(InvalidLessonContentError);
   });
 
   it.each([
@@ -216,6 +216,6 @@ describe('buildLessonResponse', () => {
         lessonId: 'lesson-one',
         courseAssets,
       }),
-    ).toThrow(InternalServerErrorException);
+    ).toThrow(InvalidLessonContentError);
   });
 });

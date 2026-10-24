@@ -518,6 +518,36 @@ describe('AdminCoursesController', () => {
     expect(prisma.courseAsset.findMany).not.toHaveBeenCalled();
   });
 
+  it('returns 422 with problems when the draft lesson content is unusable', async () => {
+    const lesson = {
+      id: 'db-1',
+      contentId: 'lesson-1',
+      position: 1,
+      title: 'Lesson',
+      estimatedMinutes: 2,
+      objectives: [],
+      activityType: 'read',
+      activityPrompt: '',
+      activityCompletionType: 'none',
+      content: null,
+    };
+    drafts.requireDraft.mockResolvedValue({
+      ...draft,
+      modules: [
+        { id: 'module-1', position: 1, title: 'Module', lessons: [lesson] },
+      ],
+    });
+
+    const response = await request(app.getHttpServer())
+      .get('/admin/courses/demo/draft/lessons/lesson-1')
+      .set('Authorization', `Bearer ${TOKEN}`);
+
+    expect(response.status).toBe(422);
+    expect(response.body.problems).toEqual([
+      expect.stringContaining('lesson-1'),
+    ]);
+  });
+
   it('protects draft preview with the admin token', async () => {
     const withoutToken = await request(app.getHttpServer()).get(
       '/admin/courses/demo/draft/lessons/lesson-1',
