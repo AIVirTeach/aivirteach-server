@@ -24,6 +24,12 @@ export type IngestedCourse = Course & {
   conversionReports: ConversionReport[];
 };
 
+export class CourseConversionError extends Error {
+  constructor(readonly conversionReports: ConversionReport[]) {
+    super('课程转换失败，未上传素材或创建课程');
+  }
+}
+
 @Injectable()
 export class CourseIngestionService {
   constructor(
@@ -46,22 +52,33 @@ export class CourseIngestionService {
       content.source.encoding,
     );
 
-    const assets = await Promise.all(
-      content.assets.map(async (asset) => ({
-        id: randomUUID(),
-        objectKey: await this.assetStorage.upload(
-          `courses/${content.slug}/${asset.id}${extname(asset.path)}`,
-          resolve(contentDir, asset.path),
-        ),
-        type: asset.type,
-        altText: asset.alt,
-      })),
-    );
+    const plannedAssets = content.assets.map((asset) => ({
+      id: randomUUID(),
+      objectKey: `courses/${content.slug}/${asset.id}${extname(asset.path)}`,
+      sourcePath: resolve(contentDir, asset.path),
+      type: asset.type,
+      altText: asset.alt,
+    }));
 
     const { modules, conversionReports } = await this.convertLessons(
       content,
       sourceMarkdown,
-      assets,
+      plannedAssets,
+    );
+
+    if (
+      conversionReports.some(({ issues }) =>
+        issues.some(({ level }) => level === 'error'),
+      )
+    ) {
+      throw new CourseConversionError(conversionReports);
+    }
+
+    const assets = await Promise.all(
+      plannedAssets.map(async ({ sourcePath, ...asset }) => ({
+        ...asset,
+        objectKey: await this.assetStorage.upload(asset.objectKey, sourcePath),
+      })),
     );
 
     try {
@@ -173,9 +190,7 @@ export class CourseIngestionService {
           estimatedMinutes: lesson.estimatedMinutes,
           objectives: lesson.objectives,
           sourceRange: lesson.sourceRange,
-          content: converted.report.some((issue) => issue.level === 'error')
-            ? Prisma.DbNull
-            : (converted.content as unknown as Prisma.InputJsonValue),
+          content: converted.content as unknown as Prisma.InputJsonValue,
           activityType: lesson.activity.type,
           activityPrompt: lesson.activity.prompt,
           activityCompletionType: lesson.activity.completionType,

@@ -48,3 +48,36 @@ describe('safe write actions', () => {
     );
   });
 });
+
+it('preserves content validation fields through the action adapter', async () => {
+  const validation = {
+    errors: [
+      {
+        level: 'error',
+        code: 'invalid-props',
+        message: 'Missing label',
+        blockId: 'annotated',
+        blockIndex: 2,
+        fieldPath: ['steps', 1, 'label'],
+      },
+    ],
+    warnings: [],
+  };
+  vi.mocked(apiFetchNoRedirect).mockResolvedValue(
+    Response.json(
+      { message: '课时内容无效', problems: ['Missing label'], validation },
+      { status: 422 },
+    ),
+  );
+  expect(
+    await courseMutation('course', 'draft/lessons/one', 'PATCH', {
+      content: {},
+    }),
+  ).toEqual({
+    status: 'error',
+    message: '课时内容无效',
+    problems: ['Missing label'],
+    issues: [],
+    validation,
+  });
+});

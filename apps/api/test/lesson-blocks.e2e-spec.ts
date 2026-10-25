@@ -2,6 +2,7 @@ import 'dotenv/config';
 import type { NestExpressApplication } from '@nestjs/platform-express';
 import { Test } from '@nestjs/testing';
 import { PrismaClient } from '@prisma/client';
+import { ContentValidationErrorSchema } from '@aivirteach/admin-contract';
 import request from 'supertest';
 import { AppModule } from '../src/app.module';
 import {
@@ -129,26 +130,109 @@ describe('课时块 端到端', () => {
     });
   });
 
-  it('非法块发版 422，数据库保持草稿不变', async () => {
+  it('非法正文保存 422，完整位置保留且正文、元数据、顺序和成功审计均不变', async () => {
+    const lesson = await prisma.courseLesson.findFirstOrThrow({
+      where: { moduleId, contentId: 'intro' },
+    });
+    const draft = await prisma.courseVersion.findFirstOrThrow({
+      where: { course: { slug }, publishedAt: null },
+    });
+    const auditCount = () =>
+      prisma.auditEvent.count({
+        where: {
+          targetId: draft.id,
+          action: {
+            in: ['admin.draft.updateLesson', 'admin.draft.createLesson'],
+          },
+        },
+      });
+    const beforeAudit = await auditCount();
+    const lessonPath = `/api/v1/admin/courses/${slug}/draft/lessons/intro`;
+    const badContents = [
+      { schemaVersion: 1, blocks: [{ id: 'x', type: 'nope', props: {} }] },
+      {
+        schemaVersion: 1,
+        blocks: [
+          {
+            id: 'x',
+            type: 'table',
+            props: { columns: ['Column'], rows: [[42]] },
+          },
+        ],
+      },
+      {
+        schemaVersion: 1,
+        blocks: [
+          { id: 'x', type: 'paragraph', props: { text: '[x](javascript:1)' } },
+        ],
+      },
+      {
+        schemaVersion: 1,
+        blocks: [
+          { id: 'x', type: 'paragraph', props: { text: 'A' } },
+          { id: 'x', type: 'paragraph', props: { text: 'B' } },
+        ],
+      },
+    ];
+    for (const content of badContents) {
+      const response = await admin(
+        request(app.getHttpServer())
+          .patch(lessonPath)
+          .send({ content, title: 'Do not persist' }),
+      ).expect(422);
+      const error = ContentValidationErrorSchema.parse(response.body);
+      expect(error.validation.errors.length).toBeGreaterThan(0);
+      expect(error.problems).toEqual(
+        error.validation.errors.map(({ message }) => message),
+      );
+      if (error.validation.errors[0].code === 'invalid-props')
+        expect(error.validation.errors[0].fieldPath).toEqual(['rows', 0, 0]);
+      expect(
+        await prisma.courseLesson.findUniqueOrThrow({
+          where: { id: lesson.id },
+        }),
+      ).toEqual(lesson);
+      expect(await auditCount()).toBe(beforeAudit);
+    }
+    const beforeCount = await prisma.courseLesson.count({
+      where: { moduleId },
+    });
     await admin(
       request(app.getHttpServer())
-        .patch(`/api/v1/admin/courses/${slug}/draft/lessons/intro`)
+        .post(`/api/v1/admin/courses/${slug}/draft/modules/${moduleId}/lessons`)
         .send({
-          content: {
-            schemaVersion: 1,
-            blocks: [{ id: 'x', type: 'nope', props: {} }],
-          },
+          contentId: 'invalid-create',
+          title: 'Invalid',
+          estimatedMinutes: 1,
+          activity: { type: 'reading', prompt: '', completionType: 'manual' },
+          content: badContents[0],
         }),
-    ).expect(200); // 草稿写入允许暂存非法块，发版才拦
+    ).expect(422);
+    expect(await prisma.courseLesson.count({ where: { moduleId } })).toBe(
+      beforeCount,
+    );
+    expect(await auditCount()).toBe(beforeAudit);
+  });
 
+  it('历史坏数据仍由发版 422 拦截，数据库保持草稿', async () => {
+    const lesson = await prisma.courseLesson.findFirstOrThrow({
+      where: { moduleId, contentId: 'intro' },
+    });
+    await prisma.courseLesson.update({
+      where: { id: lesson.id },
+      data: {
+        content: {
+          schemaVersion: 1,
+          blocks: [{ id: 'x', type: 'nope', props: {} }],
+        },
+      },
+    });
     const publish = await admin(
       request(app.getHttpServer())
         .post(`/api/v1/admin/courses/${slug}/publish`)
         .send({}),
-    );
-    expect(publish.status).toBe(422);
+    ).expect(422);
     expect(publish.body.problems.length).toBeGreaterThan(0);
-
     const version = await prisma.courseVersion.findFirstOrThrow({
       where: { course: { slug } },
     });
@@ -170,11 +254,28 @@ describe('课时块 端到端', () => {
         .attach('file', PNG, { filename: 'b.png', contentType: 'image/png' }),
     ).expect(201);
 
-    await admin(
+    const response = await admin(
       request(app.getHttpServer())
         .patch(`/api/v1/admin/courses/${slug}/draft/lessons/intro`)
         .send({ content: imageLesson((foreign.body as { id: string }).id) }),
-    ).expect(200);
+    ).expect(422);
+    expect(
+      ContentValidationErrorSchema.parse(response.body).validation.errors,
+    ).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          code: 'unknown-asset',
+          fieldPath: ['assetId'],
+        }),
+      ]),
+    );
+    const lesson = await prisma.courseLesson.findFirstOrThrow({
+      where: { moduleId, contentId: 'intro' },
+    });
+    await prisma.courseLesson.update({
+      where: { id: lesson.id },
+      data: { content: imageLesson((foreign.body as { id: string }).id) },
+    });
 
     const publish = await admin(
       request(app.getHttpServer())

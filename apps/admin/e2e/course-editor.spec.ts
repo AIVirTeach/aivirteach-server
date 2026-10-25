@@ -44,21 +44,39 @@ test('operator authors, previews, reloads and publishes a course', async ({
   );
   await page.getByRole('button', { name: '添加内容', exact: true }).click();
   await page
-    .getByLabel('文字', { exact: true })
+    .getByRole('textbox', { name: /^文字/ })
     .fill('这是浏览器保存并发布的课程正文。');
   await expect(
     page.getByRole('status').filter({ hasText: /^已保存$/ }),
   ).toBeVisible();
-  await page.getByLabel('内容类型', { exact: true }).selectOption('image');
+  await page.getByRole('combobox', { name: /^内容类型/ }).selectOption('image');
   await page.getByRole('button', { name: '添加内容', exact: true }).click();
+  await expect(
+    page.getByRole('status').filter({ hasText: /尚未保存/ }),
+  ).toBeVisible();
+  await page.getByRole('button', { name: /图片 assetId 不能为空/ }).click();
+  await expect(page.getByRole('combobox', { name: /^课程图片/ })).toBeFocused();
+  await page.getByRole('textbox', { name: /^替代文字/ }).fill('课程图片');
+  await page.waitForTimeout(1000);
+  await expect(page.getByRole('textbox', { name: /^替代文字/ })).toBeFocused();
+  const beforeRepair = await prisma.courseLesson.findFirstOrThrow({
+    where: {
+      contentId: 'first-lesson',
+      module: { courseVersion: { course: { slug } } },
+    },
+    select: { content: true },
+  });
+  expect(beforeRepair.content).toMatchObject({
+    blocks: [expect.objectContaining({ type: 'paragraph' })],
+  });
   await page
     .getByLabel('上传图片', { exact: true })
     .setInputFiles(
       path.resolve('apps/api/src/courses/__fixtures__/sample-course/cover.png'),
     );
-  await expect(page.getByLabel('课程图片', { exact: true })).not.toHaveValue(
-    '',
-  );
+  await expect(
+    page.getByRole('combobox', { name: /^课程图片/ }),
+  ).not.toHaveValue('');
   await expect(
     page.getByRole('status').filter({ hasText: /^已保存$/ }),
   ).toBeVisible();
@@ -115,6 +133,7 @@ test('operator authors, previews, reloads and publishes a course', async ({
   const token = await new SignJWT({ email: 'learner-e2e@example.com' })
     .setProtectedHeader({ alg: 'HS256' })
     .setSubject('local-learner')
+    .setIssuer('aivirteach')
     .setAudience('aivirteach-client')
     .setIssuedAt()
     .setExpirationTime('5m')
@@ -136,6 +155,7 @@ test('operator authors, previews, reloads and publishes a course', async ({
     ]),
   );
   expect(Object.keys(lesson.assets)).toHaveLength(1);
+  expect(lesson).not.toHaveProperty('markdown');
   const course = await prisma.course.findUniqueOrThrow({
     where: { slug },
     include: {

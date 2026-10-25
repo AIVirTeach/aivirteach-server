@@ -63,7 +63,7 @@ const MAX_LINK_TARGET = 2000;
 // 不再识别链接，并标记 exceeded，由校验当作错误处理，保证耗时有上界。
 const LINK_SCAN_BUDGET = 50_000;
 
-type LinkScan = { links?: string[]; budget: number; exceeded: boolean };
+type LinkScan = { links?: string[]; budget: number; exceeded: boolean; fieldPath?: (string | number)[] };
 
 function findLinkEnd(value: string, start: number, scan: LinkScan): { labelEnd: number; end: number } | undefined {
   let labelEnd = -1;
@@ -176,47 +176,56 @@ function plain(value: string, scan: LinkScan): string {
 
 function blockLines(type: BlockType, props: Record<string, unknown>, scans?: LinkScan[]): string[] {
   const lines: string[] = [];
-  const add = (value: unknown) => {
+  const add = (value: unknown, fieldPath: (string | number)[]) => {
     if (typeof value !== 'string') return;
-    const scan: LinkScan = { links: scans ? [] : undefined, budget: LINK_SCAN_BUDGET, exceeded: false };
+    const scan: LinkScan = { links: scans ? [] : undefined, budget: LINK_SCAN_BUDGET, exceeded: false, fieldPath };
     lines.push(plain(value, scan));
     scans?.push(scan);
   };
   const addRaw = (value: unknown) => { if (typeof value === 'string') lines.push(value); };
+  const field = (key: string) => add(props[key], [key]);
   switch (type) {
-    case 'heading': case 'paragraph': add(props.text); break;
+    case 'heading': case 'paragraph': field('text'); break;
     case 'bulletList': case 'numberedList':
-      if (Array.isArray(props.items)) props.items.forEach(add);
+      if (Array.isArray(props.items)) props.items.forEach((value, index) => add(value, ['items', index]));
       break;
-    case 'code': addRaw(props.code); add(props.description); break;
-    case 'step': add(props.title); add(props.body); break;
-    case 'callout': add(props.title); add(props.body); break;
+    case 'code': addRaw(props.code); field('description'); break;
+    case 'step': field('title'); field('body'); break;
+    case 'callout': field('title'); field('body'); break;
     case 'table':
-      if (Array.isArray(props.columns)) props.columns.forEach(add);
-      if (Array.isArray(props.rows)) props.rows.forEach((row) => { if (Array.isArray(row)) row.forEach(add); });
+      if (Array.isArray(props.columns)) props.columns.forEach((value, index) => add(value, ['columns', index]));
+      if (Array.isArray(props.rows)) props.rows.forEach((row, rowIndex) => { if (Array.isArray(row)) row.forEach((value, columnIndex) => add(value, ['rows', rowIndex, columnIndex])); });
       break;
-    case 'image': add(props.alt); add(props.caption); break;
-    case 'resourceLink': add(props.title); add(props.description); break;
+    case 'image': field('alt'); field('caption'); break;
+    case 'resourceLink': field('title'); field('description'); break;
     case 'divider': break;
     case 'annotatedCode':
-      add(props.title); add(props.fileLabel);
-      if (Array.isArray(props.steps)) props.steps.forEach((step) => {
+      field('title'); field('fileLabel');
+      if (Array.isArray(props.steps)) props.steps.forEach((step, index) => {
         if (typeof step === 'object' && step !== null) {
           const item = step as Record<string, unknown>;
-          add(item.label); addRaw(item.code); add(item.explanationTitle); add(item.explanation);
-          if (Array.isArray(item.terms)) item.terms.forEach((term) => {
-            if (typeof term === 'object' && term !== null) { add((term as Record<string, unknown>).term); add((term as Record<string, unknown>).description); }
+          add(item.label, ['steps', index, 'label']); addRaw(item.code);
+          add(item.explanationTitle, ['steps', index, 'explanationTitle']); add(item.explanation, ['steps', index, 'explanation']);
+          if (Array.isArray(item.terms)) item.terms.forEach((term, termIndex) => {
+            if (typeof term === 'object' && term !== null) {
+              const value = term as Record<string, unknown>;
+              add(value.term, ['steps', index, 'terms', termIndex, 'term']);
+              add(value.description, ['steps', index, 'terms', termIndex, 'description']);
+            }
           });
         }
       });
       break;
     case 'diagram':
-      add(props.title);
-      if (Array.isArray(props.nodes)) props.nodes.forEach((node) => {
-        if (typeof node === 'object' && node !== null) { add((node as Record<string, unknown>).title); add((node as Record<string, unknown>).description); }
+      field('title');
+      if (Array.isArray(props.nodes)) props.nodes.forEach((node, index) => {
+        if (typeof node === 'object' && node !== null) {
+          const value = node as Record<string, unknown>;
+          add(value.title, ['nodes', index, 'title']); add(value.description, ['nodes', index, 'description']);
+        }
       });
-      if (Array.isArray(props.connections)) props.connections.forEach((connection) => {
-        if (typeof connection === 'object' && connection !== null) add((connection as Record<string, unknown>).label);
+      if (Array.isArray(props.connections)) props.connections.forEach((connection, index) => {
+        if (typeof connection === 'object' && connection !== null) add((connection as Record<string, unknown>).label, ['connections', index, 'label']);
       });
       break;
   }
@@ -231,8 +240,18 @@ export function blocksToPlainText(content: unknown): string {
  * 一个块的行内文本里出现的 Markdown 链接目标（代码片段内的不算）。
  * complete=false 表示某个字符串的链接扫描超出了预算，目标列表可能不全，调用方应当按错误处理。
  */
-export function collectInlineLinkTargets(type: BlockType, props: Record<string, unknown>): { targets: string[]; complete: boolean } {
+export function collectInlineLinkTargets(type: BlockType, props: Record<string, unknown>): {
+  targets: string[];
+  sources: { target: string; fieldPath: (string | number)[] }[];
+  incompleteFieldPaths: (string | number)[][];
+  complete: boolean;
+} {
   const scans: LinkScan[] = [];
   blockLines(type, props, scans);
-  return { targets: scans.flatMap((scan) => scan.links ?? []), complete: scans.every((scan) => !scan.exceeded) };
+  return {
+    targets: scans.flatMap((scan) => scan.links ?? []),
+    sources: scans.flatMap((scan) => (scan.links ?? []).map((target) => ({ target, fieldPath: scan.fieldPath ?? [] }))),
+    incompleteFieldPaths: scans.filter((scan) => scan.exceeded).map((scan) => scan.fieldPath ?? []),
+    complete: scans.every((scan) => !scan.exceeded),
+  };
 }

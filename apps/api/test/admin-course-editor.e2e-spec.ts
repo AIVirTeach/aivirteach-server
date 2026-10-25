@@ -204,11 +204,13 @@ describe('admin course editor API', () => {
         type: 'image',
         props: { assetId: `foreign-${index}` },
       }));
-      await admin(
-        request(app.getHttpServer())
-          .patch(path(`/draft/lessons/${contentId}`))
-          .send({ content: { schemaVersion: 1, blocks } }),
-      ).expect(200);
+      const lesson = await prisma.courseLesson.findFirstOrThrow({
+        where: { moduleId, contentId },
+      });
+      await prisma.courseLesson.update({
+        where: { id: lesson.id },
+        data: { content: { schemaVersion: 1, blocks } },
+      });
     }
     const response = await admin(
       request(app.getHttpServer()).post(path('/publish')).send({}),

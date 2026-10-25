@@ -1,4 +1,7 @@
-import type { PublishIssue } from '@aivirteach/admin-contract';
+import type {
+  PublishIssue,
+  LessonSaveResult,
+} from '@aivirteach/admin-contract';
 export type ActionResult<T> =
   | { status: 'ok'; data: T }
   | { status: 'unauthorized' }
@@ -7,6 +10,7 @@ export type ActionResult<T> =
       message: string;
       problems: string[];
       issues: PublishIssue[];
+      validation?: LessonSaveResult['problems'];
     };
 export function resultMessage(
   result: Exclude<ActionResult<unknown>, { status: 'ok' }>,

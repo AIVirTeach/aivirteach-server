@@ -51,7 +51,7 @@
 | POST | `/draft/modules` | 新增模块 |
 | PATCH / DELETE | `/draft/modules/:moduleId` | 改 / 删模块 |
 | POST | `/draft/modules/:moduleId/lessons` | 在模块里新增课时 |
-| PATCH / DELETE | `/draft/lessons/:contentId` | 改 / 删课时（标题、`content`、目标、activity）；写 `content` 时做块校验，有错也保存并返回问题列表 |
+| PATCH / DELETE | `/draft/lessons/:contentId` | 改 / 删课时（标题、`content`、目标、activity）；写 `content` 时做块校验，语义错误时 422 拒绝整个写入并返回结构化问题，警告允许保存 |
 | PUT | `/draft/order` | 一次提交完整的模块与课时顺序（也用来把课时移到别的模块） |
 | PATCH | `/draft/assessments/:assessmentId` | 改测评题 |
 | GET | `/draft/lessons/:contentId` | 草稿预览，返回结构与学员读课接口完全一致（供第 2 块的预览路由使用） |
@@ -145,7 +145,7 @@
 ## 10. 2026-10-01 修订：课时块
 
 - **存储：** `CourseLesson.body`（Markdown）→ `content Json`（块数组）。`body` 过渡期保留，迁移 B 删除。第 3 节第 1 条、第 4 节草稿复制/课时编辑/发版校验、第 5 节回填与检查点、第 8 节第 2 项已就地修订。
-- **校验：** 写草稿与发版用 `packages/lesson-blocks` 的块校验（错误拦截发版、警告不拦截；写草稿时有错也保存并返回问题列表）。
+- **校验：** 写草稿与发版用 `packages/lesson-blocks` 的块校验（语义错误拦截草稿写入与发版，警告不拦截保存）。
 - **读课接口：** 响应新增 `blocks` 与 `assets`，`markdown`（来自 `body`）标记弃用；`buildLessonResponse` 草稿预览与学员读课共用。
 - **新增接口：** `GET /draft`、`POST /admin/courses`（新建课程）、`POST /admin/courses/:slug/assets`（素材上传）；`POST /draft` 无已发版版本时返回现有草稿；未发版课程的唯一草稿不可丢弃（409）。
 - **摄取与回填：** `course:create` 摄取时同时写 `body` 与 `content`（Markdown→块转换，只在 CLI 里加载 remark）；回填命令同样转换。
