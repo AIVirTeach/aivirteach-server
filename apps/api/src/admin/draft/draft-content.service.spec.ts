@@ -2,6 +2,7 @@ import {
   BadRequestException,
   ConflictException,
   NotFoundException,
+  UnprocessableEntityException,
 } from '@nestjs/common';
 import { AuditService } from '../../audit/audit.service';
 import { PrismaService } from '../../prisma/prisma.service';
@@ -323,8 +324,8 @@ describe('DraftContentService', () => {
     );
   });
 
-  it('saves invalid block content and returns validation problems, then clears them after repair', async () => {
-    const { service, prisma } = setup();
+  it('rejects invalid content and same-request metadata without writes or success audit, then accepts repair', async () => {
+    const { service, prisma, audit } = setup();
     const content = {
       schemaVersion: 1,
       blocks: [
@@ -337,13 +338,28 @@ describe('DraftContentService', () => {
       ],
     };
     prisma.courseLesson.update.mockResolvedValue({});
-    const saved = await service.updateLesson('demo', 'one', { content }, 'op');
-    expect(prisma.courseLesson.update).toHaveBeenCalledWith(
-      expect.objectContaining({ data: { content } }),
-    );
-    expect(saved.problems.errors.map(({ code }) => code)).toEqual(
-      expect.arrayContaining(['unknown-type', 'invalid-props']),
-    );
+    await expect(
+      service.updateLesson(
+        'demo',
+        'one',
+        { content, title: 'Do not save' },
+        'op',
+      ),
+    ).rejects.toMatchObject({
+      response: {
+        validation: {
+          errors: expect.arrayContaining([
+            expect.objectContaining({ code: 'unknown-type' }),
+            expect.objectContaining({
+              code: 'invalid-props',
+              fieldPath: ['alt'],
+            }),
+          ]),
+        },
+      },
+    });
+    expect(prisma.courseLesson.update).not.toHaveBeenCalled();
+    expect(audit.record).not.toHaveBeenCalled();
     const repaired = await service.updateLesson(
       'demo',
       'one',
@@ -398,10 +414,79 @@ describe('DraftContentService', () => {
     expect(prisma.$transaction).not.toHaveBeenCalled();
   });
 
-  it('reports image asset IDs outside the course while accepting local asset IDs', async () => {
+  it('rejects a foreign image before writes and accepts a local image', async () => {
     const { service, prisma } = setup();
-    prisma.courseAsset.findMany.mockResolvedValue([{ id: 'asset-local' }]);
+    const image = (assetId: string) => ({
+      schemaVersion: 1,
+      blocks: [
+        { id: 'image', type: 'image', props: { assetId, alt: 'Image' } },
+      ],
+    });
+    await expect(
+      service.updateLesson(
+        'demo',
+        'one',
+        { content: image('asset-other') },
+        'op',
+      ),
+    ).rejects.toMatchObject({
+      response: {
+        validation: {
+          errors: [
+            expect.objectContaining({
+              code: 'unknown-asset',
+              fieldPath: ['assetId'],
+            }),
+          ],
+        },
+      },
+    });
+    expect(prisma.courseLesson.update).not.toHaveBeenCalled();
     const result = await service.updateLesson(
+      'demo',
+      'one',
+      { content: image('asset-local') },
+      'op',
+    );
+    expect(result.problems.errors).toEqual([]);
+  });
+
+  it('rejects invalid lesson creation before inserting or auditing', async () => {
+    const { service, prisma, audit } = setup();
+    await expect(
+      service.createLesson(
+        'demo',
+        'm1',
+        {
+          contentId: 'new',
+          title: 'New',
+          estimatedMinutes: 1,
+          activity: { type: 'guided', prompt: 'Go', completionType: 'manual' },
+          content: {
+            schemaVersion: 1,
+            blocks: [{ id: 'bad', type: 'future-block', props: {} }],
+          },
+        },
+        'op',
+      ),
+    ).rejects.toBeInstanceOf(UnprocessableEntityException);
+    expect(prisma.courseLesson.create).not.toHaveBeenCalled();
+    expect(audit.record).not.toHaveBeenCalled();
+  });
+
+  it('saves empty and warning-only lesson content', async () => {
+    const { service, prisma } = setup();
+    const empty = await service.updateLesson(
+      'demo',
+      'one',
+      { content: { schemaVersion: 1, blocks: [] } },
+      'op',
+    );
+    expect(empty.problems.errors).toEqual([]);
+    expect(empty.problems.warnings.map(({ code }) => code)).toContain(
+      'no-blocks',
+    );
+    const warning = await service.updateLesson(
       'demo',
       'one',
       {
@@ -409,26 +494,35 @@ describe('DraftContentService', () => {
           schemaVersion: 1,
           blocks: [
             {
-              id: 'local',
-              type: 'image',
-              props: { assetId: 'asset-local', alt: 'Local' },
-            },
-            {
-              id: 'foreign',
-              type: 'image',
-              props: { assetId: 'asset-other', alt: 'Other' },
+              id: 'heading',
+              type: 'heading',
+              props: { level: 3, text: 'Subheading' },
             },
           ],
         },
       },
       'op',
     );
-    expect(result.problems.errors.map(({ code }) => code)).toContain(
-      'unknown-asset',
+    expect(warning.problems.errors).toEqual([]);
+    expect(warning.problems.warnings.map(({ code }) => code)).toContain(
+      'heading-skip',
     );
-    expect(
-      result.problems.errors.filter(({ code }) => code === 'unknown-asset'),
-    ).toHaveLength(1);
+    expect(prisma.courseLesson.update).toHaveBeenCalledTimes(2);
+  });
+
+  it('allows metadata-only patches without validating or rewriting existing content', async () => {
+    const { service, prisma } = setup();
+    const result = await service.updateLesson(
+      'demo',
+      'one',
+      { title: 'Updated' },
+      'op',
+    );
+    expect(prisma.courseAsset.findMany).not.toHaveBeenCalled();
+    expect(prisma.courseLesson.update).toHaveBeenCalledWith(
+      expect.objectContaining({ data: { title: 'Updated' } }),
+    );
+    expect(result.problems).toEqual({ errors: [], warnings: [] });
   });
 
   it('rejects ambiguous contentId before writes and reports module titles', async () => {

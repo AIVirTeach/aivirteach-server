@@ -363,35 +363,82 @@ describe('CourseIngestionService.ingestFromDirectory', () => {
     expect(assetStorage.upload).not.toHaveBeenCalled();
   });
 
-  it('转换报告含 error 时只将该节 content 设 null 并继续摄取', async () => {
-    const prisma = buildPrisma();
-    const service = await buildService(prisma);
-    jest
-      .spyOn(service as any, 'convertMarkdown')
-      .mockResolvedValueOnce({
-        content: {
-          schemaVersion: 1,
-          blocks: [{ id: 'b-001', type: 'paragraph', props: { text: 'ok' } }],
+  it('real conversion errors reject the entire import before uploads or database writes', async () => {
+    const contentDir = await mkdtemp(
+      join(tmpdir(), 'lesson-invalid-ingestion-'),
+    );
+    try {
+      const courseContent = JSON.parse(
+        readFileSync(join(FIXTURE_DIR, 'course.json'), 'utf8'),
+      );
+      courseContent.modules[0].lessons.forEach(
+        (lesson: { sourceRange: { startLine: number; endLine: number } }) => {
+          lesson.sourceRange = { startLine: 1, endLine: 1 };
         },
-        report: [],
-        dropped: [],
-      })
-      .mockResolvedValueOnce({
-        content: { schemaVersion: 1, blocks: [] },
-        report: [{ level: 'error', code: 'too-large', message: 'too large' }],
-        dropped: [],
-      });
+      );
+      await writeFile(
+        join(contentDir, 'course.json'),
+        JSON.stringify(courseContent),
+      );
+      await writeFile(
+        join(contentDir, 'lesson-source.md'),
+        '## ' + 'x'.repeat(201),
+      );
+      const prisma = buildPrisma();
+      const assetStorage = buildAssetStorage();
+      const service = await buildService(prisma, assetStorage);
+      const conversionReports = await service.previewConversions(contentDir);
+      expect(conversionReports).toHaveLength(2);
+      expect(
+        conversionReports.every(({ issues }) =>
+          issues.some(({ level }) => level === 'error'),
+        ),
+      ).toBe(true);
 
-    const result = await service.ingestFromDirectory(FIXTURE_DIR);
-    const lessons = prisma.course.create.mock.calls[0][0].data.versions.create
-      .modules.create[0].lessons.create as any[];
+      await expect(
+        service.ingestFromDirectory(contentDir),
+      ).rejects.toMatchObject({ conversionReports });
+      expect(assetStorage.upload).not.toHaveBeenCalled();
+      expect(prisma.course.create).not.toHaveBeenCalled();
+    } finally {
+      await rm(contentDir, { recursive: true, force: true });
+    }
+  });
 
-    expect(lessons[0].content).not.toBeNull();
-    expect(lessons[1].content).toBe(Prisma.DbNull);
-    expect(result.conversionReports[1]).toEqual({
-      lessonContentId: 'lesson-2',
-      issues: [{ level: 'error', code: 'too-large', message: 'too large' }],
-    });
+  it('warning-only conversion still imports a course and preserves all reports', async () => {
+    const contentDir = await mkdtemp(
+      join(tmpdir(), 'lesson-warning-ingestion-'),
+    );
+    try {
+      const courseContent = JSON.parse(
+        readFileSync(join(FIXTURE_DIR, 'course.json'), 'utf8'),
+      );
+      courseContent.modules[0].lessons.forEach(
+        (lesson: { sourceRange: { startLine: number; endLine: number } }) => {
+          lesson.sourceRange = { startLine: 1, endLine: 1 };
+        },
+      );
+      await writeFile(
+        join(contentDir, 'course.json'),
+        JSON.stringify(courseContent),
+      );
+      await writeFile(
+        join(contentDir, 'lesson-source.md'),
+        '![Missing image](missing.png)',
+      );
+      const prisma = buildPrisma();
+      const service = await buildService(prisma);
+      const result = await service.ingestFromDirectory(contentDir);
+      expect(result.conversionReports).toHaveLength(2);
+      expect(
+        result.conversionReports.every(({ issues }) =>
+          issues.some(({ code }) => code === 'missing-asset'),
+        ),
+      ).toBe(true);
+      expect(prisma.course.create).toHaveBeenCalledTimes(1);
+    } finally {
+      await rm(contentDir, { recursive: true, force: true });
+    }
   });
 
   it('把每个 asset 的本地文件上传到 Blob 存储，用返回的 URL 作为 objectKey', async () => {

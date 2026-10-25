@@ -19,6 +19,30 @@ describe('validateLessonContent', () => {
     expect(result.warnings).toEqual([]);
   });
 
+  it('preserves nested prop, image and inline-link field locations', () => {
+    const report = validateLessonContent(valid([
+      block('table', 'table', { columns: ['Column'], rows: [[42]] }),
+      block('image', 'image', { assetId: 'missing', alt: 'Image' }),
+      block('links', 'table', { columns: ['Column'], rows: [['[x](javascript:1)']] }),
+    ]), { courseAssetIds: new Set() });
+    expect(report.errors).toEqual(expect.arrayContaining([
+      expect.objectContaining({ code: 'invalid-props', blockIndex: 0, fieldPath: ['rows', 0, 0] }),
+      expect.objectContaining({ code: 'unknown-asset', blockIndex: 1, fieldPath: ['assetId'] }),
+      expect.objectContaining({ code: 'invalid-link', blockIndex: 2, fieldPath: ['rows', 0, 0] }),
+    ]));
+  });
+
+  it('preserves deep annotated-code locations without scanning code as links', () => {
+    const report = validateLessonContent(valid([
+      block('bad', 'annotatedCode', { steps: [{ label: 'Step', code: 'code', terms: [{ term: 'x'.repeat(61), description: 'Description' }] }] }),
+      block('link', 'annotatedCode', { steps: [{ label: 'Step', code: '[ignored](javascript:1)', terms: [{ term: 'Term', description: '[bad](javascript:1)' }] }] }),
+    ]), { courseAssetIds: new Set() });
+    expect(report.errors).toEqual([
+      expect.objectContaining({ code: 'invalid-props', blockIndex: 0, fieldPath: ['steps', 0, 'terms', 0, 'term'] }),
+      expect.objectContaining({ code: 'invalid-link', blockIndex: 1, fieldPath: ['steps', 0, 'terms', 0, 'description'] }),
+    ]);
+  });
+
   it('reports block count and serialized size limits', () => {
     const tooMany = valid(Array.from({ length: 301 }, (_, i) => block(`p${i}`, 'paragraph', { text: 'x' })));
     expect(validateLessonContent(tooMany, { courseAssetIds: new Set() }).errors.map((p) => p.code)).toContain('too-many-blocks');
