@@ -25,6 +25,7 @@ import { courseMutation } from '@/app/(app)/courses/actions';
 import { resultMessage } from '@/lib/action-result';
 import { reduce, type EditorState, type EditorAction } from './editor-state';
 import { createAutosave, type SaveStatus } from './autosave';
+import type { LocatedProblem, ContentProblem } from './field-location';
 import { blockSummary } from './block-summary';
 import { BlockForm } from './block-form';
 import { PreviewFrame } from './preview-frame';
@@ -45,7 +46,10 @@ export function LessonEditor({
   moduleTitle: string;
   initialAssets: CourseAsset[];
 }) {
-  const parsed = LessonEnvelopeSchema.safeParse(lesson.content);
+  const [initialContent] = useState(() => lesson.content);
+  const [parsed] = useState(() =>
+    LessonEnvelopeSchema.safeParse(initialContent),
+  );
   const [state, dispatch] = useReducer(
     (s: EditorState, a: EditorAction) => reduce(s, a),
     {
@@ -56,58 +60,163 @@ export function LessonEditor({
       uploads: {},
     } satisfies EditorState,
   );
-  const [assets, setAssets] = useState(initialAssets);
+  const [pendingAssets, setPendingAssets] = useState<CourseAsset[]>([]);
+  useEffect(() => {
+    const confirmedIds = new Set(initialAssets.map((asset) => asset.id));
+    setPendingAssets((current) => {
+      const pending = current.filter((asset) => !confirmedIds.has(asset.id));
+      return pending.length === current.length ? current : pending;
+    });
+  }, [initialAssets, pendingAssets]);
+  const assets = useMemo(
+    () => [
+      ...new Map(
+        [...pendingAssets, ...initialAssets].map((asset) => [asset.id, asset]),
+      ).values(),
+    ],
+    [initialAssets, pendingAssets],
+  );
   const [saveStatus, setSaveStatus] = useState<SaveStatus>('idle');
   const [saveMessage, setSaveMessage] = useState('');
-  const [serverProblems, setServerProblems] = useState<
-    LessonSaveResult['problems'] | null
-  >(null);
+  const [serverProblems, setServerProblems] = useState<{
+    revision: number;
+    report: LessonSaveResult['problems'];
+  } | null>(null);
+  const revision = useRef(0);
+  const initial = useRef(true);
+  const assetIdsKey = JSON.stringify(
+    [...new Set(assets.map((asset) => asset.id))].sort(),
+  );
+  const previousSnapshot = useRef({ blocks: state.blocks, assetIdsKey });
+  const [focusTarget, setFocusTarget] = useState<{
+    revision: number;
+    problem: ContentProblem;
+  } | null>(null);
+  const problemSummary = useRef<HTMLElement>(null);
+  const blockList = useRef<HTMLDivElement>(null);
   const [formDirty, setFormDirty] = useState<Record<string, boolean>>({});
   const [pendingUploads, setPendingUploads] = useState(0);
   const [blockType, setBlockType] = useState<BlockType>('paragraph');
   const queue = useRef<ReturnType<
     typeof createAutosave<LessonBlock[], LessonSaveResult>
   > | null>(null);
-  const previous = useRef(state.blocks);
+  const localProblems = useMemo(
+    () =>
+      validateLessonContent(
+        parsed.success
+          ? { schemaVersion: 1, blocks: state.blocks }
+          : initialContent,
+        { courseAssetIds: new Set(assets.map((asset) => asset.id)) },
+      ),
+    [state.blocks, assets, parsed, initialContent],
+  );
   useEffect(() => {
     const saver = createAutosave<LessonBlock[], LessonSaveResult>(
       (blocks) =>
         courseMutation(slug, `draft/lessons/${lesson.contentId}`, 'PATCH', {
           content: { schemaVersion: 1, blocks },
         }),
-      (status, result) => {
-        setSaveStatus(status);
-        if (result?.status === 'ok') {
-          setServerProblems(result.data.problems);
+      (notice) => {
+        if (notice.revision !== revision.current) return;
+        setSaveStatus(notice.status);
+        if (notice.status === 'saved') {
+          setServerProblems({
+            revision: notice.revision,
+            report: notice.result.data.problems,
+          });
           setSaveMessage('');
-        } else if (result) setSaveMessage(resultMessage(result));
+        } else if (notice.status === 'failed') {
+          const result = notice.result;
+          if (result.status === 'error' && result.validation) {
+            setServerProblems({
+              revision: notice.revision,
+              report: result.validation,
+            });
+          }
+          setSaveMessage(resultMessage(result));
+        } else setSaveMessage('');
       },
     );
     queue.current = saver;
     return () => saver.dispose();
   }, [slug, lesson.contentId]);
   useEffect(() => {
-    if (state.blocks !== previous.current) {
-      previous.current = state.blocks;
-      setServerProblems(null);
-      queue.current?.edit(state.blocks);
-    }
-  }, [state.blocks]);
+    if (initial.current) {
+      initial.current = false;
+      if (parsed.success && !localProblems.errors.length) return;
+    } else if (
+      previousSnapshot.current.blocks === state.blocks &&
+      previousSnapshot.current.assetIdsKey === assetIdsKey
+    )
+      return;
+    previousSnapshot.current = { blocks: state.blocks, assetIdsKey };
+    const currentRevision = ++revision.current;
+    setServerProblems(null);
+    setFocusTarget(null);
+    const candidate =
+      !parsed.success || localProblems.errors.length
+        ? {
+            kind: 'blocked' as const,
+            revision: currentRevision,
+            report: localProblems,
+          }
+        : {
+            kind: 'ready' as const,
+            revision: currentRevision,
+            value: state.blocks,
+            report: localProblems,
+          };
+    queue.current?.stage(candidate);
+  }, [state.blocks, localProblems, parsed, assetIdsKey]);
   const dirty =
-    ['dirty', 'saving', 'failed'].includes(saveStatus) ||
+    ['blocked', 'dirty', 'saving', 'failed'].includes(saveStatus) ||
     pendingUploads > 0 ||
     Object.values(formDirty).some(Boolean);
   useDepartureGuard(dirty);
-  const localProblems = useMemo(
-    () =>
-      validateLessonContent(
-        { schemaVersion: 1, blocks: state.blocks },
-        { courseAssetIds: new Set(assets.map((a) => a.id)) },
-      ),
-    [state.blocks, assets],
+  const report =
+    serverProblems?.revision === revision.current
+      ? serverProblems.report
+      : localProblems;
+  const duplicateIds = useMemo(() => {
+    const seen = new Set<string>();
+    const duplicates = new Set<string>();
+    for (const block of state.blocks) {
+      if (seen.has(block.id)) duplicates.add(block.id);
+      seen.add(block.id);
+    }
+    return duplicates;
+  }, [state.blocks]);
+  const problems: LocatedProblem[] = [...report.errors, ...report.warnings].map(
+    (problem, index) => ({
+      ...problem,
+      elementId: `content-problem-${revision.current}-${index}`,
+    }),
   );
-  const report = serverProblems ?? localProblems;
-  const problems = [...report.errors, ...report.warnings];
+  useEffect(() => {
+    if (!focusTarget || focusTarget.revision !== revision.current) return;
+    const { problem } = focusTarget;
+    if (
+      problem.blockIndex === undefined ||
+      duplicateIds.has(state.blocks[problem.blockIndex]?.id)
+    ) {
+      problemSummary.current?.focus();
+      return;
+    }
+    const card = blockList.current?.querySelector<HTMLElement>(
+      `[data-block-index="${problem.blockIndex}"]`,
+    );
+    const field =
+      problem.fieldPath &&
+      Array.from(
+        card?.querySelectorAll<HTMLElement>('[data-field-path]') ?? [],
+      ).find(
+        (element) =>
+          element.dataset.fieldPath === JSON.stringify(problem.fieldPath),
+      );
+    const target = field ?? card;
+    target?.scrollIntoView?.({ block: 'nearest' });
+    target?.focus();
+  }, [focusTarget, state.selectedId, state.blocks, duplicateIds]);
   const selected = state.blocks.find((b) => b.id === state.selectedId);
   const payload = useMemo(
     () => ({
@@ -116,10 +225,7 @@ export function LessonEditor({
       assets: Object.fromEntries(
         assets.map((a) => [a.id, { url: a.url, alt: a.altText ?? undefined }]),
       ),
-      problems: [
-        ...(serverProblems ?? localProblems).errors,
-        ...(serverProblems ?? localProblems).warnings,
-      ],
+      problems: [...report.errors, ...report.warnings],
     }),
     [
       lesson.title,
@@ -132,6 +238,7 @@ export function LessonEditor({
   );
   const statuses: Record<SaveStatus, string> = {
     idle: '尚无改动',
+    blocked: `有 ${report.errors.length} 处问题，尚未保存`,
     dirty: '等待保存…',
     saving: '保存中…',
     saved: '已保存',
@@ -160,7 +267,7 @@ export function LessonEditor({
           >
             {statuses[saveStatus]}
           </span>
-          {saveStatus === 'failed' && (
+          {saveStatus === 'failed' && !serverProblems?.report.errors.length && (
             <Button
               size="sm"
               variant="outline"
@@ -197,6 +304,47 @@ export function LessonEditor({
             </a>
           )}
         </p>
+      )}
+      {!parsed.success && (
+        <p role="alert" className="notice error">
+          课时初始正文格式无效，已阻止自动保存。请重新加载或联系维护人员。
+        </p>
+      )}
+      {!!problems.length && (
+        <section
+          ref={problemSummary}
+          tabIndex={-1}
+          aria-label="课时内容问题"
+          className="panel"
+        >
+          <h2>课时内容问题</h2>
+          <ul>
+            {problems.map((problem) => (
+              <li key={problem.elementId}>
+                <button
+                  type="button"
+                  id={problem.elementId}
+                  className={problem.level}
+                  onClick={() => {
+                    if (
+                      problem.blockIndex !== undefined &&
+                      !duplicateIds.has(state.blocks[problem.blockIndex]?.id)
+                    ) {
+                      const block = state.blocks[problem.blockIndex];
+                      if (block) dispatch({ type: 'select', id: block.id });
+                    }
+                    setFocusTarget({ revision: revision.current, problem });
+                  }}
+                >
+                  {problem.blockIndex === undefined
+                    ? ''
+                    : `第 ${problem.blockIndex + 1} 块：`}
+                  {problem.message}
+                </button>
+              </li>
+            ))}
+          </ul>
+        </section>
       )}
       <div className="editor-layout">
         <aside className="lesson-nav">
@@ -240,7 +388,7 @@ export function LessonEditor({
               </label>
               <Button
                 variant="default"
-                disabled={state.blocks.length >= 300}
+                disabled={!parsed.success || state.blocks.length >= 300}
                 onClick={() => dispatch({ type: 'add', blockType })}
               >
                 添加内容
@@ -252,23 +400,20 @@ export function LessonEditor({
                 <p>添加第一个内容块，开始编写课时。</p>
               </div>
             )}
-            {problems
-              .filter((p) => !p.blockId)
-              .map((p, i) => (
-                <p className={p.level} key={i}>
-                  {p.message}
-                </p>
-              ))}
-            <div className="block-list">
+            <div className="block-list" ref={blockList}>
               {state.blocks.map((b, i) => {
                 const entry = Object.hasOwn(BLOCK_REGISTRY, b.type)
                   ? BLOCK_REGISTRY[b.type as BlockType]
                   : undefined;
-                const own = problems.filter((p) => p.blockId === b.id);
+                const own = problems.filter(
+                  (problem) => problem.blockIndex === i,
+                );
                 return (
                   <article
                     id={b.id}
-                    key={b.id}
+                    key={`${b.id}-${i}`}
+                    data-block-index={i}
+                    tabIndex={-1}
                     className={`block-card ${state.selectedId === b.id ? 'selected' : ''}`}
                   >
                     <Button
@@ -334,19 +479,15 @@ export function LessonEditor({
                         </Button>
                       </ConfirmAction>
                     </div>
-                    {own.map((p, index) => (
-                      <p className={p.level} key={index}>
-                        {p.message}
-                      </p>
-                    ))}
                     {selected?.id === b.id && (
                       <BlockForm
                         key={selected.id}
+                        problems={own}
                         slug={slug}
                         block={selected}
                         assets={assets}
                         onAssets={(a) =>
-                          setAssets((current) => [
+                          setPendingAssets((current) => [
                             ...current.filter((x) => x.id !== a.id),
                             a,
                           ])

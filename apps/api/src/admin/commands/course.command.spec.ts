@@ -1,5 +1,6 @@
 import { Test } from '@nestjs/testing';
 import { AdminService } from '../admin.service';
+import { CourseConversionError } from '../../courses/course-ingestion.service';
 import {
   CourseCreateCommand,
   CoursePublishCommand,
@@ -75,7 +76,9 @@ describe('CourseCreateCommand', () => {
     const conversionReports = [
       {
         lessonContentId: 'lesson-1',
-        issues: [{ level: 'error', code: 'invalid-output', message: 'broken' }],
+        issues: [
+          { level: 'warning', code: 'h1-dropped', message: 'Heading removed' },
+        ],
       },
     ];
     const createCourse = jest.fn().mockResolvedValue({
@@ -109,17 +112,62 @@ describe('CourseCreateCommand', () => {
         title: 'n8n 自动化工作流',
         version: 1,
         conversionReports,
-        warningCount: 0,
-        lessonErrors: [
-          {
-            lessonContentId: 'lesson-1',
-            level: 'error',
-            code: 'invalid-output',
-            message: 'broken',
-          },
-        ],
+        warningCount: 1,
+        lessonErrors: [],
       }),
     );
+  });
+
+  it('prints every lesson conversion error and propagates failure for a nonzero CLI exit', async () => {
+    const conversionReports = [
+      {
+        lessonContentId: 'first',
+        issues: [
+          {
+            level: 'error' as const,
+            code: 'invalid-output',
+            message: 'first failed',
+            line: 2,
+          },
+        ],
+      },
+      {
+        lessonContentId: 'second',
+        issues: [
+          {
+            level: 'error' as const,
+            code: 'invalid-output',
+            message: 'second failed',
+            line: 9,
+          },
+        ],
+      },
+    ];
+    const error = new CourseConversionError(conversionReports);
+    const command = await buildCommand(CourseCreateCommand, {
+      createCourse: jest.fn().mockRejectedValue(error),
+    });
+    const errorSpy = jest.spyOn(console, 'error').mockImplementation();
+    try {
+      await expect(
+        command.run(['/content/course'], {
+          operator: OPERATOR,
+          reason: REASON,
+          execute: true,
+        }),
+      ).rejects.toBe(error);
+      expect(errorSpy).toHaveBeenCalledWith(
+        JSON.stringify({
+          command: 'course:create',
+          dryRun: false,
+          success: false,
+          conversionReports,
+        }),
+      );
+      expect(logSpy).not.toHaveBeenCalled();
+    } finally {
+      errorSpy.mockRestore();
+    }
   });
 
   it('reason 为空时拒绝，不调用 AdminService', async () => {

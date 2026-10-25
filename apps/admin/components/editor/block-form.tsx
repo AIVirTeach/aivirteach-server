@@ -14,6 +14,7 @@ import {
 } from '@aivirteach/lesson-blocks';
 import type { CourseAsset } from '@aivirteach/admin-contract';
 import { AssetPicker } from './asset-picker';
+import { fieldAttributes, type LocatedProblem } from './field-location';
 type Schema = {
   type?: string;
   properties?: Record<string, Schema>;
@@ -77,11 +78,15 @@ function Field({
   schema,
   value,
   name,
+  path,
+  problems,
   onChange,
 }: {
   schema: Schema;
   value: unknown;
   name: string;
+  path: readonly (string | number)[];
+  problems: readonly LocatedProblem[];
   onChange: (value: unknown) => void;
 }) {
   const options =
@@ -94,6 +99,7 @@ function Field({
       <label className="field">
         {name}
         <NativeSelect
+          {...fieldAttributes(path, problems)}
           value={String(value ?? '')}
           onChange={(e) =>
             onChange(options.find((v) => String(v) === e.target.value))
@@ -110,11 +116,17 @@ function Field({
   if (schema.type === 'object') {
     const object = asObject(value);
     return (
-      <fieldset className="nested-fields">
+      <fieldset
+        className="nested-fields"
+        tabIndex={-1}
+        {...fieldAttributes(path, problems)}
+      >
         <legend>{name}</legend>
         {Object.entries(schema.properties ?? {}).map(([key, child]) => (
           <Field
             key={key}
+            path={[...path, key]}
+            problems={problems}
             schema={child}
             name={`${name} · ${names[key] ?? key}`}
             value={object[key]}
@@ -128,12 +140,18 @@ function Field({
     const values: unknown[] = Array.isArray(value) ? value : [];
     const item = schema.items ?? {};
     return (
-      <fieldset className="nested-fields">
+      <fieldset
+        className="nested-fields"
+        tabIndex={-1}
+        {...fieldAttributes(path, problems)}
+      >
         <legend>{name}</legend>
         {values.map((v, i) => (
           <div key={i} className="array-item">
             <Field
               schema={item}
+              path={[...path, i]}
+              problems={problems}
               value={v}
               name={`${name} ${i + 1}`}
               onChange={(next) =>
@@ -165,6 +183,7 @@ function Field({
       <label className="field">
         {name}
         <Input
+          {...fieldAttributes(path, problems)}
           type="number"
           min={schema.minimum}
           max={schema.maximum}
@@ -179,6 +198,7 @@ function Field({
     <label className="field">
       {name}
       <Textarea
+        {...fieldAttributes(path, problems)}
         rows={name.includes('代码') ? 6 : 3}
         maxLength={schema.maxLength}
         value={typeof value === 'string' ? value : ''}
@@ -189,9 +209,11 @@ function Field({
 }
 function TableForm({
   value,
+  problems,
   onChange,
 }: {
   value: Record<string, unknown>;
+  problems: readonly LocatedProblem[];
   onChange: (v: unknown) => void;
 }) {
   const columns = Array.isArray(value.columns) ? value.columns.map(String) : [];
@@ -199,13 +221,18 @@ function TableForm({
     ? value.rows.map((r) => (Array.isArray(r) ? r.map(String) : []))
     : [];
   return (
-    <div className="table-edit">
+    <div
+      className="table-edit"
+      tabIndex={-1}
+      {...fieldAttributes([], problems)}
+    >
       <p>列名与单元格</p>
       {columns.map((column, i) => (
         <div className="inline" key={i}>
           <label className="field">
             列 {i + 1}
             <Input
+              {...fieldAttributes(['columns', i], problems)}
               value={column}
               onChange={(e) =>
                 onChange({
@@ -252,6 +279,7 @@ function TableForm({
             <label className="field" key={j}>
               单元格 {i + 1}-{j + 1}
               <Input
+                {...fieldAttributes(['rows', i, j], problems)}
                 value={row[j] ?? ''}
                 onChange={(e) =>
                   onChange({
@@ -302,8 +330,10 @@ export function BlockForm({
   onUploadStart,
   onUploadFinish,
   onChange,
+  problems = [],
 }: {
   block: LessonBlock;
+  problems?: readonly LocatedProblem[];
   slug: string;
   assets: CourseAsset[];
   onAssets: (a: CourseAsset) => void;
@@ -322,12 +352,13 @@ export function BlockForm({
     <section className="property-panel">
       <h3>{entry.label}属性</h3>
       {block.type === 'table' ? (
-        <TableForm value={value} onChange={onChange} />
+        <TableForm value={value} onChange={onChange} problems={problems} />
       ) : (
         Object.entries(schema.properties ?? {}).map(([key, field]) =>
           key === 'assetId' && block.type === 'image' ? (
             <AssetPicker
               key={key}
+              fieldProps={fieldAttributes([key], problems)}
               slug={slug}
               assets={assets}
               value={typeof value.assetId === 'string' ? value.assetId : ''}
@@ -340,6 +371,8 @@ export function BlockForm({
           ) : (
             <Field
               key={key}
+              path={[key]}
+              problems={problems}
               schema={field}
               value={value[key]}
               name={names[key] ?? key}

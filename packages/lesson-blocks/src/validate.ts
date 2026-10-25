@@ -14,13 +14,14 @@ export type Problem = {
   message: string;
   blockId?: string;
   blockIndex?: number;
+  fieldPath?: (string | number)[];
 };
 
 export type ValidationReport = { errors: Problem[]; warnings: Problem[] };
 
 const knownBlockType = (type: string): type is BlockType => Object.hasOwn(BLOCK_REGISTRY, type);
-const problem = (level: Problem['level'], code: ProblemCode, message: string, blockId?: string, blockIndex?: number): Problem => ({
-  level, code, message, ...(blockId === undefined ? {} : { blockId }), ...(blockIndex === undefined ? {} : { blockIndex }),
+const problem = (level: Problem['level'], code: ProblemCode, message: string, blockId?: string, blockIndex?: number, fieldPath?: (string | number)[]): Problem => ({
+  level, code, message, ...(blockId === undefined ? {} : { blockId }), ...(blockIndex === undefined ? {} : { blockIndex }), ...(fieldPath === undefined ? {} : { fieldPath }),
 });
 
 // 只有显式带 scheme 的目标才需要白名单：#锚点、相对路径客户端会渲染成纯文本，不构成风险。
@@ -71,25 +72,25 @@ export function validateLessonContent(input: unknown, ctx: { courseAssetIds: Rea
     if (type === 'image' && typeof props === 'object' && props !== null) {
       const assetId = (props as Record<string, unknown>).assetId;
       if (typeof assetId === 'string' && assetId.length > 0 && !ctx.courseAssetIds.has(assetId)) {
-        errors.push(problem('error', 'unknown-asset', `图片资源不存在：${assetId}`, id, blockIndex));
+        errors.push(problem('error', 'unknown-asset', `图片资源不存在：${assetId}`, id, blockIndex, ['assetId']));
       }
     }
     const result = BLOCK_REGISTRY[type].schema.safeParse(props);
     if (!result.success) {
       for (const issue of result.error.issues) {
         const path = issue.path.length ? `props.${issue.path.join('.')}` : 'props';
-        errors.push(problem('error', 'invalid-props', `${path}：${issue.message}`, id, blockIndex));
+        errors.push(problem('error', 'invalid-props', `${path}：${issue.message}`, id, blockIndex, issue.path.filter((part): part is string | number => typeof part === 'string' || typeof part === 'number')));
       }
     } else {
       const value = result.data as Record<string, unknown>;
       // 行内链接只放行 http/https/mailto；客户端渲染器也会过滤，这里是不依赖客户端实现的第二道防线。
-      const { targets, complete } = collectInlineLinkTargets(type, value);
-      for (const target of targets) {
+      const { sources, incompleteFieldPaths } = collectInlineLinkTargets(type, value);
+      for (const { target, fieldPath } of sources) {
         if (!isAllowedLinkTarget(target)) {
-          errors.push(problem('error', 'invalid-link', `链接只允许 http、https 或 mailto：${target}`, id, blockIndex));
+          errors.push(problem('error', 'invalid-link', `链接只允许 http、https 或 mailto：${target}`, id, blockIndex, fieldPath));
         }
       }
-      if (!complete) errors.push(problem('error', 'invalid-link', '内容里的方括号/链接结构过于复杂，无法校验链接', id, blockIndex));
+      for (const fieldPath of incompleteFieldPaths) errors.push(problem('error', 'invalid-link', '内容里的方括号/链接结构过于复杂，无法校验链接', id, blockIndex, fieldPath));
       if (type === 'step' && typeof value.number === 'number') {
         if (previousStep !== undefined && value.number !== previousStep + 1) {
           warnings.push(problem('warning', 'step-gap', `步骤编号应从 ${previousStep + 1} 开始`, id, blockIndex));

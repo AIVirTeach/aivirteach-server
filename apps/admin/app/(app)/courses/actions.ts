@@ -2,12 +2,16 @@
 import { z } from 'zod';
 import { apiFetchNoRedirect } from '@/lib/api-client';
 import type { ActionResult } from '@/lib/action-result';
-import { PublishIssueSchema } from '@aivirteach/admin-contract';
+import {
+  PublishIssueSchema,
+  ValidationReportSchema,
+} from '@aivirteach/admin-contract';
 
 const ErrorSchema = z.object({
   message: z.union([z.string(), z.array(z.string())]).optional(),
   problems: z.array(z.string()).optional(),
   issues: z.array(PublishIssueSchema).optional(),
+  validation: ValidationReportSchema.optional(),
 });
 export async function courseMutation<T = unknown>(
   slug: string,
@@ -79,6 +83,7 @@ async function request<T>(
         : (error.message ?? `请求失败（${response.status}）`),
       problems: error.problems ?? [],
       issues: error.issues ?? [],
+      ...(error.validation ? { validation: error.validation } : {}),
     };
   } catch {
     return {

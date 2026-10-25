@@ -1,5 +1,6 @@
 import { Command, CommandRunner, Option } from 'nest-commander';
 import { AdminService } from '../admin.service';
+import { CourseConversionError } from '../../courses/course-ingestion.service';
 import { OperatorSchema, ReasonSchema } from '../admin.schemas';
 
 interface CourseCreateOptions {
@@ -56,12 +57,21 @@ export class CourseCreateCommand extends CommandRunner {
       return;
     }
 
-    const course = await this.admin.createCourse(
-      contentDir,
-      operator,
-      reason,
-      options.imageDigest,
-    );
+    const course = await this.admin
+      .createCourse(contentDir, operator, reason, options.imageDigest)
+      .catch((error: unknown) => {
+        if (error instanceof CourseConversionError) {
+          console.error(
+            JSON.stringify({
+              command: 'course:create',
+              dryRun: false,
+              success: false,
+              conversionReports: error.conversionReports,
+            }),
+          );
+        }
+        throw error;
+      });
     const conversionReports = course.conversionReports;
 
     console.log(

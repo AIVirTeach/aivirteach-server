@@ -128,11 +128,18 @@ export const ContentProblemSchema = z.object({
   blockId: z.string().optional(),
   level: z.enum(['error', 'warning']),
   blockIndex: z.number().int().optional(),
+  fieldPath: z.array(z.union([z.string(), z.number().int().nonnegative()])).optional(),
 });
 export const ValidationReportSchema = z.object({
   errors: z.array(ContentProblemSchema),
   warnings: z.array(ContentProblemSchema),
 });
+export const ContentValidationErrorSchema = z.object({
+  message: z.string(),
+  problems: z.array(z.string()),
+  validation: ValidationReportSchema,
+});
+export type ContentValidationError = z.infer<typeof ContentValidationErrorSchema>;
 export const LessonSaveResultSchema = z.object({
   draft: DraftSummarySchema,
   problems: ValidationReportSchema,

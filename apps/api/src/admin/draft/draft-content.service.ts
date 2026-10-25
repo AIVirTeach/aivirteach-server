@@ -1,12 +1,14 @@
 import {
   CreateAssessmentSchema,
   type CreateAssessmentInput,
+  type ContentValidationError,
 } from '@aivirteach/admin-contract';
 import {
   BadRequestException,
   ConflictException,
   Injectable,
   NotFoundException,
+  UnprocessableEntityException,
 } from '@nestjs/common';
 import { AuditActorType, Prisma } from '@prisma/client';
 import { AuditService } from '../../audit/audit.service';
@@ -138,6 +140,7 @@ export class DraftContentService {
     const draft = await this.drafts.requireDraftRef(slug);
     const courseAssetIds = await this.courseAssetIds(draft.courseId);
     const problems = validateLessonContent(content, { courseAssetIds });
+    rejectInvalidContent(problems);
     const updatedDraft = await this.mutate(
       slug,
       draft.id,
@@ -196,6 +199,7 @@ export class DraftContentService {
       assertWritableContent(patch.content);
       const courseAssetIds = await this.courseAssetIds(draft.courseId);
       problems = validateLessonContent(patch.content, { courseAssetIds });
+      rejectInvalidContent(problems);
     }
     const updatedDraft = await this.mutate(
       slug,
@@ -452,6 +456,16 @@ async function findLessonRow(
       `contentId ${contentId} 对应多个模块：${matches.map((item) => item.module.title).join('、')}`,
     );
   return matches[0];
+}
+
+function rejectInvalidContent(validation: ValidationReport): void {
+  if (validation.errors.length) {
+    throw new UnprocessableEntityException({
+      message: '课时内容校验未通过，未保存',
+      problems: validation.errors.map(({ message }) => message),
+      validation,
+    } satisfies ContentValidationError);
+  }
 }
 
 function assertWritableContent(

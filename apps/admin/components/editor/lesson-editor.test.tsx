@@ -206,7 +206,11 @@ it('preserves manual selection across a picker remount and saves it after a late
       schemaVersion: 1,
       blocks: [
         { id: 'one', type: 'image', props: { assetId: '', alt: 'one' } },
-        { id: 'two', type: 'image', props: { assetId: '', alt: 'two' } },
+        {
+          id: 'two',
+          type: 'image',
+          props: { assetId: 'existing', alt: 'two' },
+        },
       ],
     },
   };
@@ -260,9 +264,515 @@ it('preserves manual selection across a picker remount and saves it after a late
             type: 'image',
             props: { assetId: 'existing', alt: 'one' },
           },
-          { id: 'two', type: 'image', props: { assetId: '', alt: 'two' } },
+          {
+            id: 'two',
+            type: 'image',
+            props: { assetId: 'existing', alt: 'two' },
+          },
         ],
       },
     },
   );
+});
+
+it('blocks invalid local content without sending it and resumes after repair', async () => {
+  vi.useFakeTimers();
+  vi.mocked(courseMutation).mockResolvedValue({
+    status: 'ok',
+    data: { problems: { errors: [], warnings: [] } },
+  });
+  render(
+    <LessonEditor
+      slug="course"
+      draft={draft}
+      lesson={lesson}
+      moduleTitle="Module"
+      initialAssets={[
+        {
+          id: 'asset',
+          url: '/image.png',
+          altText: 'Picture',
+          mimeType: 'image/png',
+          createdAt: '',
+        },
+      ]}
+    />,
+  );
+  fireEvent.change(screen.getByLabelText('内容类型'), {
+    target: { value: 'image' },
+  });
+  fireEvent.click(screen.getByRole('button', { name: '添加内容' }));
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(800);
+  });
+  expect(courseMutation).not.toHaveBeenCalled();
+  expect(screen.getByText(/尚未保存/)).toBeInTheDocument();
+  const unload = new Event('beforeunload', { cancelable: true });
+  window.dispatchEvent(unload);
+  expect(unload.defaultPrevented).toBe(true);
+  fireEvent.change(screen.getByLabelText('课程图片'), {
+    target: { value: 'asset' },
+  });
+  fireEvent.change(screen.getByLabelText('替代文字'), {
+    target: { value: 'A picture' },
+  });
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(800);
+  });
+  expect(courseMutation).toHaveBeenCalledTimes(1);
+  expect(screen.getByText('已保存')).toBeInTheDocument();
+});
+
+it('opens and focuses a nested invalid field only when its problem is clicked', () => {
+  vi.useFakeTimers();
+  const nested = {
+    ...lesson,
+    content: {
+      schemaVersion: 1,
+      blocks: [
+        {
+          id: 'code',
+          type: 'annotatedCode',
+          props: { steps: [{ label: '', code: 'ok', terms: [] }] },
+        },
+      ],
+    },
+  };
+  render(
+    <LessonEditor
+      slug="course"
+      draft={draft}
+      lesson={nested}
+      moduleTitle="Module"
+      initialAssets={[]}
+    />,
+  );
+  expect(screen.queryByLabelText('步骤 1 · 标签')).not.toBeInTheDocument();
+  fireEvent.click(screen.getByRole('button', { name: /props.steps.0.label/ }));
+  const input = screen.getByLabelText('步骤 1 · 标签');
+  expect(input).toHaveFocus();
+  expect(input).toHaveAttribute('aria-invalid', 'true');
+  expect(input).toHaveAttribute('data-field-path', '["steps",0,"label"]');
+  expect(
+    document.getElementById(input.getAttribute('aria-describedby')!),
+  ).toHaveTextContent('批注代码步骤标签不能为空');
+  fireEvent.change(input, { target: { value: 'Fixed label' } });
+  expect(input).toHaveFocus();
+});
+
+it('focuses a table cell and an image picker through the same field path contract', () => {
+  vi.useFakeTimers();
+  const content: DraftLesson['content'] = {
+    schemaVersion: 1,
+    blocks: [
+      {
+        id: 'table',
+        type: 'table',
+        props: { columns: ['A'], rows: [['x'.repeat(301)]] },
+      },
+      {
+        id: 'image',
+        type: 'image',
+        props: { assetId: 'missing', alt: 'Image' },
+      },
+    ],
+  };
+  render(
+    <LessonEditor
+      slug="course"
+      draft={draft}
+      lesson={{ ...lesson, content }}
+      moduleTitle="Module"
+      initialAssets={[]}
+    />,
+  );
+  fireEvent.click(screen.getByRole('button', { name: /props.rows.0.0/ }));
+  expect(screen.getByLabelText('单元格 1-1')).toHaveFocus();
+  fireEvent.click(screen.getByRole('button', { name: /图片资源不存在/ }));
+  expect(screen.getByLabelText('课程图片')).toHaveFocus();
+  expect(screen.getByLabelText('课程图片')).toHaveAttribute(
+    'aria-invalid',
+    'true',
+  );
+});
+
+it('keeps invalid initial envelopes blocked instead of overwriting them with empty content', async () => {
+  vi.useFakeTimers();
+  render(
+    <LessonEditor
+      slug="course"
+      draft={draft}
+      lesson={{ ...lesson, content: null }}
+      moduleTitle="Module"
+      initialAssets={[]}
+    />,
+  );
+  expect(screen.getByRole('alert')).toHaveTextContent('初始正文格式无效');
+  expect(screen.getByRole('button', { name: '添加内容' })).toBeDisabled();
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(800);
+  });
+  expect(courseMutation).not.toHaveBeenCalled();
+});
+
+it('keeps duplicate block ids at the indexed problem summary without selecting an arbitrary duplicate', () => {
+  vi.useFakeTimers();
+  render(
+    <LessonEditor
+      slug="course"
+      draft={draft}
+      lesson={{
+        ...lesson,
+        content: {
+          schemaVersion: 1,
+          blocks: [
+            { id: 'same', type: 'paragraph', props: { text: 'first' } },
+            { id: 'same', type: 'paragraph', props: { text: 'second' } },
+          ],
+        },
+      }}
+      moduleTitle="Module"
+      initialAssets={[]}
+    />,
+  );
+  fireEvent.click(
+    screen.getByRole('button', { name: /第 2 块：内容块 id 重复/ }),
+  );
+  expect(screen.getByRole('region', { name: '课时内容问题' })).toHaveFocus();
+  expect(screen.queryByLabelText('文字')).not.toBeInTheDocument();
+});
+
+it.each(['ok', 'error'] as const)(
+  'keeps a newer invalid revision when an older save returns %s',
+  async (status) => {
+    vi.useFakeTimers();
+    let finish!: (value: Awaited<ReturnType<typeof courseMutation>>) => void;
+    vi.mocked(courseMutation).mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          finish = resolve;
+        }),
+    );
+    render(
+      <LessonEditor
+        slug="course"
+        draft={draft}
+        lesson={lesson}
+        moduleTitle="Module"
+        initialAssets={[]}
+      />,
+    );
+    fireEvent.click(screen.getByRole('button', { name: '添加内容' }));
+    fireEvent.change(screen.getByLabelText('文字'), {
+      target: { value: 'valid' },
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(800);
+    });
+    fireEvent.change(screen.getByLabelText('内容类型'), {
+      target: { value: 'image' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: '添加内容' }));
+    await act(async () => {
+      finish(
+        status === 'ok'
+          ? { status: 'ok', data: { problems: { errors: [], warnings: [] } } }
+          : {
+              status: 'error',
+              message: 'obsolete failure',
+              problems: [],
+              issues: [],
+            },
+      );
+    });
+    expect(screen.getByText(/尚未保存/)).toBeInTheDocument();
+    expect(screen.queryByText('已保存')).not.toBeInTheDocument();
+    expect(screen.queryByText('obsolete failure')).not.toBeInTheDocument();
+    expect(courseMutation).toHaveBeenCalledTimes(1);
+  },
+);
+
+it('keeps server-only validation attached to the current revision and resumes after editing', async () => {
+  vi.useFakeTimers();
+  vi.mocked(courseMutation)
+    .mockResolvedValueOnce({
+      status: 'error',
+      message: '服务器拒绝图片',
+      problems: ['图片已删除'],
+      issues: [],
+      validation: {
+        errors: [
+          {
+            level: 'error',
+            code: 'unknown-asset',
+            message: '图片已删除',
+            blockId: 'image',
+            blockIndex: 0,
+            fieldPath: ['assetId'],
+          },
+        ],
+        warnings: [],
+      },
+    })
+    .mockResolvedValue({
+      status: 'ok',
+      data: { problems: { errors: [], warnings: [] } },
+    });
+  const image = {
+    ...lesson,
+    content: {
+      schemaVersion: 1,
+      blocks: [
+        {
+          id: 'image',
+          type: 'image',
+          props: { assetId: 'asset', alt: 'original' },
+        },
+      ],
+    },
+  };
+  render(
+    <LessonEditor
+      slug="course"
+      draft={draft}
+      lesson={image}
+      moduleTitle="Module"
+      initialAssets={[
+        {
+          id: 'asset',
+          url: '/image.png',
+          altText: 'Picture',
+          mimeType: 'image/png',
+          createdAt: '',
+        },
+      ]}
+    />,
+  );
+  fireEvent.click(screen.getByRole('button', { name: '编辑' }));
+  fireEvent.change(screen.getByLabelText('替代文字'), {
+    target: { value: 'new alt' },
+  });
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(800);
+  });
+  fireEvent.click(screen.getByRole('button', { name: /图片已删除/ }));
+  expect(screen.getByLabelText('课程图片')).toHaveFocus();
+  expect(
+    screen.queryByRole('button', { name: '重试保存' }),
+  ).not.toBeInTheDocument();
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(1600);
+  });
+  expect(courseMutation).toHaveBeenCalledTimes(1);
+  fireEvent.change(screen.getByLabelText('替代文字'), {
+    target: { value: 'fixed again' },
+  });
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(800);
+  });
+  expect(
+    screen.queryByRole('button', { name: /图片已删除/ }),
+  ).not.toBeInTheDocument();
+  expect(screen.getByText('已保存')).toBeInTheDocument();
+});
+
+it('revalidates unchanged local content when the authoritative asset list changes', async () => {
+  vi.useFakeTimers();
+  vi.mocked(courseMutation).mockResolvedValue({
+    status: 'ok',
+    data: { problems: { errors: [], warnings: [] } },
+  });
+  const image = {
+    ...lesson,
+    content: {
+      schemaVersion: 1,
+      blocks: [
+        {
+          id: 'image',
+          type: 'image',
+          props: { assetId: 'asset', alt: 'Picture' },
+        },
+      ],
+    },
+  };
+  const props = { slug: 'course', draft, lesson: image, moduleTitle: 'Module' };
+  const { rerender } = render(<LessonEditor {...props} initialAssets={[]} />);
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(800);
+  });
+  expect(courseMutation).not.toHaveBeenCalled();
+  rerender(
+    <LessonEditor
+      {...props}
+      initialAssets={[
+        {
+          id: 'asset',
+          url: '/image.png',
+          altText: 'Picture',
+          mimeType: 'image/png',
+          createdAt: '',
+        },
+      ]}
+    />,
+  );
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(800);
+  });
+  expect(courseMutation).toHaveBeenCalledTimes(1);
+  expect(screen.getByText('已保存')).toBeInTheDocument();
+});
+
+it('retains server validation and local edits when metadata refresh recreates equivalent props', async () => {
+  vi.useFakeTimers();
+  const validation = {
+    errors: [
+      {
+        level: 'error' as const,
+        code: 'unknown-asset',
+        message: '服务端图片已删除',
+        blockId: 'image',
+        blockIndex: 0,
+        fieldPath: ['assetId'],
+      },
+    ],
+    warnings: [],
+  };
+  vi.mocked(courseMutation).mockResolvedValue({
+    status: 'error',
+    message: '无法保存',
+    problems: ['服务端图片已删除'],
+    issues: [],
+    validation,
+  });
+  const content = {
+    schemaVersion: 1,
+    blocks: [
+      {
+        id: 'image',
+        type: 'image',
+        props: { assetId: 'asset', alt: 'server original' },
+      },
+    ],
+  };
+  const image = { ...lesson, content };
+  const asset = {
+    id: 'asset',
+    url: '/image.png',
+    altText: 'Picture',
+    mimeType: 'image/png',
+    createdAt: '',
+  };
+  const { rerender } = render(
+    <LessonEditor
+      slug="course"
+      draft={draft}
+      lesson={image}
+      moduleTitle="Module"
+      initialAssets={[asset]}
+    />,
+  );
+  fireEvent.click(screen.getByRole('button', { name: '编辑' }));
+  fireEvent.change(screen.getByLabelText('替代文字'), {
+    target: { value: 'unsaved local alt' },
+  });
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(800);
+  });
+  expect(courseMutation).toHaveBeenCalledTimes(1);
+  expect(
+    screen.getByRole('button', { name: /服务端图片已删除/ }),
+  ).toBeInTheDocument();
+  rerender(
+    <LessonEditor
+      slug="course"
+      draft={{ ...draft }}
+      lesson={{
+        ...image,
+        title: 'Refreshed title',
+        content: structuredClone(content),
+      }}
+      moduleTitle="Module"
+      initialAssets={[{ ...asset, altText: 'Refreshed asset title' }]}
+    />,
+  );
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(1600);
+  });
+  expect(courseMutation).toHaveBeenCalledTimes(1);
+  expect(
+    screen.getByRole('button', { name: /服务端图片已删除/ }),
+  ).toBeInTheDocument();
+  expect(screen.getByLabelText('替代文字')).toHaveValue('unsaved local alt');
+});
+
+it('retains unconfirmed uploads across stale refreshes, then reflects deletion after server confirmation', async () => {
+  vi.useFakeTimers();
+  const uploaded = {
+    id: 'uploaded',
+    url: '/uploaded.png',
+    altText: 'Uploaded',
+    mimeType: 'image/png',
+    createdAt: '',
+  };
+  vi.mocked(uploadAssetAction).mockResolvedValue({
+    status: 'ok',
+    data: uploaded,
+  });
+  vi.mocked(courseMutation).mockResolvedValue({
+    status: 'ok',
+    data: { problems: { errors: [], warnings: [] } },
+  });
+  const image = {
+    ...lesson,
+    content: {
+      schemaVersion: 1,
+      blocks: [
+        { id: 'image', type: 'image', props: { assetId: '', alt: 'Picture' } },
+      ],
+    },
+  };
+  const props = { slug: 'course', draft, lesson: image, moduleTitle: 'Module' };
+  const { rerender } = render(<LessonEditor {...props} initialAssets={[]} />);
+  fireEvent.click(screen.getByRole('button', { name: '编辑' }));
+  await act(async () => {
+    fireEvent.change(screen.getByLabelText('上传图片'), {
+      target: { files: [new File(['x'], 'upload.png', { type: 'image/png' })] },
+    });
+  });
+  expect(screen.getByLabelText('课程图片')).toHaveValue('uploaded');
+  rerender(
+    <LessonEditor
+      {...props}
+      lesson={{ ...image, title: 'Stale metadata refresh' }}
+      initialAssets={[]}
+    />,
+  );
+  expect(screen.getByLabelText('课程图片')).toHaveValue('uploaded');
+  expect(
+    screen.queryByRole('button', { name: /图片资源不存在/ }),
+  ).not.toBeInTheDocument();
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(800);
+  });
+  expect(courseMutation).toHaveBeenCalledTimes(1);
+  expect(screen.getByText('已保存')).toBeInTheDocument();
+
+  rerender(<LessonEditor {...props} initialAssets={[{ ...uploaded }]} />);
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(800);
+  });
+  expect(screen.getByLabelText('课程图片')).toHaveValue('uploaded');
+  expect(courseMutation).toHaveBeenCalledTimes(1);
+  rerender(<LessonEditor {...props} initialAssets={[]} />);
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(800);
+  });
+  expect(
+    screen.getByRole('button', { name: /图片资源不存在：uploaded/ }),
+  ).toBeInTheDocument();
+  expect(screen.getByText(/尚未保存/)).toBeInTheDocument();
+  expect(
+    screen.queryByRole('option', { name: 'Uploaded' }),
+  ).not.toBeInTheDocument();
+  expect(courseMutation).toHaveBeenCalledTimes(1);
 });

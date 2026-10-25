@@ -5,6 +5,7 @@ import {
   NativeSelectOption,
 } from '@/components/ui/native-select';
 import { useState } from 'react';
+import type { fieldAttributes } from './field-location';
 import type { CourseAsset } from '@aivirteach/admin-contract';
 import { uploadAssetAction } from '@/app/(app)/courses/actions';
 import { resultMessage, settleAction } from '@/lib/action-result';
@@ -17,8 +18,10 @@ export function AssetPicker({
   onBusy,
   onUploadStart,
   onUploadFinish,
+  fieldProps,
 }: {
   slug: string;
+  fieldProps?: ReturnType<typeof fieldAttributes>;
   assets: CourseAsset[];
   value: string;
   onChange: (id: string) => void;
@@ -33,7 +36,11 @@ export function AssetPicker({
     <div>
       <label className="field">
         课程图片
-        <NativeSelect value={value} onChange={(e) => onChange(e.target.value)}>
+        <NativeSelect
+          {...fieldProps}
+          value={value}
+          onChange={(e) => onChange(e.target.value)}
+        >
           <NativeSelectOption value="">请选择图片</NativeSelectOption>
           {assets.map((a) => (
             <NativeSelectOption key={a.id} value={a.id}>
