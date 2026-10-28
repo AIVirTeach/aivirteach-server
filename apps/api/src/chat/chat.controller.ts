@@ -98,7 +98,7 @@ export class ChatController {
         const next = await iterator.next();
         if (next.done) break;
         const event = next.value;
-        const type = event.type === 'progress' ? event.event : 'complete';
+        const type = event.type === 'progress' ? event.event : event.type;
         if (!clientDisconnected && !response.destroyed) {
           response.write(`event: ${type}\ndata: ${JSON.stringify(event)}\n\n`);
         }

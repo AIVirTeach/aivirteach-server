@@ -43,11 +43,23 @@ export type ChatMessage = {
 
 export type ChatStreamEvent =
   | { type: 'progress'; event: string; data: Record<string, unknown> }
+  | { type: 'error'; code: 'REPLY_NOT_SAVED'; message: string }
   | {
       type: 'complete';
       studentMessage: ChatMessage;
       tutorMessage: ChatMessage;
     };
+
+const REPLY_PERSISTING = {
+  type: 'progress',
+  event: 'reply_persisting',
+  data: { phase: 'persistence' },
+} satisfies ChatStreamEvent;
+const REPLY_NOT_SAVED = {
+  type: 'error',
+  code: 'REPLY_NOT_SAVED',
+  message: '回复未能确认保存。请重新打开对话核对结果，避免重复提交。',
+} satisfies ChatStreamEvent;
 
 const ResultFrameSchema = z.object({ response: DiagnoseResponseSchema });
 
@@ -192,16 +204,31 @@ export class ChatService {
     };
     const { text, requestId } = command;
     if (!resolved.ok) {
-      yield {
-        type: 'complete',
-        ...(await this.respondWithFallback(
-          userId,
-          enrollment.id,
-          enrollment.generation,
-          studentRow,
-          resolved.fallbackMessage,
-        )),
-      };
+      try {
+        if (
+          await this.isCurrentForProgress(enrollmentId, enrollment.generation)
+        ) {
+          yield REPLY_PERSISTING;
+        }
+        yield {
+          type: 'complete',
+          ...(await this.respondWithFallback(
+            userId,
+            enrollment.id,
+            enrollment.generation,
+            studentRow,
+            resolved.fallbackMessage,
+          )),
+        };
+      } catch (error) {
+        if (!(error instanceof StaleEnrollmentError)) {
+          this.logger.error(
+            `enrollmentId=${enrollment.id} 落兜底消息失败`,
+            error,
+          );
+          yield REPLY_NOT_SAVED;
+        }
+      }
       return;
     }
 
@@ -223,21 +250,19 @@ export class ChatService {
           continue;
         }
         if (mayForwardProgress) {
-          try {
-            await this.prisma.$transaction((tx) =>
-              assertCurrentEnrollment(
-                tx,
-                enrollmentId,
-                command.context.generation,
-              ),
-            );
-          } catch (error) {
-            if (!(error instanceof StaleEnrollmentError)) throw error;
-            mayForwardProgress = false;
-          }
+          mayForwardProgress = await this.isCurrentForProgress(
+            enrollmentId,
+            command.context.generation,
+          );
         }
         if (!mayForwardProgress) continue;
-        yield { type: 'progress', event: frame.event, data };
+        yield frame.event === 'error'
+          ? {
+              type: 'progress',
+              event: 'answer_failed',
+              data: { code: 'AGENT_STREAM_FAILED' },
+            }
+          : { type: 'progress', event: frame.event, data };
       }
     } catch (error) {
       const message = error instanceof Error ? error.message : '未知错误';
@@ -248,10 +273,13 @@ export class ChatService {
     }
 
     if (!response) {
-      // 走到这里之前很可能已经转发过 progress 帧（headers 已提交），落兜底消息这个写入
-      // 本身再失败就没有更兜底的兜底了——只能记日志后让 generator 正常 return，把 SSE
-      // 连接干净收尾，不能让异常直接炸穿到 controller 层。
       try {
+        if (
+          mayForwardProgress &&
+          (await this.isCurrentForProgress(enrollmentId, enrollment.generation))
+        ) {
+          yield REPLY_PERSISTING;
+        }
         yield {
           type: 'complete',
           ...(await this.respondWithFallback(
@@ -268,12 +296,19 @@ export class ChatService {
           `enrollmentId=${enrollment.id} 落兜底消息失败`,
           message,
         );
+        if (!(error instanceof StaleEnrollmentError)) yield REPLY_NOT_SAVED;
       }
       return;
     }
 
     let tutorRow: Conversation;
     try {
+      if (
+        mayForwardProgress &&
+        (await this.isCurrentForProgress(enrollmentId, enrollment.generation))
+      ) {
+        yield REPLY_PERSISTING;
+      }
       tutorRow = await this.saveAgentReply(
         userId,
         enrollment.id,
@@ -291,13 +326,12 @@ export class ChatService {
         },
       );
     } catch (error) {
-      // 同上：此时已经转发过 progress 帧，headers 已提交，不能再让这个写入失败以
-      // 异常形式冒泡出去——记日志后干净结束这次流。
       const message = error instanceof Error ? error.message : '未知错误';
       this.logger.error(
         `enrollmentId=${enrollment.id} 落 Assistant 消息失败`,
         message,
       );
+      if (!(error instanceof StaleEnrollmentError)) yield REPLY_NOT_SAVED;
       return;
     }
 
@@ -306,6 +340,21 @@ export class ChatService {
       studentMessage: this.toChatMessage(userId, studentRow),
       tutorMessage: this.toChatMessage(userId, tutorRow),
     };
+  }
+
+  private async isCurrentForProgress(
+    enrollmentId: string,
+    generation: number,
+  ): Promise<boolean> {
+    try {
+      await this.prisma.$transaction((tx) =>
+        assertCurrentEnrollment(tx, enrollmentId, generation),
+      );
+      return true;
+    } catch (error) {
+      if (error instanceof StaleEnrollmentError) return false;
+      throw error;
+    }
   }
 
   async prepareMessage(
