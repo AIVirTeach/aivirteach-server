@@ -310,7 +310,7 @@ describe('ChatService.sendMessage — 调用 Agent', () => {
     prisma.workspace.findUnique.mockResolvedValue(null);
     prisma.enrollment.updateMany
       .mockResolvedValueOnce({ count: 1 })
-      .mockResolvedValueOnce({ count: 0 });
+      .mockResolvedValue({ count: 0 });
 
     await expect(
       service.sendMessage('user_1', 'enr_1', ask('你好')),
@@ -327,7 +327,7 @@ describe('ChatService.sendMessage — 调用 Agent', () => {
     );
     prisma.enrollment.updateMany
       .mockResolvedValueOnce({ count: 1 })
-      .mockResolvedValueOnce({ count: 0 });
+      .mockResolvedValue({ count: 0 });
     agentClient.diagnose.mockResolvedValue({
       answer: '迟到的回复',
       usage: {
@@ -360,7 +360,7 @@ describe('ChatService.sendMessage — 调用 Agent', () => {
       .mockResolvedValueOnce({ count: 1 })
       .mockResolvedValueOnce({ count: 0 })
       .mockResolvedValueOnce({ count: 1 })
-      .mockResolvedValueOnce({ count: 0 });
+      .mockResolvedValue({ count: 0 });
     prisma.conversation.create.mockResolvedValue(
       conversationRow({ id: 'student' }),
     );
@@ -793,7 +793,7 @@ describe('ChatService.streamMessage — 兜底路径（不调用 Agent）', () =
     expect(prisma.conversation.create).not.toHaveBeenCalled();
   });
 
-  it('没有 Workspace 记录时只发一个 complete 兜底事件，不调用 Agent', async () => {
+  it('没有 Workspace 记录时先报告保存，再发 complete 兜底事件，不调用 Agent', async () => {
     const { service, prisma, agentClient } = await buildService();
     prisma.enrollment.findUnique.mockResolvedValue(ENROLLMENT);
     prisma.conversation.create.mockResolvedValueOnce(
@@ -813,6 +813,11 @@ describe('ChatService.streamMessage — 兜底路径（不调用 Agent）', () =
     );
 
     expect(events).toEqual([
+      {
+        type: 'progress',
+        event: 'reply_persisting',
+        data: { phase: 'persistence' },
+      },
       {
         type: 'complete',
         studentMessage: expect.objectContaining({ text: '你好' }),
@@ -882,6 +887,15 @@ describe('ChatService.streamMessage — 调用 Agent', () => {
       finishUpstream();
       await expect(events.next()).resolves.toEqual({
         done: false,
+        value: {
+          type: 'progress',
+          event: 'reply_persisting',
+          data: { phase: 'persistence' },
+        },
+      });
+      expect(prisma.conversation.create).toHaveBeenCalledTimes(1);
+      await expect(events.next()).resolves.toEqual({
+        done: false,
         value: expect.objectContaining({
           type: 'complete',
           tutorMessage: expect.objectContaining({
@@ -892,7 +906,7 @@ describe('ChatService.streamMessage — 调用 Agent', () => {
       expect(prisma.conversation.create).toHaveBeenCalledTimes(2);
     } finally {
       finishUpstream();
-      await events.return();
+      await events.return(undefined);
     }
   });
 
@@ -904,7 +918,7 @@ describe('ChatService.streamMessage — 调用 Agent', () => {
     );
     prisma.enrollment.updateMany
       .mockResolvedValueOnce({ count: 1 })
-      .mockResolvedValueOnce({ count: 0 });
+      .mockResolvedValue({ count: 0 });
     agentClient.diagnoseStream.mockReturnValue(
       framesFrom([
         {
@@ -1031,6 +1045,11 @@ describe('ChatService.streamMessage — 调用 Agent', () => {
       { type: 'progress', event: 'reasoning_started', data: { turn: 1 } },
       { type: 'progress', event: 'done', data: { status: 'completed' } },
       {
+        type: 'progress',
+        event: 'reply_persisting',
+        data: { phase: 'persistence' },
+      },
+      {
         type: 'complete',
         studentMessage: expect.objectContaining({ text: 'docker 装不上' }),
         tutorMessage: expect.objectContaining({
@@ -1081,6 +1100,11 @@ describe('ChatService.streamMessage — 调用 Agent', () => {
       }),
     );
     expect(events).toEqual([
+      {
+        type: 'progress',
+        event: 'reply_persisting',
+        data: { phase: 'persistence' },
+      },
       {
         type: 'complete',
         studentMessage: expect.objectContaining({ text: '什么是 docker' }),
@@ -1133,6 +1157,11 @@ describe('ChatService.streamMessage — 调用 Agent', () => {
         data: { course_id: 'linux-basics' },
       },
       {
+        type: 'progress',
+        event: 'reply_persisting',
+        data: { phase: 'persistence' },
+      },
+      {
         type: 'complete',
         studentMessage: expect.objectContaining({ text: '？' }),
         tutorMessage: expect.objectContaining({
@@ -1140,6 +1169,70 @@ describe('ChatService.streamMessage — 调用 Agent', () => {
         }),
       },
     ]);
+  });
+
+  it('keeps an upstream error nonterminal until the fallback reply is saved', async () => {
+    const { service, prisma, agentClient } = await buildService();
+    setupReadyWorkspace(prisma);
+    prisma.conversation.create
+      .mockResolvedValueOnce(
+        conversationRow({ id: 'student_1', content: 'Help' }),
+      )
+      .mockResolvedValueOnce(
+        conversationRow({
+          id: 'tutor_1',
+          role: ConversationRole.ASSISTANT,
+          content: '助教暂时不可用，请稍后再试。',
+        }),
+      );
+    agentClient.diagnoseStream.mockReturnValue(
+      framesFrom([
+        { event: 'assistant_delta', data: { delta: 'Incomplete answer' } },
+        {
+          event: 'error',
+          data: {
+            code: 'AGENT_STREAM_FAILED',
+            message: 'internal upstream failure',
+          },
+        },
+      ]),
+    );
+
+    const events = await collect(
+      service.streamMessage('user_1', 'enr_1', ask('Help')),
+    );
+
+    expect(events).toEqual([
+      {
+        type: 'progress',
+        event: 'assistant_delta',
+        data: { delta: 'Incomplete answer' },
+      },
+      {
+        type: 'progress',
+        event: 'answer_failed',
+        data: { code: 'AGENT_STREAM_FAILED' },
+      },
+      {
+        type: 'progress',
+        event: 'reply_persisting',
+        data: { phase: 'persistence' },
+      },
+      {
+        type: 'complete',
+        studentMessage: expect.objectContaining({ text: 'Help' }),
+        tutorMessage: expect.objectContaining({
+          text: '助教暂时不可用，请稍后再试。',
+        }),
+      },
+    ]);
+    expect(agentClient.diagnoseStream).toHaveBeenCalledTimes(1);
+    expect(prisma.conversation.create).toHaveBeenLastCalledWith({
+      data: expect.objectContaining({
+        role: ConversationRole.ASSISTANT,
+        content: '助教暂时不可用，请稍后再试。',
+      }),
+    });
   });
 
   it('result 帧响应格式不符合预期时，落兜底 complete 事件而不是把半成品传给 client', async () => {
@@ -1167,6 +1260,11 @@ describe('ChatService.streamMessage — 调用 Agent', () => {
 
     expect(events).toEqual([
       {
+        type: 'progress',
+        event: 'reply_persisting',
+        data: { phase: 'persistence' },
+      },
+      {
         type: 'complete',
         studentMessage: expect.objectContaining({ text: '？' }),
         tutorMessage: expect.objectContaining({
@@ -1176,7 +1274,57 @@ describe('ChatService.streamMessage — 调用 Agent', () => {
     ]);
   });
 
-  it('result 落库（Assistant 消息）失败时，流干净结束而不是把异常炸穿到 SSE 连接上', async () => {
+  it('reports persistence in progress and waits for durable storage before complete', async () => {
+    const { service, prisma, agentClient } = await buildService();
+    setupReadyWorkspace(prisma);
+    let saveReply!: (row: ReturnType<typeof conversationRow>) => void;
+    const pendingSave = new Promise<ReturnType<typeof conversationRow>>(
+      (resolve) => {
+        saveReply = resolve;
+      },
+    );
+    prisma.conversation.create
+      .mockResolvedValueOnce(conversationRow({ id: 'student_1' }))
+      .mockReturnValueOnce(pendingSave);
+    agentClient.diagnoseStream.mockReturnValue(
+      framesFrom([{ event: 'result', data: { response: DIAGNOSE_RESPONSE } }]),
+    );
+    const events = service.streamMessage('user_1', 'enr_1', ask('help'));
+    try {
+      await expect(events.next()).resolves.toEqual({
+        done: false,
+        value: {
+          type: 'progress',
+          event: 'reply_persisting',
+          data: { phase: 'persistence' },
+        },
+      });
+      let completed = false;
+      const completion = events.next().then((event) => {
+        completed = true;
+        return event;
+      });
+      await new Promise((resolve) => setImmediate(resolve));
+      expect(prisma.conversation.create).toHaveBeenCalledTimes(2);
+      expect(completed).toBe(false);
+      saveReply(
+        conversationRow({
+          id: 'tutor_1',
+          role: ConversationRole.ASSISTANT,
+          content: DIAGNOSE_RESPONSE.answer,
+        }),
+      );
+      await expect(completion).resolves.toEqual({
+        done: false,
+        value: expect.objectContaining({ type: 'complete' }),
+      });
+    } finally {
+      saveReply(conversationRow({ id: 'tutor_1' }));
+      await events.return(undefined);
+    }
+  });
+
+  it('result 保存失败时发 REPLY_NOT_SAVED，不发送 complete 或重新调用 Agent', async () => {
     const errorSpy = jest
       .spyOn(Logger.prototype, 'error')
       .mockImplementation(() => undefined);
@@ -1201,7 +1349,14 @@ describe('ChatService.streamMessage — 调用 Agent', () => {
 
     expect(events).toEqual([
       { type: 'progress', event: 'reasoning_started', data: { turn: 1 } },
+      {
+        type: 'progress',
+        event: 'reply_persisting',
+        data: { phase: 'persistence' },
+      },
+      { type: 'error', code: 'REPLY_NOT_SAVED', message: expect.any(String) },
     ]);
+    expect(agentClient.diagnoseStream).toHaveBeenCalledTimes(1);
     expect(errorSpy).toHaveBeenCalledWith(
       expect.stringContaining('enr_1'),
       expect.stringContaining('write failed: ECONNRESET'),
@@ -1209,7 +1364,7 @@ describe('ChatService.streamMessage — 调用 Agent', () => {
     errorSpy.mockRestore();
   });
 
-  it('已经转发过 progress 帧之后，兜底 complete 事件本身落库失败时，流干净结束而不是抛出未捕获异常', async () => {
+  it('兜底回复保存失败也发 REPLY_NOT_SAVED，不发送 complete', async () => {
     const errorSpy = jest
       .spyOn(Logger.prototype, 'error')
       .mockImplementation(() => undefined);
@@ -1237,6 +1392,12 @@ describe('ChatService.streamMessage — 调用 Agent', () => {
         event: 'context_ready',
         data: { course_id: 'linux-basics' },
       },
+      {
+        type: 'progress',
+        event: 'reply_persisting',
+        data: { phase: 'persistence' },
+      },
+      { type: 'error', code: 'REPLY_NOT_SAVED', message: expect.any(String) },
     ]);
     expect(errorSpy).toHaveBeenCalledWith(
       expect.stringContaining('enr_1'),

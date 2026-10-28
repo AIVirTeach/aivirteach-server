@@ -270,6 +270,61 @@ describe('ChatController', () => {
     expect(service.streamPrepared).toHaveBeenCalledWith({ accepted: true });
   });
 
+  it('encodes a persistence failure as error, never as complete', async () => {
+    const failure = {
+      type: 'error',
+      code: 'REPLY_NOT_SAVED',
+      message: '回复未能确认保存。',
+    };
+    const service = {
+      prepareMessage: jest.fn().mockResolvedValue({ accepted: true }),
+      streamPrepared: jest.fn().mockReturnValue(
+        (async function* () {
+          yield failure;
+        })(),
+      ),
+    };
+    const moduleRef = await Test.createTestingModule({
+      controllers: [ChatController],
+      providers: [
+        { provide: ChatService, useValue: service },
+        JWT_AUTH_GUARD_STUB,
+        TOKEN_QUOTA_STUB,
+      ],
+    }).compile();
+    const app = express();
+    app.post('/stream', async (request, response) => {
+      await moduleRef
+        .get(ChatController)
+        .streamMessage(
+          'enr_1',
+          COMMAND,
+          Object.assign(request, AUTH_REQUEST),
+          response,
+        );
+    });
+    const server = app.listen(0, '127.0.0.1');
+    try {
+      await once(server, 'listening');
+      const address = server.address();
+      if (!address || typeof address === 'string')
+        throw new Error('Missing HTTP port');
+      const response = await fetch(`http://127.0.0.1:${address.port}/stream`, {
+        method: 'POST',
+        signal: AbortSignal.timeout(3000),
+      });
+      expect(await response.text()).toBe(
+        `event: error\ndata: ${JSON.stringify(failure)}\n\n`,
+      );
+    } finally {
+      server.closeAllConnections();
+      await new Promise<void>((resolve, reject) => {
+        server.close((error) => (error ? reject(error) : resolve()));
+      });
+      await moduleRef.close();
+    }
+  });
+
   it('准备阶段拒绝时保持 HTTP 响应未提交', async () => {
     const service = {
       prepareMessage: jest.fn().mockRejectedValue(new Error('invalid context')),
