@@ -839,6 +839,63 @@ describe('ChatService.streamMessage — 调用 Agent', () => {
     });
   }
 
+  it('forwards assistant_delta before the Agent result or tutor persistence', async () => {
+    const { service, prisma, agentClient } = await buildService();
+    setupReadyWorkspace(prisma);
+    prisma.conversation.create
+      .mockResolvedValueOnce(conversationRow({ id: 'student_1' }))
+      .mockResolvedValueOnce(
+        conversationRow({
+          id: 'tutor_1',
+          role: ConversationRole.ASSISTANT,
+          content: DIAGNOSE_RESPONSE.answer,
+        }),
+      );
+    let finishUpstream!: () => void;
+    const upstreamPending = new Promise<void>((resolve) => {
+      finishUpstream = resolve;
+    });
+    agentClient.diagnoseStream.mockReturnValue(
+      (async function* () {
+        yield {
+          event: 'assistant_delta',
+          data: JSON.stringify({ delta: '先检查' }),
+        };
+        await upstreamPending;
+        yield {
+          event: 'result',
+          data: JSON.stringify({ response: DIAGNOSE_RESPONSE }),
+        };
+      })(),
+    );
+    const events = service.streamMessage('user_1', 'enr_1', ask('你好'));
+    try {
+      await expect(events.next()).resolves.toEqual({
+        done: false,
+        value: {
+          type: 'progress',
+          event: 'assistant_delta',
+          data: { delta: '先检查' },
+        },
+      });
+      expect(prisma.conversation.create).toHaveBeenCalledTimes(1);
+      finishUpstream();
+      await expect(events.next()).resolves.toEqual({
+        done: false,
+        value: expect.objectContaining({
+          type: 'complete',
+          tutorMessage: expect.objectContaining({
+            text: DIAGNOSE_RESPONSE.answer,
+          }),
+        }),
+      });
+      expect(prisma.conversation.create).toHaveBeenCalledTimes(2);
+    } finally {
+      finishUpstream();
+      await events.return();
+    }
+  });
+
   it('restart 后迟到的流式结果不写聊天，但结算已发生的 token 用量', async () => {
     const { service, prisma, agentClient } = await buildService();
     setupReadyWorkspace(prisma);

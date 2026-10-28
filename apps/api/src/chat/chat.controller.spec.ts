@@ -1,4 +1,6 @@
 import { Test } from '@nestjs/testing';
+import express from 'express';
+import { once } from 'node:events';
 import { ENV } from '../config/env';
 import { CheckTokenQuota } from '../token-usage/application/check-token-quota';
 import { ChatController } from './chat.controller';
@@ -25,6 +27,95 @@ const COMMAND: SendChatMessageInput = {
 };
 
 describe('ChatController', () => {
+  it('delivers assistant_delta over HTTP while the upstream result is still pending', async () => {
+    let finishUpstream!: () => void;
+    const upstreamPending = new Promise<void>((resolve) => {
+      finishUpstream = resolve;
+    });
+    let upstreamFinished = false;
+    const service = {
+      prepareMessage: jest.fn().mockResolvedValue({ accepted: true }),
+      streamPrepared: jest.fn().mockReturnValue(
+        (async function* () {
+          yield {
+            type: 'progress',
+            event: 'assistant_delta',
+            data: { delta: '先检查网络' },
+          };
+          await upstreamPending;
+          upstreamFinished = true;
+          yield {
+            type: 'complete',
+            tutorMessage: { text: '先检查网络连接。' },
+          };
+        })(),
+      ),
+    };
+    const moduleRef = await Test.createTestingModule({
+      controllers: [ChatController],
+      providers: [
+        { provide: ChatService, useValue: service },
+        JWT_AUTH_GUARD_STUB,
+        TOKEN_QUOTA_STUB,
+      ],
+    }).compile();
+    const app = express();
+    app.post('/stream', async (request, response) => {
+      await moduleRef
+        .get(ChatController)
+        .streamMessage(
+          'enr_1',
+          COMMAND,
+          Object.assign(request, AUTH_REQUEST),
+          response,
+        );
+    });
+    const server = app.listen(0, '127.0.0.1');
+    try {
+      await once(server, 'listening');
+      const address = server.address();
+      if (!address || typeof address === 'string')
+        throw new Error('Missing HTTP port');
+      const response = await fetch(`http://127.0.0.1:${address.port}/stream`, {
+        method: 'POST',
+        signal: AbortSignal.timeout(3000),
+      });
+      expect(response.headers.get('content-type')).toContain(
+        'text/event-stream',
+      );
+      if (!response.body) throw new Error('Missing SSE response body');
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let received = '';
+      while (!received.includes('\n\n')) {
+        const chunk = await reader.read();
+        if (chunk.done) throw new Error('Stream ended before the delta');
+        received += decoder.decode(chunk.value, { stream: true });
+      }
+      expect(received).toContain('event: assistant_delta\n');
+      expect(received).toContain('先检查网络');
+      expect(received).not.toContain('event: complete');
+      expect(upstreamFinished).toBe(false);
+
+      finishUpstream();
+      while (true) {
+        const chunk = await reader.read();
+        if (chunk.done) break;
+        received += decoder.decode(chunk.value, { stream: true });
+      }
+      expect(received).toContain('event: complete\n');
+      expect(received).toContain('先检查网络连接。');
+      reader.releaseLock();
+    } finally {
+      finishUpstream();
+      server.closeAllConnections();
+      await new Promise<void>((resolve, reject) => {
+        server.close((error) => (error ? reject(error) : resolve()));
+      });
+      await moduleRef.close();
+    }
+  });
+
   it('GET :enrollmentId/chat/messages 用认证用户的 userId 调用 service.getMessages', async () => {
     const service = { getMessages: jest.fn().mockResolvedValue([]) };
     const moduleRef = await Test.createTestingModule({
